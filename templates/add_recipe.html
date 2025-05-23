@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Add New Recipe - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Add New Recipe</h1>
+{% endblock %}
+
+{% block content %}
+    <form method="POST" action="{{ url_for('add_recipe_view') }}">
+        <div class="form-group">
+            <label for="recipe_name">Recipe Name:</label>
+            <input type="text" id="recipe_name" name="recipe_name" class="form-control" 
+                   value="{{ form_data.get('recipe_name', '') if form_data else '' }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Description:</label>
+            <textarea id="description" name="description" class="form-control" rows="3">{{ form_data.get('description', '') if form_data else '' }}</textarea>
+        </div>
+
+        <h3 style="margin-top: 20px; margin-bottom: 10px;">Ingredients</h3>
+        <p><small class="help-text">Enter up to 5 ingredients. Leave rows blank if not needed. Ingredient quantities should be positive numbers.</small></p>
+        
+        <div class="ingredients-section">
+            {% for i in range(1, 6) %} {# Create 5 sets of ingredient inputs #}
+            <div class="ingredient-row">
+                <div class="form-group ingredient-name">
+                    <label for="ingredient_{{ i }}_name">Ingredient {{ i }} Name:</label>
+                    <input type="text" id="ingredient_{{ i }}_name" name="ingredient_{{ i }}_name" 
+                           class="form-control" 
+                           value="{{ form_data.get('ingredient_' + i|string + '_name', '') if form_data else '' }}"
+                           placeholder="e.g., Flour, Eggs">
+                </div>
+                <div class="form-group ingredient-quantity">
+                    <label for="ingredient_{{ i }}_quantity">Quantity:</label>
+                    <input type="number" id="ingredient_{{ i }}_quantity" name="ingredient_{{ i }}_quantity" 
+                           class="form-control" min="0.01" step="any" 
+                           value="{{ form_data.get('ingredient_' + i|string + '_quantity', '') if form_data else '' }}"
+                           placeholder="e.g., 100, 0.5">
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <button type="submit" class="button" style="margin-top: 20px;">Add Recipe</button>
+    </form>
+
+    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a></p>
+{% endblock %}

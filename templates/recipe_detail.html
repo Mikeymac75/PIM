@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}{{ recipe.name if recipe else 'Recipe Details' }} - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    {% if recipe %}
+        <h1 class="page-title">{{ recipe.name }}</h1>
+    {% else %}
+        <h1 class="page-title">Recipe Not Found</h1>
+    {% endif %}
+{% endblock %}
+
+{% block content %}
+    {% if recipe %}
+        <div class="recipe-description-section">
+            <h3>Description:</h3>
+            <p>{{ recipe.description if recipe.description else 'No description available.' }}</p>
+        </div>
+
+        <h3 style="margin-top: 30px;">Ingredients:</h3>
+        {% if ingredients_status %}
+        <div class="table-responsive-wrapper">
+            <table class="ingredients-table">
+                <thead>
+                    <tr>
+                        <th class="recipe-ingredients-header">Ingredient</th>
+                        <th class="recipe-ingredients-header text-right">Required</th>
+                        <th class="recipe-ingredients-header text-right">Available</th>
+                        <th class="recipe-ingredients-header text-right">Remaining if Crafted</th>
+                        <th class="recipe-ingredients-header text-center">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ing in ingredients_status %}
+                        <tr class="{{ 'sufficient' if ing.sufficient else 'insufficient' }}">
+                            <td>{{ ing.name }}</td>
+                            <td class="text-right">{{ "%.2f"|format(ing.required) if ing.required is number else ing.required }}</td>
+                            <td class="text-right">{{ "%.2f"|format(ing.available) if ing.available is number else ing.available }}</td>
+                            <td class="text-right">{{ "%.2f"|format(ing.remaining) if ing.remaining is number else ing.remaining }}</td>
+                            <td class="text-center">
+                                {% if ing.sufficient %}
+                                    <span class="status-ok">OK</span>
+                                {% else %}
+                                    <span class="status-needed">Needed: {{ "%.2f"|format(ing.needed_more) if ing.needed_more is number else ing.needed_more }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+            <div class="actions-section" style="margin-top: 20px;">
+                {% if recipe_makeable %}
+                    <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" style="display: inline;">
+                        <button type="submit" class="button">Make This Recipe</button>
+                    </form>
+                {% else %}
+                    <button type="button" class="button" disabled title="Not enough ingredients to make this recipe.">Make This Recipe (Insufficient Ingredients)</button>
+                {% endif %}
+            </div>
+
+        {% else %}
+            <p>This recipe has no ingredients listed.</p>
+        {% endif %}
+        
+    {% else %}
+        <p class="empty-message">The recipe you are looking for could not be found.</p>
+    {% endif %}
+
+    <p style="margin-top: 30px;">
+        <a href="{{ url_for('recipes_list_view') }}" class="nav-link-button">Back to All Recipes</a>
+        <a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a>
+    </p>
+{% endblock %}

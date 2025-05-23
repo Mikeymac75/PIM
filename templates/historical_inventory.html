@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Historical Inventory - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Historical Inventory</h1>
+{% endblock %}
+
+{% block content %}
+    {% if items %}
+    <div class="table-responsive-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th class="historical-inventory-header">Name</th>
+                    <th class="historical-inventory-header">Quantity Consumed</th>
+                    <th class="historical-inventory-header">Original Quantity</th>
+                    <th class="historical-inventory-header">Purchase Date</th>
+                    <th class="historical-inventory-header">Expiry Date</th>
+                    <th class="historical-inventory-header">Consumed Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ "%.2f"|format(item.quantity_consumed_this_time) if item.quantity_consumed_this_time is number else item.quantity_consumed_this_time }}</td>
+                    <td>{{ item.original_quantity_string if item.original_quantity_string else 'N/A' }}</td>
+                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
+                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
+                    <td>{{ item.consumed_date.isoformat() if item.consumed_date else 'N/A' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        <p class="empty-message">Historical inventory is empty.</p>
+    {% endif %}
+
+    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>
+{% endblock %}

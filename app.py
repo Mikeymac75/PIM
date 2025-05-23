@@ -1,0 +1,490 @@
+from flask import Flask, render_template, request, redirect, url_for, flash
+from Food_manager import InventoryManager
+from recipe_manager import RecipeManager
+from datetime import date, datetime
+import openpyxl # For reading Excel files
+# import os # os module was imported but not directly used. Removed for now.
+
+app = Flask(__name__)
+app.secret_key = 'dev_secret_key' # Replace with a strong secret key in production
+# Define allowed extensions for file upload
+ALLOWED_EXTENSIONS = {'xlsx'}
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# Define the shared database file path
+DATABASE_FILE = "food_app.db"
+
+# Instantiate Managers globally, using the shared database file
+# The manager classes themselves will handle DB initialization (table creation IF NOT EXISTS)
+manager = InventoryManager(db_filepath=DATABASE_FILE)
+recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
+
+# --- Helper Functions ---
+def _get_unique_inventory_item_names():
+    """Helper to get sorted unique item names from the current inventory."""
+    current_inventory = manager.get_current_inventory()
+    return sorted(list(set(item['name'] for item in current_inventory)))
+
+def _get_unique_item_names_for_projection():
+    """Helper to get sorted unique item names from both current and historical inventory."""
+    current_inventory = manager.get_current_inventory()
+    historical_inventory = manager.get_historical_inventory() # Assuming this method exists and is efficient
+    
+    unique_names = set(item['name'] for item in current_inventory)
+    for item in historical_inventory:
+        unique_names.add(item['name'])
+    return sorted(list(unique_names))
+
+# --- Flask Routes ---
+@app.route('/')
+def home():
+    return render_template('home.html')
+
+@app.route('/inventory/current')
+def current_inventory_view():
+    # The get_current_inventory() method in our refactored class returns a list of dicts
+    inventory_items = manager.get_current_inventory() 
+    return render_template('current_inventory.html', items=inventory_items)
+
+@app.route('/inventory/historical')
+def historical_inventory_view():
+    historical_items = manager.get_historical_inventory()
+    return render_template('historical_inventory.html', items=historical_items)
+
+@app.route('/inventory/add', methods=['GET', 'POST'])
+def add_item_view():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        quantity = request.form.get('quantity') # Keep as string, manager handles it
+        purchase_date_str = request.form.get('purchase_date')
+        expiry_days_str = request.form.get('expiry_days')
+
+        # Validation
+        errors = []
+        if not name:
+            errors.append("Item name is required.")
+        if not quantity: # Basic check for quantity, can be more complex
+            errors.append("Quantity is required.")
+        if not purchase_date_str:
+            errors.append("Purchase date is required.")
+        else:
+            try:
+                # Validate date format (YYYY-MM-DD)
+                date.fromisoformat(purchase_date_str)
+            except ValueError:
+                errors.append("Invalid purchase date format. Please use YYYY-MM-DD.")
+        
+        if not expiry_days_str:
+            errors.append("Expiry days are required.")
+        else:
+            try:
+                expiry_days_int = int(expiry_days_str)
+                if expiry_days_int < 0:
+                    errors.append("Expiry days must be a non-negative number.")
+            except ValueError:
+                errors.append("Expiry days must be a valid number.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Pass back form data to repopulate
+            return render_template('add_item.html', form_data=request.form)
+        
+        # If validation passes
+        try:
+            # expiry_days_int is already validated to be convertible to int
+            manager.add_item_to_list(name, quantity, purchase_date_str, int(expiry_days_str))
+            flash(f"Item '{name}' added successfully!", 'success')
+            return redirect(url_for('current_inventory_view'))
+        except Exception as e: # Catch any other unexpected errors from manager
+            flash(f"An unexpected error occurred: {e}", 'error')
+            return render_template('add_item.html', form_data=request.form)
+
+    return render_template('add_item.html', form_data={}) # Empty form_data for GET
+
+@app.route('/inventory/consume', methods=['GET', 'POST'])
+def consume_item_view():
+    item_names = _get_unique_inventory_item_names() # Use helper
+
+    if request.method == 'POST':
+        item_name = request.form.get('item_name')
+        quantity_consumed_str = request.form.get('quantity_consumed')
+
+        errors = []
+        if not item_name:
+            errors.append("Item name is required.")
+        
+        numeric_quantity_consumed = 0
+        if not quantity_consumed_str:
+            errors.append("Quantity to consume is required.")
+        else:
+            try:
+                numeric_quantity_consumed = float(quantity_consumed_str) # Allow for float quantities
+                if numeric_quantity_consumed <= 0:
+                    errors.append("Quantity to consume must be a positive number.")
+            except ValueError:
+                errors.append("Quantity to consume must be a valid number.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            return render_template('consume_item.html', item_names=item_names, form_data=request.form)
+
+        # If validation passes
+        try:
+            # consume_item in InventoryManager returns a dict like:
+            # {"success": True/False, "message": "details..."}
+            result = manager.consume_item(item_name, numeric_quantity_consumed)
+            
+            if result.get("success"):
+                flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
+                # Optionally, show details if any:
+                # for detail_msg in result.get("details", []):
+                # flash(detail_msg, 'info')
+            else:
+                flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
+            
+            # Redirect to current inventory to see changes, or back to consume page
+            return redirect(url_for('current_inventory_view')) 
+            # Or: return redirect(url_for('consume_item_view'))
+            
+        except Exception as e:
+            flash(f"An unexpected error occurred while consuming item: {e}", 'error')
+            return render_template('consume_item.html', item_names=item_names, form_data=request.form)
+
+    # For GET request
+    return render_template('consume_item.html', item_names=item_names, form_data={})
+
+@app.route('/inventory/upload_excel', methods=['GET', 'POST'])
+def upload_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+        
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                workbook = openpyxl.load_workbook(file)
+                sheet = workbook.active # Get the first active sheet
+
+                # Determine header row and map columns
+                # Assuming first row is header
+                header_row_values = [cell.value for cell in sheet[1]]
+                # Create a mapping from lowercased header name to its column index
+                header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
+
+                required_headers = ['name', 'quantity', 'purchase date', 'expiry days']
+                missing_headers = [req_h for req_h in required_headers if req_h not in header_map]
+                if missing_headers:
+                    flash(f"Missing required columns in Excel: {', '.join(missing_headers)}. Please check headers.", 'error')
+                    return redirect(request.url)
+
+                name_col = header_map['name']
+                qty_col = header_map['quantity']
+                pdate_col = header_map['purchase date']
+                expdays_col = header_map['expiry days']
+                
+                items_added_count = 0
+                error_messages = []
+
+                for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                    # Stop if first cell of row is empty (common way to detect end of data)
+                    # Ensure the row has enough columns to prevent IndexError if a row is shorter than header
+                    if len(row) <= max(name_col, qty_col, pdate_col, expdays_col):
+                        error_messages.append(f"Row {row_idx}: Skipped due to insufficient columns.")
+                        continue
+
+                    name = row[name_col]
+                    quantity = row[qty_col] 
+                    purchase_date_val = row[pdate_col]
+                    expiry_days_val = row[expdays_col]
+
+                    # Skip row if essential 'name' field is missing (common for trailing empty rows)
+                    if not name: 
+                        if any(row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col]): # If other cells have data
+                            error_messages.append(f"Row {row_idx}: Name is missing but other data present. Skipped.")
+                        # If all relevant cells are empty, it's likely an empty row, so just continue
+                        elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col]):
+                            continue
+                        else: # Name missing, other fields might be empty too, but log it
+                             error_messages.append(f"Row {row_idx}: Name is missing. Skipped.")
+                        continue
+                    
+                    row_errors = []
+                    # Validate quantity, purchase_date_val, expiry_days_val
+                    if quantity is None: row_errors.append("Quantity is missing.")
+                    if purchase_date_val is None: row_errors.append("Purchase Date is missing.")
+                    if expiry_days_val is None: row_errors.append("Expiry Days is missing.")
+
+                    purchase_date_str = None # Will hold the successfully parsed date string
+                    if isinstance(purchase_date_val, datetime):
+                        purchase_date_str = purchase_date_val.strftime('%Y-%m-%d')
+                    elif isinstance(purchase_date_val, str):
+                        try:
+                            date.fromisoformat(purchase_date_val) # Validate format
+                            purchase_date_str = purchase_date_val
+                        except ValueError:
+                            row_errors.append(f"Invalid Purchase Date format '{purchase_date_val}'. Use YYYY-MM-DD.")
+                    elif purchase_date_val is not None: 
+                         row_errors.append(f"Purchase Date '{purchase_date_val}' is not in YYYY-MM-DD text or Excel date format.")
+
+                    expiry_days_int = None # Will hold successfully parsed int
+                    if isinstance(expiry_days_val, (int, float)):
+                        if expiry_days_val >= 0:
+                            expiry_days_int = int(expiry_days_val)
+                        else:
+                            row_errors.append("Expiry Days must be non-negative.")
+                    elif isinstance(expiry_days_val, str) and expiry_days_val.strip().isdigit(): # Handle numbers as strings
+                        expiry_days_int = int(expiry_days_val.strip())
+                        if expiry_days_int < 0:
+                             row_errors.append("Expiry Days must be non-negative.")
+                             expiry_days_int = None # Reset if invalid
+                    elif expiry_days_val is not None:
+                        row_errors.append(f"Expiry Days '{expiry_days_val}' must be a whole number.")
+                    
+                    if row_errors: # If any validation for this row failed so far
+                        error_messages.append(f"Row {row_idx} ('{name}'): " + "; ".join(row_errors))
+                        continue 
+
+                    # If all validations pass for this row, attempt to add to inventory
+                    try:
+                        manager.add_item_to_list(str(name), str(quantity), purchase_date_str, expiry_days_int)
+                        items_added_count += 1
+                    except Exception as e:
+                        error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {e}")
+                
+                # Flash summary
+                if items_added_count > 0:
+                    flash(f"Successfully added {items_added_count} items from the Excel file.", 'success')
+                if error_messages:
+                    flash(f"{len(error_messages)} rows had errors. See details below:", 'error')
+                    for err_msg in error_messages[:5]: # Show first 5 errors
+                        flash(err_msg, 'detail_error') # Use a different category if you want specific styling
+                if items_added_count == 0 and not error_messages:
+                     flash("No items were found or added from the file. The file might be empty or data starts after row 2.", 'info')
+
+                return redirect(url_for('current_inventory_view'))
+
+            except Exception as e:
+                flash(f"An error occurred while processing the Excel file: {e}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    return render_template('upload_excel.html')
+
+@app.route('/recipes/add', methods=['GET', 'POST'])
+def add_recipe_view():
+    form_data_to_repopulate = {} # For GET or if POST fails and re-renders
+    if request.method == 'POST':
+        recipe_name = request.form.get('recipe_name', '').strip()
+        description = request.form.get('description', '').strip()
+        
+        # Process ingredients
+        ingredients = []
+        form_errors = [] # Collect form validation errors before calling manager
+        for i in range(1, 6): # Max 5 ingredients from form
+            ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
+            ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
+
+            if ing_name and ing_qty_str: # Process if both name and quantity are provided
+                try:
+                    ing_qty = float(ing_qty_str)
+                    if ing_qty <= 0:
+                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be positive.")
+                    else:
+                        ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty})
+                except ValueError:
+                    form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'. Must be a number.")
+            elif ing_name and not ing_qty_str: # Name provided but not quantity
+                form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
+            # If only quantity or neither is provided, it's skipped (considered an empty ingredient slot)
+        
+        if not recipe_name:
+            form_errors.append("Recipe name is required.")
+        
+        # Optional: Enforce at least one ingredient if desired
+        # if not ingredients and any(request.form.get(f'ingredient_{i}_name') for i in range(1,6)):
+        #      form_errors.append("At least one valid ingredient (name and positive quantity) is required if ingredients are attempted.")
+
+        if form_errors:
+            for error in form_errors:
+                flash(error, 'error')
+            form_data_to_repopulate = request.form # Repopulate with all original attempt
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate)
+
+        # Data for RecipeManager (already validated for basic format by above logic)
+        recipe_data = {
+            "name": recipe_name,
+            "description": description,
+            "ingredients": ingredients
+        }
+        
+        result = recipe_mngr.add_recipe(recipe_data)
+        
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('add_recipe_view')) # Redirect back to add form (or future list page)
+        else:
+            flash(result['message'], 'error')
+            # Repopulate form with the data that was attempted
+            form_data_to_repopulate = {
+                'recipe_name': recipe_name,
+                'description': description
+            }
+            for i, ing in enumerate(ingredients, 1):
+                form_data_to_repopulate[f'ingredient_{i}_name'] = ing['item_name']
+                form_data_to_repopulate[f'ingredient_{i}_quantity'] = ing['quantity_required']
+            # Also add back any originally submitted (but potentially incomplete) ingredient fields
+            for i in range(1, 6):
+                if not form_data_to_repopulate.get(f'ingredient_{i}_name'):
+                     form_data_to_repopulate[f'ingredient_{i}_name'] = request.form.get(f'ingredient_{i}_name', '')
+                if not form_data_to_repopulate.get(f'ingredient_{i}_quantity'):
+                     form_data_to_repopulate[f'ingredient_{i}_quantity'] = request.form.get(f'ingredient_{i}_quantity', '')
+            
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate)
+
+    return render_template('add_recipe.html', form_data=form_data_to_repopulate)
+
+@app.route('/recipes')
+def recipes_list_view():
+    all_recipes = recipe_mngr.get_all_recipes()
+    # Sort recipes by name for consistent display order
+    sorted_recipes = sorted(all_recipes, key=lambda r: r['name'].lower())
+    return render_template('recipes_list.html', recipes=sorted_recipes)
+
+@app.route('/recipes/<path:recipe_name>') # Using path for flexibility with names
+def recipe_detail_view(recipe_name):
+    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
+
+    if not recipe:
+        flash(f"Recipe '{recipe_name}' not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+
+    ingredients_status = []
+    recipe_makeable = True # Assume true until an insufficient ingredient is found
+
+    if recipe.get('ingredients'):
+        for ing in recipe['ingredients']:
+            item_name = ing['item_name']
+            required_qty = float(ing['quantity_required'])
+            
+            # Use the new helper method from InventoryManager
+            available_qty = manager.get_total_item_quantity(item_name)
+            
+            remaining_qty = available_qty - required_qty
+            sufficient = remaining_qty >= 0
+
+            if not sufficient:
+                recipe_makeable = False # Mark recipe as not makeable
+
+            ingredients_status.append({
+                'name': item_name,
+                'required': required_qty,
+                'available': available_qty,
+                'remaining': remaining_qty,
+                'sufficient': sufficient,
+                'needed_more': -remaining_qty if not sufficient else 0
+            })
+    else: # Recipe has no ingredients listed
+        recipe_makeable = True # Technically makeable if no ingredients are needed
+
+    return render_template('recipe_detail.html', 
+                           recipe=recipe, 
+                           ingredients_status=ingredients_status, 
+                           recipe_makeable=recipe_makeable)
+
+# Placeholder for Make Recipe POST route - to be implemented in a later subtask
+@app.route('/recipes/<path:recipe_name>/make', methods=['POST'])
+def make_recipe_view(recipe_name):
+    # This is where the logic to "make" the recipe would go.
+    # For now, just flash a message and redirect.
+    # Actual implementation would consume ingredients from inventory.
+    
+    # Re-check if makeable before attempting to make, as inventory might have changed.
+    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
+    if not recipe:
+        flash(f"Recipe '{recipe_name}' not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+
+    recipe_makeable_now = True
+    if recipe.get('ingredients'):
+        for ing_spec in recipe['ingredients']:
+            available = manager.get_total_item_quantity(ing_spec['item_name'])
+            if available < float(ing_spec['quantity_required']):
+                recipe_makeable_now = False
+                break
+    
+    if not recipe_makeable_now:
+        flash(f"Cannot make '{recipe_name}'. Not enough ingredients currently available.", 'error')
+        return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+    # Actual implementation to consume ingredients from inventory.
+    all_consumed_successfully = True
+    consumption_error_messages = []
+
+    if recipe.get('ingredients'):
+        for ingredient in recipe['ingredients']:
+            item_name = ingredient['item_name']
+            required_qty = float(ingredient['quantity_required'])
+            
+            # consume_item returns a dict: {"success": bool, "message": str, "details": list}
+            consumption_result = manager.consume_item(item_name, required_qty)
+            
+            if not consumption_result.get("success"):
+                all_consumed_successfully = False
+                # Accumulate error messages if specific items fail, though prior check should prevent this.
+                # This handles unexpected issues during consumption.
+                consumption_error_messages.append(
+                    f"Failed to consume {required_qty} of '{item_name}'. "
+                    f"Reason: {consumption_result.get('message', 'Unknown error.')}"
+                )
+                # If one ingredient fails, we might want to stop and not consume further,
+                # or attempt to consume all and report individual failures.
+                # For now, let's stop on first critical failure.
+                # A more advanced system might try to "roll back" previous consumptions if one fails mid-way.
+                break 
+    
+    if all_consumed_successfully and not consumption_error_messages:
+        flash(f"Recipe '{recipe.name}' made successfully! Ingredients have been consumed.", 'success')
+    else:
+        # If loop was broken due to consumption failure after availability check (should be rare)
+        flash(f"Error making recipe '{recipe.name}'. Some ingredients could not be consumed:", 'error')
+        for err_msg in consumption_error_messages:
+            flash(err_msg, 'error')
+        # It's also possible recipe_makeable_now was false and we already flashed that.
+        # This block mainly handles errors *during* the consumption loop.
+
+    return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+
+@app.route('/inventory/projections')
+def projections_view():
+    unique_item_names_for_proj = _get_unique_item_names_for_projection() # Use helper
+
+    projection_results_list = []
+    if unique_item_names_for_proj:
+        for item_name in unique_item_names_for_proj:
+            # project_demand in InventoryManager now prints to console AND returns dict.
+            # Flask app will use the returned dict.
+            projection_data = manager.project_demand(item_name) # Uses default lookback/projection days
+            if projection_data and projection_data.get("success", True): # Check for success if manager might return that
+                projection_results_list.append(projection_data)
+            elif projection_data and not projection_data.get("success", True):
+                flash(f"Could not generate projection for {item_name}: {projection_data.get('message', 'Unknown error')}", "error")
+    
+    return render_template('projections.html', projections=projection_results_list)
+
+if __name__ == '__main__':
+    # Debug mode should be False in a production environment
+    # Host '0.0.0.0' makes it accessible from network, useful for some environments
+    app.run(host='0.0.0.0', port=8080, debug=True)

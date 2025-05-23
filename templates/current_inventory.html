@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Current Inventory - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Current Inventory</h1>
+{% endblock %}
+
+{% block content %}
+    {% if items %}
+    <div class="table-responsive-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th class="current-inventory-header">Name</th>
+                    <th class="current-inventory-header">Quantity</th>
+                    <th class="current-inventory-header">Purchase Date</th>
+                    <th class="current-inventory-header">Expiry Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.quantity }}</td>
+                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
+                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+        <p class="empty-message">Current inventory is empty.</p>
+    {% endif %}
+
+    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>
+{% endblock %}
