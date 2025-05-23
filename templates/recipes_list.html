@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}All Recipes - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">All Saved Recipes</h1>
+{% endblock %}
+
+{% block content %}
+    {% if recipes %}
+        <div class="recipes-container">
+            {% for recipe in recipes %}
+                <div class="recipe-card">
+                    <h2><a href="{{ url_for('recipe_detail_view', recipe_name=recipe.name) }}">{{ recipe.name }}</a></h2>
+                    <p class="recipe-description">
+                        {{ recipe.description if recipe.description else 'No description available.' }}
+                    </p>
+                    {# Future: could show a snippet of ingredients or a small image if available #}
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-message">No recipes found. 
+            <a href="{{ url_for('add_recipe_view') }}" class="nav-link-button" style="display: inline-block; margin-left: 10px;">Add a Recipe!</a>
+        </p>
+    {% endif %}
+
+    <p style="margin-top: 30px;">
+        <a href="{{ url_for('add_recipe_view') }}" class="nav-link-button">Add New Recipe</a>
+        <a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a>
+    </p>
+{% endblock %}

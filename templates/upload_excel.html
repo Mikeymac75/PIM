@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Excel - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Upload Inventory from Excel</h1>
+{% endblock %}
+
+{% block content %}
+    <div class="excel-instructions">
+        <h3>Instructions for Excel File Format:</h3>
+        <p>Please ensure your Excel file (<code>.xlsx</code> format) has the following columns in the first sheet:</p>
+        <ul>
+            <li><strong>Name</strong>: The name of the grocery item (Text).</li>
+            <li><strong>Quantity</strong>: The quantity of the item (Text or Number, e.g., "10 bags", "2", "1.5 liters").</li>
+            <li><strong>Purchase Date</strong>: The date of purchase in YYYY-MM-DD format (e.g., 2023-10-28).</li>
+            <li><strong>Expiry Days</strong>: The number of days from the purchase date until the item expires (Number, e.g., 7, 14, 30).</li>
+        </ul>
+        <p>The first row of the sheet should be the header row containing these exact column names. The order of columns does not matter, but the names must match.</p>
+        <p>Example:</p>
+        <table class="example-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Quantity</th>
+                    <th>Purchase Date</th>
+                    <th>Expiry Days</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Apples</td>
+                    <td>10 bags</td>
+                    <td>2023-10-01</td>
+                    <td>14</td>
+                </tr>
+                <tr>
+                    <td>Milk</td>
+                    <td>2 gallon</td>
+                    <td>2023-10-15</td>
+                    <td>7</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <form method="POST" action="{{ url_for('upload_excel_view') }}" enctype="multipart/form-data" style="margin-top: 20px;">
+        <div class="form-group">
+            <label for="excel_file">Choose Excel File (.xlsx):</label>
+            <input type="file" id="excel_file" name="excel_file" class="form-control-file" accept=".xlsx" required>
+        </div>
+        <button type="submit" class="button">Upload and Process File</button>
+    </form>
+
+    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a></p>
+{% endblock %}

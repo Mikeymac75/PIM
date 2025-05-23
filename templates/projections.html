@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Demand Projections - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Demand Projections</h1>
+{% endblock %}
+
+{% block content %}
+    {% if projections %}
+    <div class="table-responsive-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th class="projections-header">Item Name</th>
+                    <th class="projections-header text-right">Current Stock</th>
+                    <th class="projections-header text-right">Avg. Daily Consumption (Last {{ projections[0].lookback_days if projections else 'N/A' }} days)</th>
+                    <th class="projections-header text-center">Days to Depletion</th>
+                    <th class="projections-header text-right">Projected Need (Next {{ projections[0].projection_days if projections else 'N/A' }} days)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for proj in projections %}
+                <tr>
+                    <td>{{ proj.item_name }}</td>
+                    <td class="text-right">{{ "%.2f"|format(proj.current_stock) if proj.current_stock is number else proj.current_stock }}</td>
+                    <td class="text-right">{{ "%.2f"|format(proj.avg_daily_consumption) }}</td>
+                    <td class="text-center">{{ proj.days_to_depletion }}</td>
+                    <td class="text-right">{{ "%.2f"|format(proj.projected_need) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+        {% if projections and projections[0] %}
+        <p style="font-size: 0.9em; color: #555; margin-top: 10px;">
+            Projections are based on a lookback period of {{ projections[0].lookback_days }} days and project for the next {{ projections[0].projection_days }} days.
+            These are default values used by the projection page; the underlying `project_demand` function can accept different parameters.
+        </p>
+        {% endif %}
+    {% else %}
+        <p class="empty-message">No items found in current or historical inventory to generate projections.</p>
+    {% endif %}
+
+    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>
+{% endblock %}
