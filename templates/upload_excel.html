@@ -11,12 +11,16 @@
         <h3>Instructions for Excel File Format:</h3>
         <p>Please ensure your Excel file (<code>.xlsx</code> format) has the following columns in the first sheet:</p>
         <ul>
-            <li><strong>Name</strong>: The name of the grocery item (Text).</li>
-            <li><strong>Quantity</strong>: The quantity of the item (Text or Number, e.g., "10 bags", "2", "1.5 liters").</li>
-            <li><strong>Purchase Date</strong>: The date of purchase in YYYY-MM-DD format (e.g., 2023-10-28).</li>
-            <li><strong>Expiry Days</strong>: The number of days from the purchase date until the item expires (Number, e.g., 7, 14, 30).</li>
+            <li><strong>Name</strong>: (Required) The name of the grocery item (Text).</li>
+            <li><strong>Quantity</strong>: (Required) The quantity of the item (Text or Number, e.g., "10 bags", "2", "1.5 liters").</li>
+            <li><strong>Purchase Date</strong>: (Required) The date of purchase in YYYY-MM-DD format (e.g., 2023-10-28).</li>
+            <li><strong>Expiry Days</strong>: (Required) The number of days from the purchase date until the item expires (Number, e.g., 7, 14, 30).</li>
+            <li><strong>Category</strong>: (Optional) The category of the item (Text, e.g., "Dairy", "Produce").</li>
+            <li><strong>Subcategory</strong>: (Optional) The subcategory of the item (Text, e.g., "Milk", "Fruit").</li>
+            <li><strong>Par Level</strong>: (Optional) The minimum desired quantity in stock (Number, e.g., 2, 0.5). Defaults to 0 if blank/missing. Must be non-negative.</li>
+            <li><strong>Max Holding Amount</strong>: (Optional) The maximum preferred quantity to stock (Number, e.g., 4, 1). Defaults to 0 if blank/missing. Must be non-negative.</li>
         </ul>
-        <p>The first row of the sheet should be the header row containing these exact column names. The order of columns does not matter, but the names must match.</p>
+        <p>The first row of the sheet should be the header row. The order of columns does not strictly matter as long as the names are recognized (case-insensitive for "Name", "Quantity", "Purchase Date", "Expiry Days", "Category", "Subcategory", "Par Level", "Max Holding Amount").</p>
         <p>Example:</p>
         <table class="example-table">
             <thead>
@@ -25,6 +29,10 @@
                     <th>Quantity</th>
                     <th>Purchase Date</th>
                     <th>Expiry Days</th>
+                    <th>Category</th>
+                    <th>Subcategory</th>
+                    <th>Par Level</th>
+                    <th>Max Holding Amount</th>
                 </tr>
             </thead>
             <tbody>
@@ -33,12 +41,20 @@
                     <td>10 bags</td>
                     <td>2023-10-01</td>
                     <td>14</td>
+                    <td>Produce</td>
+                    <td>Fruit</td>
+                    <td>5</td>
+                    <td>20</td>
                 </tr>
                 <tr>
                     <td>Milk</td>
                     <td>2 gallon</td>
                     <td>2023-10-15</td>
                     <td>7</td>
+                    <td>Dairy</td>
+                    <td></td>
+                    <td>1</td>
+                    <td>2</td>
                 </tr>
             </tbody>
         </table>

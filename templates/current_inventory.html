@@ -14,15 +14,23 @@
                 <tr>
                     <th class="current-inventory-header">Name</th>
                     <th class="current-inventory-header">Quantity</th>
+                    <th class="current-inventory-header">Category</th>
+                    <th class="current-inventory-header">Subcategory</th>
+                    <th class="current-inventory-header text-right">Par Level</th>
+                    <th class="current-inventory-header text-right">Max Holding</th>
                     <th class="current-inventory-header">Purchase Date</th>
                     <th class="current-inventory-header">Expiry Date</th>
                 </tr>
             </thead>
             <tbody>
                 {% for item in items %}
-                <tr>
+                <tr class="{{ 'below-par-level' if item.is_below_par else '' }}">
                     <td>{{ item.name }}</td>
                     <td>{{ item.quantity }}</td>
+                    <td>{{ item.category if item.category else '-' }}</td>
+                    <td>{{ item.subcategory if item.subcategory else '-' }}</td>
+                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else item.par_level }}</td>
+                    <td class="text-right">{{ "%.2f"|format(item.max_holding_amount) if item.max_holding_amount is number else item.max_holding_amount }}</td>
                     <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
                     <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
                 </tr>
