@@ -54,18 +54,49 @@ class TestInventoryManager(unittest.TestCase): # Renamed from TestFoodManager
             self.assertEqual(row['name'], "DB Apples")
             self.assertEqual(row['quantity'], "10 units")
             self.assertEqual(row['purchase_date'], "2023-01-01")
-            self.assertEqual(row['expiry_date'], "2023-01-08") # 2023-01-01 + 7 days
+            self.assertEqual(row['expiry_date'], "2023-01-08")
             self.assertEqual(row['original_quantity_string'], "10 units")
+            # Check default values for new fields
+            self.assertIsNone(row['category']) # Default from add_item_to_list if not provided
+            self.assertIsNone(row['subcategory'])
+            self.assertEqual(row['par_level'], 0)
+            self.assertEqual(row['max_holding_amount'], 0)
+
+        # Test adding with new fields
+        result_full = self.manager.add_item_to_list(
+            "DB Pears", "5 kg", "2023-02-01", 10,
+            category="Produce", subcategory="Fruit", par_level=2.0, max_holding_amount=10.0
+        )
+        self.assertTrue(result_full.get("success"))
+        with self._get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM inventory_items WHERE name = ?", ("DB Pears",))
+            row_full = cursor.fetchone()
+            self.assertIsNotNone(row_full)
+            self.assertEqual(row_full['category'], "Produce")
+            self.assertEqual(row_full['subcategory'], "Fruit")
+            self.assertEqual(row_full['par_level'], 2.0)
+            self.assertEqual(row_full['max_holding_amount'], 10.0)
+
 
     def test_get_current_inventory_db(self):
-        self.manager.add_item_to_list("Item1", "1", "2023-01-01", 5) # Expires 2023-01-06
-        self.manager.add_item_to_list("Item2", "2", "2023-01-03", 2) # Expires 2023-01-05
+        self.manager.add_item_to_list("Item1", "1", "2023-01-01", 5, "Cat1", "Sub1", 1, 5)
+        self.manager.add_item_to_list("Item2", "2", "2023-01-03", 2) # Defaults for new fields
         
         items = self.manager.get_current_inventory()
         self.assertEqual(len(items), 2)
-        self.assertEqual(items[0]['name'], "Item2") # Ordered by expiry_date ASC
+        
+        # Item2 expires sooner
+        self.assertEqual(items[0]['name'], "Item2") 
+        self.assertIsNone(items[0]['category']) # Default
+        self.assertEqual(items[0]['par_level'], 0) # Default
+
         self.assertEqual(items[1]['name'], "Item1")
-        self.assertIsInstance(items[0]['purchase_date'], date) # Check date conversion
+        self.assertEqual(items[1]['category'], "Cat1")
+        self.assertEqual(items[1]['subcategory'], "Sub1")
+        self.assertEqual(items[1]['par_level'], 1)
+        self.assertEqual(items[1]['max_holding_amount'], 5)
+        self.assertIsInstance(items[0]['purchase_date'], date)
 
     def test_get_total_item_quantity_db(self):
         self.manager.add_item_to_list("Milk", "1 gallon", "2023-01-01", 7)

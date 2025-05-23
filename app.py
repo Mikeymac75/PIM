@@ -45,9 +45,26 @@ def home():
 
 @app.route('/inventory/current')
 def current_inventory_view():
-    # The get_current_inventory() method in our refactored class returns a list of dicts
-    inventory_items = manager.get_current_inventory() 
-    return render_template('current_inventory.html', items=inventory_items)
+    inventory_items_raw = manager.get_current_inventory()
+    processed_inventory_items = []
+    for item_dict in inventory_items_raw: # manager.get_current_inventory() returns list of dicts
+        # Ensure item_dict is a mutable dictionary if it's not already (e.g. if it was a sqlite3.Row)
+        item_processed = dict(item_dict) 
+        
+        # Parse current quantity string to a number for comparison
+        # The _parse_quantity_string method is in InventoryManager
+        numeric_quantity = manager._parse_quantity_string(item_processed['quantity'])
+        
+        par_level = item_processed.get('par_level', 0.0) # Default to 0.0 if not present
+        if par_level is None: # Handle cases where par_level might be None from DB (though schema defaults to 0)
+            par_level = 0.0
+        else:
+            par_level = float(par_level)
+
+        item_processed['is_below_par'] = (numeric_quantity < par_level and par_level > 0)
+        processed_inventory_items.append(item_processed)
+        
+    return render_template('current_inventory.html', items=processed_inventory_items)
 
 @app.route('/inventory/historical')
 def historical_inventory_view():
@@ -58,12 +75,19 @@ def historical_inventory_view():
 def add_item_view():
     if request.method == 'POST':
         name = request.form.get('name')
-        quantity = request.form.get('quantity') # Keep as string, manager handles it
+        quantity = request.form.get('quantity') 
         purchase_date_str = request.form.get('purchase_date')
         expiry_days_str = request.form.get('expiry_days')
+        
+        # New fields
+        category = request.form.get('category', '').strip()
+        subcategory = request.form.get('subcategory', '').strip()
+        par_level_str = request.form.get('par_level', '0').strip() # Default to '0' if empty
+        max_holding_amount_str = request.form.get('max_holding_amount', '0').strip() # Default to '0' if empty
 
         # Validation
         errors = []
+        # Existing validations for name, quantity, purchase_date, expiry_days
         if not name:
             errors.append("Item name is required.")
         if not quantity: # Basic check for quantity, can be more complex
@@ -87,23 +111,50 @@ def add_item_view():
             except ValueError:
                 errors.append("Expiry days must be a valid number.")
 
+        # Validate new numeric fields
+        par_level = 0.0 # Default
+        if par_level_str: # If not empty string after strip (already defaulted to '0' if was empty)
+            try:
+                par_level = float(par_level_str)
+                if par_level < 0:
+                    errors.append("Par level must be a non-negative number.")
+            except ValueError:
+                errors.append("Par level must be a valid number.")
+        
+        max_holding_amount = 0.0 # Default
+        if max_holding_amount_str: # If not empty string after strip
+            try:
+                max_holding_amount = float(max_holding_amount_str)
+                if max_holding_amount < 0:
+                    errors.append("Max holding amount must be a non-negative number.")
+            except ValueError:
+                errors.append("Max holding amount must be a valid number.")
+
+
         if errors:
             for error in errors:
                 flash(error, 'error')
-            # Pass back form data to repopulate
-            return render_template('add_item.html', form_data=request.form)
+            return render_template('add_item.html', form_data=request.form) # Pass back original form data
         
         # If validation passes
         try:
-            # expiry_days_int is already validated to be convertible to int
-            manager.add_item_to_list(name, quantity, purchase_date_str, int(expiry_days_str))
+            # Ensure category/subcategory are None if empty, not just empty strings
+            category_to_pass = category if category else None
+            subcategory_to_pass = subcategory if subcategory else None
+            
+            # expiry_days_int is already validated
+            manager.add_item_to_list(name, quantity, purchase_date_str, int(expiry_days_str),
+                                     category=category_to_pass, 
+                                     subcategory=subcategory_to_pass,
+                                     par_level=par_level, 
+                                     max_holding_amount=max_holding_amount)
             flash(f"Item '{name}' added successfully!", 'success')
             return redirect(url_for('current_inventory_view'))
-        except Exception as e: # Catch any other unexpected errors from manager
+        except Exception as e: 
             flash(f"An unexpected error occurred: {e}", 'error')
             return render_template('add_item.html', form_data=request.form)
 
-    return render_template('add_item.html', form_data={}) # Empty form_data for GET
+    return render_template('add_item.html', form_data={})
 
 @app.route('/inventory/consume', methods=['GET', 'POST'])
 def consume_item_view():
@@ -192,6 +243,12 @@ def upload_excel_view():
                 pdate_col = header_map['purchase date']
                 expdays_col = header_map['expiry days']
                 
+                # Optional columns, get their index if they exist, otherwise None
+                category_col = header_map.get('category') 
+                subcategory_col = header_map.get('subcategory')
+                par_level_col = header_map.get('par level')
+                max_holding_col = header_map.get('max holding amount')
+                
                 items_added_count = 0
                 error_messages = []
 
@@ -202,29 +259,44 @@ def upload_excel_view():
                         error_messages.append(f"Row {row_idx}: Skipped due to insufficient columns.")
                         continue
 
-                    name = row[name_col]
-                    quantity = row[qty_col] 
-                    purchase_date_val = row[pdate_col]
-                    expiry_days_val = row[expdays_col]
+                    name = str(row[name_col]).strip() if row[name_col] is not None else None
+                    quantity = str(row[qty_col]).strip() if row[qty_col] is not None else None
+                    purchase_date_val = row[pdate_col] # Handled by type checks later
+                    expiry_days_val = row[expdays_col] # Handled by type checks later
 
-                    # Skip row if essential 'name' field is missing (common for trailing empty rows)
-                    if not name: 
-                        if any(row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col]): # If other cells have data
+                    # Extract optional fields, defaulting to None if column doesn't exist or cell is empty
+                    category = str(row[category_col]).strip() if category_col is not None and row[category_col] is not None else None
+                    subcategory = str(row[subcategory_col]).strip() if subcategory_col is not None and row[subcategory_col] is not None else None
+                    par_level_val = row[par_level_col] if par_level_col is not None and row[par_level_col] is not None else "0" # Default to "0" if cell empty/col missing
+                    max_holding_val = row[max_holding_col] if max_holding_col is not None and row[max_holding_col] is not None else "0" # Default to "0"
+
+                    # Skip row if essential 'name' field is missing
+                    if not name:
+                        # Check if any other relevant cell in the row has data to avoid skipping genuinely sparse rows
+                        # vs. completely blank rows often found at the end of sheets.
+                        other_cells_have_data = any(
+                            row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col, 
+                                                         category_col, subcategory_col, par_level_col, max_holding_col] 
+                            if col_idx is not None and len(row) > col_idx and row[col_idx] is not None
+                        )
+                        if other_cells_have_data:
                             error_messages.append(f"Row {row_idx}: Name is missing but other data present. Skipped.")
-                        # If all relevant cells are empty, it's likely an empty row, so just continue
-                        elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col]):
+                        # If all relevant cells are effectively empty, it's likely an empty row, so just continue
+                        elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col, 
+                                                                category_col, subcategory_col, par_level_col, max_holding_col]
+                                     if col_idx is not None and len(row) > col_idx and row[col_idx] is not None):
                             continue
                         else: # Name missing, other fields might be empty too, but log it
                              error_messages.append(f"Row {row_idx}: Name is missing. Skipped.")
                         continue
                     
                     row_errors = []
-                    # Validate quantity, purchase_date_val, expiry_days_val
-                    if quantity is None: row_errors.append("Quantity is missing.")
+                    # Validate required fields
+                    if quantity is None or quantity == "": row_errors.append("Quantity is missing.") # Quantity is text, can be "0"
                     if purchase_date_val is None: row_errors.append("Purchase Date is missing.")
                     if expiry_days_val is None: row_errors.append("Expiry Days is missing.")
 
-                    purchase_date_str = None # Will hold the successfully parsed date string
+                    purchase_date_str = None
                     if isinstance(purchase_date_val, datetime):
                         purchase_date_str = purchase_date_val.strftime('%Y-%m-%d')
                     elif isinstance(purchase_date_val, str):
@@ -247,19 +319,46 @@ def upload_excel_view():
                         if expiry_days_int < 0:
                              row_errors.append("Expiry Days must be non-negative.")
                              expiry_days_int = None # Reset if invalid
-                    elif expiry_days_val is not None:
+                    elif expiry_days_val is not None: # If not None and not int/float/parsable string
                         row_errors.append(f"Expiry Days '{expiry_days_val}' must be a whole number.")
+
+                    # Validate optional numeric fields: par_level, max_holding_amount
+                    par_level_float = 0.0
+                    try:
+                        # Convert even if it's already float/int to handle string numbers from Excel
+                        par_level_float = float(par_level_val if par_level_val is not None else 0) 
+                        if par_level_float < 0:
+                            row_errors.append("Par Level must be non-negative.")
+                    except (ValueError, TypeError):
+                        row_errors.append(f"Invalid Par Level '{par_level_val}'. Must be a number.")
+
+                    max_holding_float = 0.0
+                    try:
+                        max_holding_float = float(max_holding_val if max_holding_val is not None else 0)
+                        if max_holding_float < 0:
+                            row_errors.append("Max Holding Amount must be non-negative.")
+                    except (ValueError, TypeError):
+                        row_errors.append(f"Invalid Max Holding Amount '{max_holding_val}'. Must be a number.")
                     
-                    if row_errors: # If any validation for this row failed so far
+                    if row_errors: 
                         error_messages.append(f"Row {row_idx} ('{name}'): " + "; ".join(row_errors))
                         continue 
 
                     # If all validations pass for this row, attempt to add to inventory
                     try:
-                        manager.add_item_to_list(str(name), str(quantity), purchase_date_str, expiry_days_int)
+                        manager.add_item_to_list(
+                            name=str(name), 
+                            quantity_str=str(quantity), 
+                            purchase_date_str=purchase_date_str, 
+                            expiry_days=expiry_days_int,
+                            category=category if category else None, # Pass None if empty string
+                            subcategory=subcategory if subcategory else None,
+                            par_level=par_level_float,
+                            max_holding_amount=max_holding_float
+                        )
                         items_added_count += 1
-                    except Exception as e:
-                        error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {e}")
+                    except Exception as e: # Catch errors from manager.add_item_to_list
+                        error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {str(e)}")
                 
                 # Flash summary
                 if items_added_count > 0:
@@ -292,7 +391,7 @@ def add_recipe_view():
         # Process ingredients
         ingredients = []
         form_errors = [] # Collect form validation errors before calling manager
-        for i in range(1, 6): # Max 5 ingredients from form
+        for i in range(1, 11): # Max 10 ingredients from form (updated from 6 to 11 for range)
             ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
             ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
 
@@ -345,7 +444,7 @@ def add_recipe_view():
                 form_data_to_repopulate[f'ingredient_{i}_name'] = ing['item_name']
                 form_data_to_repopulate[f'ingredient_{i}_quantity'] = ing['quantity_required']
             # Also add back any originally submitted (but potentially incomplete) ingredient fields
-            for i in range(1, 6):
+            for i in range(1, 11): # Ensure all 10 potential fields are repopulated
                 if not form_data_to_repopulate.get(f'ingredient_{i}_name'):
                      form_data_to_repopulate[f'ingredient_{i}_name'] = request.form.get(f'ingredient_{i}_name', '')
                 if not form_data_to_repopulate.get(f'ingredient_{i}_quantity'):

@@ -380,6 +380,16 @@ footer {
     color: #1b5e20; /* Dark green text */
 }
 
+/* Styling for rows below par level in current inventory */
+tr.below-par-level td {
+    background-color: #fff3cd !important; /* Light yellow, !important to override nth-child even row color */
+    color: #856404; /* Dark yellow/brown text for contrast */
+    font-weight: bold; /* Make text bold to draw attention */
+}
+tr.below-par-level:hover td {
+    background-color: #ffeeba !important; /* Slightly darker yellow on hover */
+}
+
 /* Styling for Add Recipe Ingredients Section */
 .ingredients-section {
     border: 1px solid #eee;

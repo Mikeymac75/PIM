@@ -29,7 +29,30 @@
             <input type="number" id="expiry_days" name="expiry_days" class="form-control" value="{{ form_data.get('expiry_days', '') }}" min="0" required>
         </div>
 
-        <button type="submit" class="button">Add Item</button>
+        <h3 style="margin-top: 30px; margin-bottom: 10px;">Optional Details:</h3>
+        <div class="form-group">
+            <label for="category">Category:</label>
+            <input type="text" id="category" name="category" class="form-control" value="{{ form_data.get('category', '') }}" placeholder="e.g., Dairy, Produce, Pantry">
+        </div>
+
+        <div class="form-group">
+            <label for="subcategory">Subcategory:</label>
+            <input type="text" id="subcategory" name="subcategory" class="form-control" value="{{ form_data.get('subcategory', '') }}" placeholder="e.g., Milk, Fruits, Canned Goods">
+        </div>
+
+        <div class="form-group">
+            <label for="par_level">Par Level (Min. Desired Quantity):</label>
+            <input type="number" id="par_level" name="par_level" class="form-control" value="{{ form_data.get('par_level', '0') }}" min="0" step="any">
+            <small class="help-text">Optional. Enter the minimum quantity you want to keep in stock. Defaults to 0.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="max_holding_amount">Max Holding Amount:</label>
+            <input type="number" id="max_holding_amount" name="max_holding_amount" class="form-control" value="{{ form_data.get('max_holding_amount', '0') }}" min="0" step="any">
+            <small class="help-text">Optional. Enter the maximum quantity you prefer to stock. Defaults to 0 (no specific max).</small>
+        </div>
+
+        <button type="submit" class="button" style="margin-top: 20px;">Add Item</button>
     </form>
 
     <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a></p>

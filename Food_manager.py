@@ -29,7 +29,11 @@ class InventoryManager:
                         quantity TEXT NOT NULL, 
                         purchase_date TEXT NOT NULL,
                         expiry_date TEXT NOT NULL,
-                        original_quantity_string TEXT 
+                        original_quantity_string TEXT,
+                        category TEXT, 
+                        subcategory TEXT,
+                        par_level REAL DEFAULT 0,
+                        max_holding_amount REAL DEFAULT 0
                     )
                 ''')
                 # Historical (Consumed) Items Table
@@ -77,8 +81,9 @@ class InventoryManager:
                 return 1.0 
             return 0.0 # Default for completely unparseable or empty strings
 
-    def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days):
-        """Adds a new grocery item to the database."""
+    def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days,
+                         category=None, subcategory=None, par_level=0, max_holding_amount=0):
+        """Adds a new grocery item to the database, including new optional fields."""
         try:
             purchase_dt = date.fromisoformat(purchase_date_str)
             expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
@@ -86,16 +91,22 @@ class InventoryManager:
             print(f"Error processing date/expiry for adding item: {e}")
             return {"success": False, "message": f"Invalid date or expiry day format: {e}"}
 
+        # Ensure numeric fields have valid defaults if None is passed, though method signature defaults them.
+        par_level = par_level if par_level is not None else 0
+        max_holding_amount = max_holding_amount if max_holding_amount is not None else 0
+
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO inventory_items 
-                    (name, quantity, purchase_date, expiry_date, original_quantity_string) 
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (name, str(quantity_str), purchase_dt.isoformat(), expiry_dt.isoformat(), str(quantity_str)))
+                    (name, quantity, purchase_date, expiry_date, original_quantity_string,
+                     category, subcategory, par_level, max_holding_amount) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, str(quantity_str), purchase_dt.isoformat(), expiry_dt.isoformat(), str(quantity_str),
+                      category, subcategory, par_level, max_holding_amount))
                 conn.commit()
-            print(f"Added to DB: {name} (Expires: {expiry_dt.isoformat()})")
+            print(f"Added to DB: {name} (Category: {category}, Expires: {expiry_dt.isoformat()})")
             return {"success": True, "message": f"Item '{name}' added successfully."}
         except sqlite3.Error as e:
             print(f"Database error adding item: {e}")
@@ -108,7 +119,8 @@ class InventoryManager:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, name, quantity, purchase_date, expiry_date, original_quantity_string 
+                    SELECT id, name, quantity, purchase_date, expiry_date, original_quantity_string,
+                           category, subcategory, par_level, max_holding_amount
                     FROM inventory_items 
                     ORDER BY expiry_date ASC
                 ''')
@@ -475,9 +487,12 @@ if __name__ == "__main__":
     print("\n--- Section 2: Adding New Grocery Items ---")
     today_str = date.today().isoformat()
     
-    manager.add_item_to_list(name="DB Apples", quantity_str="6 units", purchase_date_str=today_str, expiry_days=14)
-    manager.add_item_to_list(name="DB Bananas", quantity_str="12", purchase_date_str=today_str, expiry_days=5)
-    manager.add_item_to_list(name="DB Milk", quantity_str="1 gallon", purchase_date_str=today_str, expiry_days=7)
+    manager.add_item_to_list(name="DB Apples", quantity_str="6 units", purchase_date_str=today_str, expiry_days=14,
+                             category="Produce", subcategory="Fruit", par_level=5, max_holding_amount=20)
+    manager.add_item_to_list(name="DB Bananas", quantity_str="12", purchase_date_str=today_str, expiry_days=5,
+                             category="Produce", subcategory="Fruit") # Using defaults for par/max
+    manager.add_item_to_list(name="DB Milk", quantity_str="1 gallon", purchase_date_str=today_str, expiry_days=7,
+                             category="Dairy", par_level=1, max_holding_amount=2)
     
     print("\n--- Current inventory after additions: ---")
     for item in manager.get_current_inventory(): print(f"- {item['name']} ({item['quantity']})")
