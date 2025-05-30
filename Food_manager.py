@@ -50,7 +50,7 @@ class InventoryManager:
                 ''')
                 conn.commit()
         except sqlite3.Error as e:
-            print(f"Database initialization error: {e}")
+            raise sqlite3.Error(f"Database initialization error: {e}")
             # Depending on app design, might want to raise this or handle more gracefully
 
     def _parse_quantity_string(self, quantity_str):

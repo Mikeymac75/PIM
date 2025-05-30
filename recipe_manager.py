@@ -37,7 +37,7 @@ class RecipeManager:
                 ''')
                 conn.commit()
         except sqlite3.Error as e:
-            print(f"Recipe DB initialization error: {e}")
+            raise sqlite3.Error(f"Recipe DB initialization error: {e}")
             # Consider raising this or handling more gracefully in a real app
 
     def add_recipe(self, recipe_data):
