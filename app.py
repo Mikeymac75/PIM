@@ -89,6 +89,7 @@ def add_item_view():
         subcategory = request.form.get('subcategory', '').strip()
         par_level_str = request.form.get('par_level', '0').strip() # Default to '0' if empty
         max_holding_amount_str = request.form.get('max_holding_amount', '0').strip() # Default to '0' if empty
+        purchase_location = request.form.get('purchase_location', '').strip()
 
         # Validation
         errors = []
@@ -136,31 +137,44 @@ def add_item_view():
             except ValueError:
                 errors.append("Max holding amount must be a valid number.")
 
+        # Validate purchase_location (optional, but if provided, must be one of the allowed values)
+        allowed_locations = ['Sobeys', 'Costco']
+        if purchase_location and purchase_location not in allowed_locations:
+            errors.append(f"Invalid purchase location. If provided, must be one of: {', '.join(allowed_locations)}.")
 
         if errors:
             for error in errors:
                 flash(error, 'error')
-            return render_template('add_item.html', form_data=request.form) # Pass back original form data
+            # Pass back original form data, including purchase_location
+            form_data_with_location = request.form.to_dict()
+            form_data_with_location['purchase_location'] = purchase_location
+            return render_template('add_item.html', form_data=form_data_with_location)
         
         # If validation passes
         try:
             # Ensure category/subcategory are None if empty, not just empty strings
             category_to_pass = category if category else None
             subcategory_to_pass = subcategory if subcategory else None
+            purchase_location_to_pass = purchase_location if purchase_location else None
             
             # expiry_days_int is already validated
             manager.add_item_to_list(name, quantity, purchase_date_str, int(expiry_days_str),
                                      category=category_to_pass, 
                                      subcategory=subcategory_to_pass,
                                      par_level=par_level, 
-                                     max_holding_amount=max_holding_amount)
+                                     max_holding_amount=max_holding_amount,
+                                     purchase_location=purchase_location_to_pass)
             flash(f"Item '{name}' added successfully!", 'success')
             return redirect(url_for('current_inventory_view'))
         except Exception as e: 
             flash(f"An unexpected error occurred: {e}", 'error')
-            return render_template('add_item.html', form_data=request.form)
+            form_data_with_location = request.form.to_dict()
+            form_data_with_location['purchase_location'] = purchase_location
+            return render_template('add_item.html', form_data=form_data_with_location)
 
-    return render_template('add_item.html', form_data={})
+    # For GET request, ensure form_data includes purchase_location for template consistency
+    # request.args might be used if we want to pre-fill from query params on GET
+    return render_template('add_item.html', form_data={'purchase_location': request.args.get('purchase_location', '')})
 
 @app.route('/inventory/consume', methods=['GET', 'POST'])
 def consume_item_view():
@@ -254,6 +268,7 @@ def upload_excel_view():
                 subcategory_col = header_map.get('subcategory')
                 par_level_col = header_map.get('par level')
                 max_holding_col = header_map.get('max holding amount')
+                purchase_location_col = header_map.get('purchase location') # New
                 
                 items_added_count = 0
                 error_messages = []
@@ -275,6 +290,7 @@ def upload_excel_view():
                     subcategory = str(row[subcategory_col]).strip() if subcategory_col is not None and row[subcategory_col] is not None else None
                     par_level_val = row[par_level_col] if par_level_col is not None and row[par_level_col] is not None else "0" # Default to "0" if cell empty/col missing
                     max_holding_val = row[max_holding_col] if max_holding_col is not None and row[max_holding_col] is not None else "0" # Default to "0"
+                    purchase_location_val = str(row[purchase_location_col]).strip() if purchase_location_col is not None and row[purchase_location_col] is not None else None # New
 
                     # Skip row if essential 'name' field is missing
                     if not name:
@@ -282,14 +298,14 @@ def upload_excel_view():
                         # vs. completely blank rows often found at the end of sheets.
                         other_cells_have_data = any(
                             row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col, 
-                                                         category_col, subcategory_col, par_level_col, max_holding_col] 
+                                                         category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col]
                             if col_idx is not None and len(row) > col_idx and row[col_idx] is not None
                         )
                         if other_cells_have_data:
                             error_messages.append(f"Row {row_idx}: Name is missing but other data present. Skipped.")
                         # If all relevant cells are effectively empty, it's likely an empty row, so just continue
                         elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col, 
-                                                                category_col, subcategory_col, par_level_col, max_holding_col]
+                                                                category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col]
                                      if col_idx is not None and len(row) > col_idx and row[col_idx] is not None):
                             continue
                         else: # Name missing, other fields might be empty too, but log it
@@ -348,6 +364,15 @@ def upload_excel_view():
                             max_holding_float = None # Reset if invalid
                     except (ValueError, TypeError):
                         row_errors.append(f"Invalid Max Holding Amount '{max_holding_val}'. Must be a valid number.")
+
+                    # Validate purchase_location_val (optional, but if provided, must be one of the allowed values)
+                    purchase_location_to_pass = None
+                    if purchase_location_val:
+                        allowed_locations = ['Sobeys', 'Costco']
+                        if purchase_location_val in allowed_locations:
+                            purchase_location_to_pass = purchase_location_val
+                        else:
+                            row_errors.append(f"Invalid Purchase Location '{purchase_location_val}'. If provided, must be one of: {', '.join(allowed_locations)}.")
                     
                     if row_errors: 
                         error_messages.append(f"Row {row_idx} ('{name}'): " + "; ".join(row_errors))
@@ -363,7 +388,8 @@ def upload_excel_view():
                             category=category if category else None, # Pass None if empty string
                             subcategory=subcategory if subcategory else None,
                             par_level=par_level_float,
-                            max_holding_amount=max_holding_float
+                            max_holding_amount=max_holding_float,
+                            purchase_location=purchase_location_to_pass # New
                         )
                         items_added_count += 1
                     except Exception as e: # Catch errors from manager.add_item_to_list
@@ -591,6 +617,24 @@ def projections_view():
                 flash(f"Could not generate projection for {item_name}: {projection_data.get('message', 'Unknown error')}", "error")
     
     return render_template('projections.html', projections=projection_results_list)
+
+@app.route('/shopping_list')
+def shopping_list_view():
+    store_filter = request.args.get('store', '').strip()
+    search_term = request.args.get('search', '').strip()
+
+    # Get shopping list items from the manager
+    # The manager.get_shopping_list_items method should handle None or empty strings for filters
+    shopping_list_items = manager.get_shopping_list_items(
+        store_filter=store_filter if store_filter else None,
+        search_term=search_term if search_term else None
+    )
+
+    # Pass the items and current filter values to the template
+    return render_template('shopping_list.html',
+                           items=shopping_list_items,
+                           current_store_filter=store_filter,
+                           current_search_term=search_term)
 
 if __name__ == '__main__':
     # Debug mode should be False in a production environment

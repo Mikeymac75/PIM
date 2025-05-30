@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Shopping List{% endblock %}
+
+{% block content %}
+<h1>Shopping List</h1>
+
+<div class="filters">
+    <form method="GET" action="{{ url_for('shopping_list_view') }}">
+        <label for="store">Filter by Store:</label>
+        <select name="store" id="store">
+            <option value="" {% if not current_store_filter %}selected{% endif %}>All Stores</option>
+            <option value="Sobeys" {% if current_store_filter == 'Sobeys' %}selected{% endif %}>Sobeys</option>
+            <option value="Costco" {% if current_store_filter == 'Costco' %}selected{% endif %}>Costco</option>
+        </select>
+
+        <label for="search">Search by Name:</label>
+        <input type="text" name="search" id="search" value="{{ current_search_term or '' }}">
+
+        <button type="submit" class="button">Apply Filters</button>
+    </form>
+</div>
+
+<table class="table is-striped is-hoverable is-fullwidth">
+    <thead>
+        <tr>
+            <th>Product Name</th>
+            <th>Current Quantity</th>
+            <th>Par Level</th>
+            <th>Avg. Daily Consumption</th>
+            <th>Days Until Next Shop</th>
+            <th>Nearest Expiry Date</th>
+            <th>Recommended Purchase Amount</th>
+            <th>Purchase Location</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ item.current_quantity }}</td> {# This is the original string like "6 units", "1 gallon" #}
+            <td>{{ "%.2f" | format(item.par_level) }}</td>
+            <td>{{ "%.2f" | format(item.avg_daily_consumption) }} units/day</td>
+            <td>{{ item.days_to_next_shop }} days</td>
+            <td>{{ item.expiry_date if item.expiry_date else 'N/A' }}</td> {# Already a string from backend #}
+            <td>{{ "%.2f" | format(item.recommended_purchase_amount) }}</td>
+            <td>{{ item.purchase_location }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="8" style="text-align: center;">No items on your shopping list with the current filters.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% endblock %}

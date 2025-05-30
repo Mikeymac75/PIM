@@ -52,6 +52,15 @@
             <small class="help-text">Optional. Enter the maximum quantity you prefer to stock. Defaults to 0 (no specific max).</small>
         </div>
 
+        <div class="form-group">
+            <label for="purchase_location">Purchase Location:</label>
+            <select name="purchase_location" id="purchase_location" class="form-control">
+                <option value="" {% if not form_data.get('purchase_location') %}selected{% endif %}>-- Select a Store (Optional) --</option>
+                <option value="Sobeys" {% if form_data.get('purchase_location') == 'Sobeys' %}selected{% endif %}>Sobeys</option>
+                <option value="Costco" {% if form_data.get('purchase_location') == 'Costco' %}selected{% endif %}>Costco</option>
+            </select>
+        </div>
+
         <button type="submit" class="button" style="margin-top: 20px;">Add Item</button>
     </form>
 

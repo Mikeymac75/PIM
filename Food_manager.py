@@ -33,7 +33,8 @@ class InventoryManager:
                         category TEXT, 
                         subcategory TEXT,
                         par_level REAL DEFAULT 0,
-                        max_holding_amount REAL DEFAULT 0
+                        max_holding_amount REAL DEFAULT 0,
+                        purchase_location TEXT
                     )
                 ''')
                 # Historical (Consumed) Items Table
@@ -82,7 +83,7 @@ class InventoryManager:
             return 0.0 # Default for completely unparseable or empty strings
 
     def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days,
-                         category=None, subcategory=None, par_level=0, max_holding_amount=0):
+                         category=None, subcategory=None, par_level=0, max_holding_amount=0, purchase_location=None):
         """Adds a new grocery item to the database, including new optional fields."""
         try:
             purchase_dt = date.fromisoformat(purchase_date_str)
@@ -101,12 +102,12 @@ class InventoryManager:
                 cursor.execute('''
                     INSERT INTO inventory_items 
                     (name, quantity, purchase_date, expiry_date, original_quantity_string,
-                     category, subcategory, par_level, max_holding_amount) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     category, subcategory, par_level, max_holding_amount, purchase_location)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (name, str(quantity_str), purchase_dt.isoformat(), expiry_dt.isoformat(), str(quantity_str),
-                      category, subcategory, par_level, max_holding_amount))
+                      category, subcategory, par_level, max_holding_amount, purchase_location))
                 conn.commit()
-            print(f"Added to DB: {name} (Category: {category}, Expires: {expiry_dt.isoformat()})")
+            print(f"Added to DB: {name} (Category: {category}, Expires: {expiry_dt.isoformat()}, Location: {purchase_location})")
             return {"success": True, "message": f"Item '{name}' added successfully."}
         except sqlite3.Error as e:
             print(f"Database error adding item: {e}")
@@ -120,7 +121,7 @@ class InventoryManager:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT id, name, quantity, purchase_date, expiry_date, original_quantity_string,
-                           category, subcategory, par_level, max_holding_amount
+                           category, subcategory, par_level, max_holding_amount, purchase_location
                     FROM inventory_items 
                     ORDER BY expiry_date ASC
                 ''')
@@ -133,6 +134,84 @@ class InventoryManager:
         except sqlite3.Error as e:
             print(f"Database error fetching current inventory: {e}")
         return items
+
+    def get_shopping_list_items(self, store_filter=None, search_term=None):
+        """
+        Generates a shopping list based on current inventory, consumption rates,
+        par levels, and purchase locations.
+        """
+        SOBEYS_FREQUENCY_WEEKS = 1
+        COSTCO_FREQUENCY_WEEKS = 3
+        shopping_list = []
+
+        inventory = self.get_current_inventory()
+
+        for item in inventory:
+            par_level = item.get('par_level', 0.0)
+            if par_level is None or par_level <= 0: # Ensure par_level is not None before comparison
+                continue
+
+            purchase_location = item.get('purchase_location')
+            projection_days_for_item = 0
+
+            if purchase_location == 'Sobeys':
+                projection_days_for_item = SOBEYS_FREQUENCY_WEEKS * 7
+            elif purchase_location == 'Costco':
+                projection_days_for_item = COSTCO_FREQUENCY_WEEKS * 7
+            else:
+                # If no purchase location, or not Sobeys/Costco, skip or use a default.
+                # For now, skipping as per initial thought in plan.
+                continue
+
+            # Ensure item name is valid for project_demand
+            item_name = item.get('name')
+            if not item_name:
+                continue
+
+            demand_projection = self.project_demand(item_name, lookback_days=30, projection_days=projection_days_for_item)
+
+            avg_daily_consumption = demand_projection.get('avg_daily_consumption', 0.0)
+            # current_numeric_quantity is based on the specific item instance from inventory, not a new call to get_total_item_quantity
+            current_numeric_quantity = self._parse_quantity_string(item['quantity'])
+
+            # Target stock level at the END of the next shopping cycle for this item
+            target_stock_after_shopping = par_level + (avg_daily_consumption * projection_days_for_item)
+
+            # Amount to buy is the difference between this target and current stock
+            recommended_purchase_amount = target_stock_after_shopping - current_numeric_quantity
+            recommended_purchase_amount = max(0, round(recommended_purchase_amount, 2)) # Ensure non-negative and round
+
+            if recommended_purchase_amount > 0:
+                # Expiry date can be a date object, convert to string for consistency in the list
+                expiry_date_str = item['expiry_date'].isoformat() if isinstance(item['expiry_date'], date) else str(item['expiry_date'])
+
+                shopping_list_item = {
+                    'name': item_name,
+                    'current_quantity': item['quantity'], # Keep original quantity string for display if needed
+                    'current_numeric_quantity': current_numeric_quantity, # Parsed numeric quantity
+                    'purchase_location': purchase_location,
+                    'expiry_date': expiry_date_str,
+                    'recommended_purchase_amount': recommended_purchase_amount,
+                    'par_level': par_level,
+                    'days_to_next_shop': projection_days_for_item, # How long this purchase should last
+                    'avg_daily_consumption': round(avg_daily_consumption, 2)
+                }
+                shopping_list.append(shopping_list_item)
+
+        # Filter logic
+        if store_filter:
+            shopping_list = [
+                item for item in shopping_list
+                if item['purchase_location'] and item['purchase_location'].lower() == store_filter.lower()
+            ]
+
+        if search_term:
+            shopping_list = [
+                item for item in shopping_list
+                if search_term.lower() in item['name'].lower()
+            ]
+
+        return shopping_list
 
     def get_historical_inventory(self):
         """Retrieves all items from the historical inventory, ordered by consumed date."""
