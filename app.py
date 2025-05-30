@@ -3,10 +3,12 @@ from Food_manager import InventoryManager
 from recipe_manager import RecipeManager
 from datetime import date, datetime
 import openpyxl # For reading Excel files
-# import os # os module was imported but not directly used. Removed for now.
+import os # For accessing environment variables
 
 app = Flask(__name__)
-app.secret_key = 'dev_secret_key' # Replace with a strong secret key in production
+# Configure secret key: Use an environment variable for production, with a fallback for development.
+# IMPORTANT: For production, set the FLASK_SECRET_KEY environment variable to a strong, random value.
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_fallback_secret_key')
 # Define allowed extensions for file upload
 ALLOWED_EXTENSIONS = {'xlsx'}
 
@@ -15,7 +17,9 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # Define the shared database file path
-DATABASE_FILE = "food_app.db"
+# Use an environment variable for the database path, with a default for development.
+# IMPORTANT: For production or specific setups, set DATABASE_FILE_PATH environment variable.
+DATABASE_FILE = os.environ.get('DATABASE_FILE_PATH', 'food_app.db')
 
 # Instantiate Managers globally, using the shared database file
 # The manager classes themselves will handle DB initialization (table creation IF NOT EXISTS)
@@ -23,19 +27,20 @@ manager = InventoryManager(db_filepath=DATABASE_FILE)
 recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
 
 # --- Helper Functions ---
-def _get_unique_inventory_item_names():
-    """Helper to get sorted unique item names from the current inventory."""
+def _get_unique_item_names(include_historical=False):
+    """
+    Helper to get sorted unique item names from inventory.
+    - If include_historical is False, fetches from current inventory only.
+    - If include_historical is True, fetches from both current and historical inventory.
+    """
     current_inventory = manager.get_current_inventory()
-    return sorted(list(set(item['name'] for item in current_inventory)))
-
-def _get_unique_item_names_for_projection():
-    """Helper to get sorted unique item names from both current and historical inventory."""
-    current_inventory = manager.get_current_inventory()
-    historical_inventory = manager.get_historical_inventory() # Assuming this method exists and is efficient
-    
     unique_names = set(item['name'] for item in current_inventory)
-    for item in historical_inventory:
-        unique_names.add(item['name'])
+
+    if include_historical:
+        historical_inventory = manager.get_historical_inventory()
+        for item in historical_inventory:
+            unique_names.add(item['name'])
+
     return sorted(list(unique_names))
 
 # --- Flask Routes ---
@@ -101,6 +106,7 @@ def add_item_view():
             except ValueError:
                 errors.append("Invalid purchase date format. Please use YYYY-MM-DD.")
         
+        expiry_days_int = None  # Initialize to None
         if not expiry_days_str:
             errors.append("Expiry days are required.")
         else:
@@ -109,11 +115,11 @@ def add_item_view():
                 if expiry_days_int < 0:
                     errors.append("Expiry days must be a non-negative number.")
             except ValueError:
-                errors.append("Expiry days must be a valid number.")
+                errors.append("Expiry days must be a valid whole number.")
 
         # Validate new numeric fields
         par_level = 0.0 # Default
-        if par_level_str: # If not empty string after strip (already defaulted to '0' if was empty)
+        if par_level_str:
             try:
                 par_level = float(par_level_str)
                 if par_level < 0:
@@ -122,7 +128,7 @@ def add_item_view():
                 errors.append("Par level must be a valid number.")
         
         max_holding_amount = 0.0 # Default
-        if max_holding_amount_str: # If not empty string after strip
+        if max_holding_amount_str:
             try:
                 max_holding_amount = float(max_holding_amount_str)
                 if max_holding_amount < 0:
@@ -158,7 +164,7 @@ def add_item_view():
 
 @app.route('/inventory/consume', methods=['GET', 'POST'])
 def consume_item_view():
-    item_names = _get_unique_inventory_item_names() # Use helper
+    item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
 
     if request.method == 'POST':
         item_name = request.form.get('item_name')
@@ -168,14 +174,14 @@ def consume_item_view():
         if not item_name:
             errors.append("Item name is required.")
         
-        numeric_quantity_consumed = 0
+        numeric_quantity_consumed = None # Initialize to None
         if not quantity_consumed_str:
             errors.append("Quantity to consume is required.")
         else:
             try:
                 numeric_quantity_consumed = float(quantity_consumed_str) # Allow for float quantities
                 if numeric_quantity_consumed <= 0:
-                    errors.append("Quantity to consume must be a positive number.")
+                    errors.append("Quantity to consume must be a positive number (greater than zero).")
             except ValueError:
                 errors.append("Quantity to consume must be a valid number.")
 
@@ -310,35 +316,38 @@ def upload_excel_view():
 
                     expiry_days_int = None # Will hold successfully parsed int
                     if isinstance(expiry_days_val, (int, float)):
-                        if expiry_days_val >= 0:
-                            expiry_days_int = int(expiry_days_val)
-                        else:
-                            row_errors.append("Expiry Days must be non-negative.")
-                    elif isinstance(expiry_days_val, str) and expiry_days_val.strip().isdigit(): # Handle numbers as strings
+                        expiry_days_int = int(expiry_days_val)
+                        if expiry_days_int < 0:
+                            row_errors.append("Expiry Days must be a non-negative number.")
+                            expiry_days_int = None # Reset if invalid
+                    elif isinstance(expiry_days_val, str) and expiry_days_val.strip().lstrip('-').isdigit(): # Handle numbers as strings, allow negative for initial check
                         expiry_days_int = int(expiry_days_val.strip())
                         if expiry_days_int < 0:
-                             row_errors.append("Expiry Days must be non-negative.")
+                             row_errors.append("Expiry Days must be a non-negative number.")
                              expiry_days_int = None # Reset if invalid
                     elif expiry_days_val is not None: # If not None and not int/float/parsable string
-                        row_errors.append(f"Expiry Days '{expiry_days_val}' must be a whole number.")
+                        row_errors.append(f"Expiry Days '{expiry_days_val}' must be a valid whole number.")
 
                     # Validate optional numeric fields: par_level, max_holding_amount
-                    par_level_float = 0.0
+                    par_level_float = None
                     try:
-                        # Convert even if it's already float/int to handle string numbers from Excel
-                        par_level_float = float(par_level_val if par_level_val is not None else 0) 
+                        par_level_val_cleaned = str(par_level_val).strip() if par_level_val is not None else "0"
+                        par_level_float = float(par_level_val_cleaned)
                         if par_level_float < 0:
-                            row_errors.append("Par Level must be non-negative.")
+                            row_errors.append("Par Level must be a non-negative number.")
+                            par_level_float = None # Reset if invalid
                     except (ValueError, TypeError):
-                        row_errors.append(f"Invalid Par Level '{par_level_val}'. Must be a number.")
+                        row_errors.append(f"Invalid Par Level '{par_level_val}'. Must be a valid number.")
 
-                    max_holding_float = 0.0
+                    max_holding_float = None
                     try:
-                        max_holding_float = float(max_holding_val if max_holding_val is not None else 0)
+                        max_holding_val_cleaned = str(max_holding_val).strip() if max_holding_val is not None else "0"
+                        max_holding_float = float(max_holding_val_cleaned)
                         if max_holding_float < 0:
-                            row_errors.append("Max Holding Amount must be non-negative.")
+                            row_errors.append("Max Holding Amount must be a non-negative number.")
+                            max_holding_float = None # Reset if invalid
                     except (ValueError, TypeError):
-                        row_errors.append(f"Invalid Max Holding Amount '{max_holding_val}'. Must be a number.")
+                        row_errors.append(f"Invalid Max Holding Amount '{max_holding_val}'. Must be a valid number.")
                     
                     if row_errors: 
                         error_messages.append(f"Row {row_idx} ('{name}'): " + "; ".join(row_errors))
@@ -399,11 +408,11 @@ def add_recipe_view():
                 try:
                     ing_qty = float(ing_qty_str)
                     if ing_qty <= 0:
-                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be positive.")
+                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number (greater than zero).")
                     else:
                         ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty})
                 except ValueError:
-                    form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'. Must be a number.")
+                    form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'. Must be a valid number.")
             elif ing_name and not ing_qty_str: # Name provided but not quantity
                 form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
             # If only quantity or neither is provided, it's skipped (considered an empty ingredient slot)
@@ -568,7 +577,7 @@ def make_recipe_view(recipe_name):
 
 @app.route('/inventory/projections')
 def projections_view():
-    unique_item_names_for_proj = _get_unique_item_names_for_projection() # Use helper
+    unique_item_names_for_proj = _get_unique_item_names(include_historical=True) # Use new helper
 
     projection_results_list = []
     if unique_item_names_for_proj:
