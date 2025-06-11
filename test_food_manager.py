@@ -224,9 +224,14 @@ class TestInventoryManager(unittest.TestCase):
         self.assertEqual(len(inventory), 1)
         item_stock = inventory[0]
         self.assertEqual(item_stock['product_name'], "Test Banana")
-        # Quantity should be updated based on the parsing and reconstruction logic in consume_item
-        # If original was "10 units", and 3 consumed, new might be "7.0 units" or "7 units"
-        self.assertTrue(item_stock['quantity'] == "7.0 units" or item_stock['quantity'] == "7 units")
+        # Verify the actual stored quantity string in the database
+        conn = self.manager._get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT quantity FROM inventory_items WHERE product_id = ?", (product_id,))
+        db_quantity_str = cursor.fetchone()['quantity']
+        conn.close()
+        # After consuming 3.0 from "10 units" (parsed as 10.0), new quantity is 7.0, stored as "7"
+        self.assertEqual(db_quantity_str, "7")
 
 
         historical_items = self.manager.get_historical_inventory()
@@ -258,8 +263,9 @@ class TestInventoryManager(unittest.TestCase):
         """Test getting total quantity of a product with multiple stock batches, by ID and name."""
         product_id_grapes = self._create_product(name="Test Grapes", unit_of_measure="g", default_expiry_days=7)
         
-        self._add_inventory_stock(product_id_grapes, "100 g")
-        self._add_inventory_stock(product_id_grapes, "150 g") # Another batch
+        # Add stock with plain numeric strings, as expected by add_inventory_stock now
+        self._add_inventory_stock(product_id_grapes, "100")
+        self._add_inventory_stock(product_id_grapes, "150") # Another batch
 
         # Test by product name
         total_quantity_by_name = self.manager.get_total_item_quantity("Test Grapes")
@@ -394,7 +400,8 @@ class TestInventoryManager(unittest.TestCase):
         product_name = "Milk"
         product_unit = "L"
         p_milk_id = self._create_product(name=product_name, unit_of_measure=product_unit, par_level=2, purchase_location="Sobeys", default_expiry_days=7)
-        self._add_inventory_stock(p_milk_id, "1 L")
+        # Add stock with plain numeric string
+        self._add_inventory_stock(p_milk_id, "1")
 
         for i in range(1, 8): # 7 days of consumption, 1L per day
             self._add_historical_consumption(p_milk_id, product_name, 1, i)
@@ -404,6 +411,8 @@ class TestInventoryManager(unittest.TestCase):
         item = shopping_list[0]
         self.assertEqual(item['name'], product_name)
         self.assertEqual(item['unit_of_measure'], product_unit)
+        self.assertEqual(item['current_quantity_display'], f"1.00 {product_unit}") # Verify formatted display
+        self.assertIsInstance(item['recommended_purchase_amount'], float) # Verify type
         self.assertEqual(item['purchase_location'], "Sobeys")
         self.assertAlmostEqual(item['recommended_purchase_amount'], 8.0) # Expected: Par(2) + CycleConsumption(7) - CurrentStock(1) = 8
         self.assertEqual(item['par_level'], 2)
@@ -413,7 +422,8 @@ class TestInventoryManager(unittest.TestCase):
         product_name = "Paper Towels"
         product_unit = "rolls"
         p_paper_id = self._create_product(name=product_name, unit_of_measure=product_unit, par_level=6, purchase_location="Costco", default_expiry_days=100)
-        self._add_inventory_stock(p_paper_id, "2 rolls")
+        # Add stock with plain numeric string
+        self._add_inventory_stock(p_paper_id, "2")
 
         self._add_historical_consumption(p_paper_id, product_name, 1, 5)  # Consumed 1 roll 5 days ago
         self._add_historical_consumption(p_paper_id, product_name, 1, 15) # Consumed 1 roll 15 days ago
@@ -424,6 +434,9 @@ class TestInventoryManager(unittest.TestCase):
         self.assertEqual(len(shopping_list), 1)
         item = shopping_list[0]
         self.assertEqual(item['name'], product_name)
+        self.assertEqual(item['unit_of_measure'], product_unit)
+        self.assertEqual(item['current_quantity_display'], f"2.00 {product_unit}")
+        self.assertIsInstance(item['recommended_purchase_amount'], float)
         self.assertEqual(item['purchase_location'], "Costco")
          # Expected: Par(6) + CycleConsumption(0.1 * 21 = 2.1) - CurrentStock(2) = 6.1
         self.assertAlmostEqual(item['recommended_purchase_amount'], 6.1)
@@ -432,55 +445,66 @@ class TestInventoryManager(unittest.TestCase):
 
     def test_get_shopping_list_mixed_items_no_filter(self):
         p_sobeys_id = self._create_product("Sobeys Item", par_level=2, purchase_location="Sobeys", unit_of_measure="units")
-        self._add_inventory_stock(p_sobeys_id, "0.5 units") # Stock below par
-        self._add_historical_consumption(p_sobeys_id,"Sobeys Item", 7, 3) # Avg consumption 7/30 = 0.233. Need 7*0.233 = 1.63 for cycle. Target 2+1.63=3.63. Buy 3.63-0.5 = 3.13
+        self._add_inventory_stock(p_sobeys_id, "0.5") # Stock below par
+        self._add_historical_consumption(p_sobeys_id,"Sobeys Item", 7, 3)
 
         p_costco_id = self._create_product("Costco Item", par_level=2, purchase_location="Costco", unit_of_measure="units")
-        self._add_inventory_stock(p_costco_id, "0.5 units") # Stock below par
-        self._add_historical_consumption(p_costco_id, "Costco Item", 21, 5) # Avg consumption 21/30 = 0.7. Need 21*0.7 = 14.7 for cycle. Target 2+14.7=16.7. Buy 16.7-0.5 = 16.2
+        self._add_inventory_stock(p_costco_id, "0.5") # Stock below par
+        self._add_historical_consumption(p_costco_id, "Costco Item", 21, 5)
 
         shopping_list = self.manager.get_shopping_list_items()
         self.assertEqual(len(shopping_list), 2)
         self.assertTrue(any(it['name'] == "Sobeys Item" for it in shopping_list))
         self.assertTrue(any(it['name'] == "Costco Item" for it in shopping_list))
+        for item in shopping_list: # Check all items
+            self.assertIn('unit_of_measure', item)
+            self.assertEqual(item['unit_of_measure'], "units")
+            self.assertIsInstance(item['recommended_purchase_amount'], float)
+            self.assertTrue(item['current_quantity_display'].endswith(" units"))
+
 
     def test_get_shopping_list_filter_by_sobeys(self):
         p_sobeys_id = self._create_product("Sobeys Apples", par_level=2, purchase_location="Sobeys", unit_of_measure="units")
-        self._add_inventory_stock(p_sobeys_id, "0.5 units")
+        self._add_inventory_stock(p_sobeys_id, "0.5")
         self._add_historical_consumption(p_sobeys_id, "Sobeys Apples", 7, 1)
 
         p_costco_id = self._create_product("Costco Oranges", par_level=2, purchase_location="Costco", unit_of_measure="units")
-        self._add_inventory_stock(p_costco_id, "0.5 units")
+        self._add_inventory_stock(p_costco_id, "0.5")
         self._add_historical_consumption(p_costco_id, "Costco Oranges", 21, 1)
 
         shopping_list = self.manager.get_shopping_list_items(store_filter="Sobeys")
         self.assertEqual(len(shopping_list), 1)
         self.assertEqual(shopping_list[0]['name'], "Sobeys Apples")
+        self.assertEqual(shopping_list[0]['unit_of_measure'], "units")
+        self.assertTrue(shopping_list[0]['current_quantity_display'].endswith(" units"))
+        self.assertIsInstance(shopping_list[0]['recommended_purchase_amount'], float)
+
 
     def test_get_shopping_list_filter_by_costco(self):
         p_sobeys_id = self._create_product("Sobeys Apples", par_level=2, purchase_location="Sobeys", unit_of_measure="units")
-        self._add_inventory_stock(p_sobeys_id, "0.5 units")
+        self._add_inventory_stock(p_sobeys_id, "0.5")
         self._add_historical_consumption(p_sobeys_id, "Sobeys Apples", 7, 1)
 
         p_costco_id = self._create_product("Costco Oranges", par_level=2, purchase_location="Costco", unit_of_measure="units")
-        self._add_inventory_stock(p_costco_id, "0.5 units")
+        self._add_inventory_stock(p_costco_id, "0.5")
         self._add_historical_consumption(p_costco_id, "Costco Oranges", 21, 1)
 
         shopping_list = self.manager.get_shopping_list_items(store_filter="Costco")
         self.assertEqual(len(shopping_list), 1)
         self.assertEqual(shopping_list[0]['name'], "Costco Oranges")
+        self.assertEqual(shopping_list[0]['unit_of_measure'], "units")
 
     def test_get_shopping_list_search_term(self):
         p1_id = self._create_product("Organic Apples", par_level=2, purchase_location="Sobeys", unit_of_measure="units")
-        self._add_inventory_stock(p1_id, "0.5 units")
+        self._add_inventory_stock(p1_id, "0.5")
         self._add_historical_consumption(p1_id, "Organic Apples", 7, 1)
 
         p2_id = self._create_product("Apple Pie", par_level=2, purchase_location="Sobeys", unit_of_measure="units")
-        self._add_inventory_stock(p2_id, "0.5 units")
+        self._add_inventory_stock(p2_id, "0.5")
         self._add_historical_consumption(p2_id, "Apple Pie", 7, 1)
 
         p3_id = self._create_product("Orange Juice", par_level=2, purchase_location="Sobeys", unit_of_measure="units")
-        self._add_inventory_stock(p3_id, "0.5 units")
+        self._add_inventory_stock(p3_id, "0.5")
         self._add_historical_consumption(p3_id, "Orange Juice", 7, 1)
 
 
@@ -488,25 +512,32 @@ class TestInventoryManager(unittest.TestCase):
         self.assertEqual(len(shopping_list_apple), 2)
         self.assertTrue(any(it['name'] == "Organic Apples" for it in shopping_list_apple))
         self.assertTrue(any(it['name'] == "Apple Pie" for it in shopping_list_apple))
+        for item in shopping_list_apple:
+            self.assertEqual(item['unit_of_measure'], "units")
+            self.assertIsInstance(item['recommended_purchase_amount'], float)
+
 
         shopping_list_pie = self.manager.get_shopping_list_items(search_term="Pie")
         self.assertEqual(len(shopping_list_pie), 1)
         self.assertEqual(shopping_list_pie[0]['name'], "Apple Pie")
+        self.assertEqual(shopping_list_pie[0]['unit_of_measure'], "units")
+
 
         shopping_list_organic_apples = self.manager.get_shopping_list_items(search_term="Organic Apples")
         self.assertEqual(len(shopping_list_organic_apples), 1)
         self.assertEqual(shopping_list_organic_apples[0]['name'], "Organic Apples")
+        self.assertEqual(shopping_list_organic_apples[0]['unit_of_measure'], "units")
 
 
     def test_get_shopping_list_item_no_purchase_location_on_product(self):
         p_id = self._create_product("Mystery Item", par_level=2, purchase_location=None, unit_of_measure="units") # No purchase location
-        self._add_inventory_stock(p_id, "0.5 units")
+        self._add_inventory_stock(p_id, "0.5")
         self._add_historical_consumption(p_id, "Mystery Item", 7, 1)
         self.assertEqual(self.manager.get_shopping_list_items(), []) # Should not appear on list
 
     def test_get_shopping_list_item_zero_par_level_on_product(self):
         p_id = self._create_product("Zero Par Item", par_level=0, purchase_location="Sobeys", unit_of_measure="units") # Par level 0
-        self._add_inventory_stock(p_id, "0.5 units")
+        self._add_inventory_stock(p_id, "0.5")
         self._add_historical_consumption(p_id, "Zero Par Item", 7, 1)
         self.assertEqual(self.manager.get_shopping_list_items(), []) # Should not appear
 
@@ -521,14 +552,15 @@ class TestInventoryManager(unittest.TestCase):
     def test_get_shopping_list_recommendation_logic_product_centric(self):
         product_name = "Test Item Reco"
         product_unit = "units"
-        current_stock_numeric = 5.0
+        current_stock_numeric_str = "5.0" # How it's added to stock
+        current_stock_numeric = 5.0 # The float value
         par_level = 3.0
         daily_consumption_rate = 1.0
         purchase_location = "Sobeys" # 7-day cycle
 
         p_id = self._create_product(name=product_name, unit_of_measure=product_unit,
                                     par_level=par_level, purchase_location=purchase_location, default_expiry_days=30)
-        self._add_inventory_stock(p_id, f"{current_stock_numeric} {product_unit}")
+        self._add_inventory_stock(p_id, current_stock_numeric_str) # Use numeric string for adding stock
 
         for i in range(1, 31):
             self._add_historical_consumption(p_id, product_name, daily_consumption_rate, i)
@@ -537,6 +569,10 @@ class TestInventoryManager(unittest.TestCase):
         self.assertEqual(len(shopping_list), 1)
         item = shopping_list[0]
         self.assertEqual(item['name'], product_name)
+        self.assertEqual(item['unit_of_measure'], product_unit)
+        self.assertEqual(item['current_quantity_display'], f"{current_stock_numeric:.2f} {product_unit}")
+        self.assertIsInstance(item['recommended_purchase_amount'], float)
+
 
         self.assertAlmostEqual(item['avg_daily_consumption'], daily_consumption_rate, places=2)
 
@@ -549,207 +585,36 @@ class TestInventoryManager(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
         """Test adding item with invalid date format."""
-        result = self.manager.add_item_to_list("Invalid Date Item", "1", "2023/01/01", 5) # Wrong format
+        # This test was using add_item_to_list, which is deprecated.
+        # Re-evaluating if this test is still needed or how it fits with add_inventory_stock
+        # add_inventory_stock uses product's default_expiry_days, not one from parameters.
+        # The date format for purchase_date is validated in add_inventory_stock.
+        # Let's keep this as a general test for _add_inventory_stock if it handles date validation.
+        product_id = self._create_product(name="Date Format Test Prod")
+        result = self.manager.add_inventory_stock(product_id, "1", "2023/01/01") # Invalid date format
         self.assertFalse(result['success'])
-        self.assertIn("Invalid date", result['message'])
+        self.assertIn("Invalid date or expiry day format", result['message'])
+
 
     def test_consume_item_not_found(self):
-        """Test consuming an item that is not in inventory."""
-        result = self.manager.consume_item("NonExistent Item", 1.0)
+        """Test consuming an item that is not in inventory (product exists, no stock)."""
+        self._create_product(name="NoStockToConsume")
+        result = self.manager.consume_item("NoStockToConsume", 1.0) # Product exists, but no stock
         self.assertFalse(result['success'])
-        self.assertIn("not found", result['message'])
+        self.assertIn("Item 'NoStockToConsume' not found in inventory", result['message'])
+
 
     def tearDown(self):
         """Clean up resources, if any (though in-memory DB is auto-cleaned)."""
-        # For in-memory DB, connection closure might not be strictly necessary here
-        # as it's per-test, but good practice if it were a file-based DB.
         pass
 
-    # --- Tests for get_shopping_list_items ---
-
-    def test_get_shopping_list_empty_inventory(self):
-        self.assertEqual(self.manager.get_shopping_list_items(), [])
-
-    def test_get_shopping_list_no_qualifying_items(self):
-        # Item with high stock compared to par and zero consumption
-        self._add_inventory_item("Apples", "20 units", self.today_str, 14, par_level=5, purchase_location="Sobeys")
-        # Item with par level 0
-        self._add_inventory_item("Oranges", "5 units", self.today_str, 10, par_level=0, purchase_location="Sobeys")
-        self._add_historical_consumption("Oranges", 1, 1) # Some consumption
-
-        self.assertEqual(self.manager.get_shopping_list_items(), [])
-
-    def test_get_shopping_list_sobeys_item_needed(self):
-        item_name = "Milk"
-        self._add_inventory_item(item_name, "1 L", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        # Consumed 0.5L daily for past 10 days = 5L total / 30 days lookback = avg 0.166 L/day
-        # More direct: consumed 7L in last 7 days = 1L/day
-        for i in range(1, 8): # 7 days of consumption
-            self._add_historical_consumption(item_name, 1, i)
-
-        # Current stock: 1L. Par: 2L. Avg daily consumption: 1L/day.
-        # Sobeys shop is in 7 days.
-        # Projected consumption in 7 days: 1 * 7 = 7L.
-        # Stock at next Sobeys shop: 1 - 7 = -6L.
-        # Target stock after Sobeys shop = Par (2) + Consumption for next cycle (7) = 9L.
-        # Recommended purchase = Target (9) - Current (1) = 8L.
-
-        shopping_list = self.manager.get_shopping_list_items()
-        self.assertEqual(len(shopping_list), 1)
-        item = shopping_list[0]
-        self.assertEqual(item['name'], item_name)
-        self.assertEqual(item['purchase_location'], "Sobeys")
-        self.assertAlmostEqual(item['recommended_purchase_amount'], 8.0)
-        self.assertEqual(item['par_level'], 2)
-        self.assertEqual(item['days_to_next_shop'], 7) # Sobeys frequency
-
-    def test_get_shopping_list_costco_item_needed(self):
-        item_name = "Paper Towels"
-        self._add_inventory_item(item_name, "2 rolls", self.today_str, 100, par_level=6, purchase_location="Costco")
-        # Consumed 1 roll every 7 days for the past 28 days = 4 rolls total / 30 day lookback = avg 0.133 rolls/day
-        # Let's simplify: 3 rolls consumed over 30 days. Avg daily = 0.1
-        self._add_historical_consumption(item_name, 1, 5)
-        self._add_historical_consumption(item_name, 1, 15)
-        self._add_historical_consumption(item_name, 1, 25)
-
-        # Current stock: 2 rolls. Par: 6 rolls. Avg daily consumption: 0.1 rolls/day.
-        # Costco shop is in 21 days.
-        # Projected consumption in 21 days: 0.1 * 21 = 2.1 rolls.
-        # Stock at next Costco shop: 2 - 2.1 = -0.1 rolls.
-        # Target stock after Costco shop = Par (6) + Consumption for next cycle (2.1) = 8.1 rolls.
-        # Recommended purchase = Target (8.1) - Current (2) = 6.1 rolls.
-
-        shopping_list = self.manager.get_shopping_list_items()
-        self.assertEqual(len(shopping_list), 1)
-        item = shopping_list[0]
-        self.assertEqual(item['name'], item_name)
-        self.assertEqual(item['purchase_location'], "Costco")
-        self.assertAlmostEqual(item['recommended_purchase_amount'], 6.1)
-        self.assertEqual(item['par_level'], 6)
-        self.assertEqual(item['days_to_next_shop'], 21) # Costco frequency
-
-    def test_get_shopping_list_mixed_items_no_filter(self):
-        # Sobeys item
-        self._add_inventory_item("Sobeys Item", "1 unit", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        self._add_historical_consumption("Sobeys Item", 1, 1) # Avg daily 1/30, need more to trigger
-        self._add_historical_consumption("Sobeys Item", 7, 3) # Avg daily (1+7)/30 = 0.26. Need 7*0.26 = 1.82 for next cycle. Par 2. Rec should be >0
-
-        # Costco item
-        self._add_inventory_item("Costco Item", "1 unit", self.today_str, 21, par_level=2, purchase_location="Costco")
-        self._add_historical_consumption("Costco Item", 21, 5) # Avg daily 21/30 = 0.7. Need 21*0.7 = 14.7 for next cycle. Par 2. Rec should be >0
-
-        shopping_list = self.manager.get_shopping_list_items()
-        self.assertEqual(len(shopping_list), 2)
-        self.assertTrue(any(it['name'] == "Sobeys Item" for it in shopping_list))
-        self.assertTrue(any(it['name'] == "Costco Item" for it in shopping_list))
-
-    def test_get_shopping_list_filter_by_sobeys(self):
-        self._add_inventory_item("Sobeys Apples", "1 unit", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        self._add_historical_consumption("Sobeys Apples", 7, 1) # Qualifies
-        self._add_inventory_item("Costco Oranges", "1 unit", self.today_str, 21, par_level=2, purchase_location="Costco")
-        self._add_historical_consumption("Costco Oranges", 21, 1) # Qualifies
-
-        shopping_list = self.manager.get_shopping_list_items(store_filter="Sobeys")
-        self.assertEqual(len(shopping_list), 1)
-        self.assertEqual(shopping_list[0]['name'], "Sobeys Apples")
-
-    def test_get_shopping_list_filter_by_costco(self):
-        self._add_inventory_item("Sobeys Apples", "1 unit", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        self._add_historical_consumption("Sobeys Apples", 7, 1)
-        self._add_inventory_item("Costco Oranges", "1 unit", self.today_str, 21, par_level=2, purchase_location="Costco")
-        self._add_historical_consumption("Costco Oranges", 21, 1)
-
-        shopping_list = self.manager.get_shopping_list_items(store_filter="Costco")
-        self.assertEqual(len(shopping_list), 1)
-        self.assertEqual(shopping_list[0]['name'], "Costco Oranges")
-
-    def test_get_shopping_list_search_term(self):
-        self._add_inventory_item("Organic Apples", "1 unit", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        self._add_historical_consumption("Organic Apples", 7, 1)
-        self._add_inventory_item("Apple Pie", "1 unit", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        self._add_historical_consumption("Apple Pie", 7, 1)
-        self._add_inventory_item("Orange Juice", "1 unit", self.today_str, 7, par_level=2, purchase_location="Sobeys")
-        self._add_historical_consumption("Orange Juice", 7, 1)
-
-        shopping_list_apple = self.manager.get_shopping_list_items(search_term="Apple")
-        self.assertEqual(len(shopping_list_apple), 2)
-        self.assertTrue(any(it['name'] == "Organic Apples" for it in shopping_list_apple))
-        self.assertTrue(any(it['name'] == "Apple Pie" for it in shopping_list_apple))
-
-        shopping_list_pie = self.manager.get_shopping_list_items(search_term="Pie")
-        self.assertEqual(len(shopping_list_pie), 1)
-        self.assertEqual(shopping_list_pie[0]['name'], "Apple Pie")
-
-        shopping_list_organic_apples = self.manager.get_shopping_list_items(search_term="Organic Apples")
-        self.assertEqual(len(shopping_list_organic_apples), 1)
-        self.assertEqual(shopping_list_organic_apples[0]['name'], "Organic Apples")
-
-
-    def test_get_shopping_list_item_no_purchase_location(self):
-        self._add_inventory_item("Mystery Item", "1 unit", self.today_str, 7, par_level=2, purchase_location=None)
-        self._add_historical_consumption("Mystery Item", 7, 1) # Would qualify if it had a location
-        self.assertEqual(self.manager.get_shopping_list_items(), [])
-
-    def test_get_shopping_list_item_zero_par_level(self):
-        self._add_inventory_item("Zero Par Item", "1 unit", self.today_str, 7, par_level=0, purchase_location="Sobeys")
-        self._add_historical_consumption("Zero Par Item", 7, 1) # Would qualify if par > 0
-        self.assertEqual(self.manager.get_shopping_list_items(), [])
-
-    def test_get_shopping_list_item_none_par_level(self):
-        # Test case where par_level might be None in DB (though schema defaults to 0)
-        # Add item with par_level explicitly set to None if DB allows (our add method defaults it)
-        conn = self.manager._get_db_connection()
-        cursor = conn.cursor()
-        item_name = "None Par Item"
-        cursor.execute('''
-            INSERT INTO inventory_items (name, quantity, purchase_date, expiry_date, par_level, purchase_location)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (item_name, "1 unit", self.today_str, (self.today + timedelta(days=7)).isoformat(), None, "Sobeys"))
-        conn.commit()
-        conn.close()
-        self._add_historical_consumption(item_name, 7, 1)
-        self.assertEqual(self.manager.get_shopping_list_items(), [])
-
-
-    def test_get_shopping_list_recommendation_logic(self):
-        item_name = "Test Item Reco"
-        current_stock = 5
-        par_level = 3
-        daily_consumption_rate = 1
-        purchase_location = "Sobeys" # 7-day cycle
-
-        self._add_inventory_item(item_name, f"{current_stock} units", self.today_str, 30,
-                                 par_level=par_level, purchase_location=purchase_location)
-
-        # Simulate daily consumption for 30 days to establish avg rate
-        for i in range(1, 31): # days ago
-            self._add_historical_consumption(item_name, daily_consumption_rate, i)
-
-        # Expected calculation:
-        # Avg Daily Consumption should be very close to daily_consumption_rate (1)
-        # Projection days for Sobeys = 7 days
-        # Projected consumption until next shop = avg_daily_consumption * 7
-        #   (approx. 1 * 7 = 7 units)
-        # Stock at next shop = current_stock - projected_consumption_until_next_shop
-        #   (approx. 5 - 7 = -2 units)
-        # Target stock after shopping = par_level + projected_consumption_until_next_shop
-        #   (approx. 3 + 7 = 10 units)
-        # Recommended purchase amount = target_stock_after_shopping - current_stock
-        #   (approx. 10 - 5 = 5 units)
-
-        shopping_list = self.manager.get_shopping_list_items()
-        self.assertEqual(len(shopping_list), 1)
-        item = shopping_list[0]
-        self.assertEqual(item['name'], item_name)
-        # Verify avg daily consumption from projection_demand method
-        # total consumed = 30 * 1 = 30. avg = 30/30 = 1.
-        self.assertAlmostEqual(item['avg_daily_consumption'], daily_consumption_rate, places=2)
-
-        expected_proj_consumption = daily_consumption_rate * 7 # Sobeys cycle
-        expected_target_stock = par_level + expected_proj_consumption
-        expected_reco = expected_target_stock - current_stock
-
-        self.assertAlmostEqual(item['recommended_purchase_amount'], expected_reco, places=2)
+    # --- Tests for get_shopping_list_items (related to product integration) ---
+    # The _add_inventory_item helper is not defined in this class, these tests will fail.
+    # These tests need to use _create_product and _add_inventory_stock.
+    # I will comment out these older shopping list tests as they are not compatible
+    # with the product-centric approach and helper methods (_create_product, _add_inventory_stock)
+    # The shopping list tests from the first TestInventoryManager class are more up-to-date.
+    pass
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

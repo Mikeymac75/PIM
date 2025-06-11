@@ -454,18 +454,10 @@ class InventoryManager:
 
                     new_numeric_qty = numeric_qty_in_stock - consumable_from_this_batch
                     
-                    new_quantity_db_str = "0"
+                    new_quantity_db_str = "0" # Default if fully consumed
                     if new_numeric_qty > 0:
-                        original_parts = str(current_qty_str_in_db).split(maxsplit=1)
-                        if len(original_parts) > 1:
-                            try:
-                                float(original_parts[0])
-                                unit_suffix = original_parts[1]
-                                new_quantity_db_str = f"{new_numeric_qty:.2f} {unit_suffix}"
-                            except ValueError:
-                                new_quantity_db_str = str(new_numeric_qty) if new_numeric_qty % 1 else str(int(new_numeric_qty))
-                        else:
-                             new_quantity_db_str = str(new_numeric_qty) if new_numeric_qty % 1 else str(int(new_numeric_qty))
+                        # Store floating-point numbers with decimals and integers without decimals
+                        new_quantity_db_str = str(new_numeric_qty) if new_numeric_qty % 1 else str(int(new_numeric_qty))
                     
                     if new_numeric_qty <= 0:
                         cursor.execute("DELETE FROM inventory_items WHERE id = ?", (item_id,))

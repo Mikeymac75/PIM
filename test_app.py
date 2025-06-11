@@ -238,57 +238,114 @@ class TestAppInventoryRoutes(BaseAppTest):
         self.assertIn(b'name="purchase_date"', response.data)
 
     def test_add_inventory_stock_post_success(self):
-        product_id = self._create_app_product(name="Product B", default_expiry_days=10)
+        product_id = self._create_app_product(name="Product B", default_expiry_days=10, unit_of_measure="kg")
         purchase_date = "2023-05-15"
+
+        # Test with integer-like quantity
         with self.client:
-            response = self.client.post('/inventory/add_stock', data={
+            response_int = self.client.post('/inventory/add_stock', data={
                 'product_id': str(product_id),
-                'quantity_added': '5 units',
+                'quantity_added': '5',
                 'purchase_date': purchase_date
             }, follow_redirects=True)
 
-        self.assertEqual(response.status_code, 200) # Redirects to current_inventory_view
-        self.assertIn(b"Stock for 'Product B' added successfully.", response.data)
+        self.assertEqual(response_int.status_code, 200)
+        self.assertIn(b"Stock for 'Product B' added successfully.", response_int.data)
 
-        # Verify in DB (check inventory_items table)
-        # This requires a helper or direct DB check for inventory_items linked to product_id
         conn = self._get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM inventory_items WHERE product_id = ?", (product_id,))
-        stock_item = cursor.fetchone()
+        cursor.execute("SELECT * FROM inventory_items WHERE product_id = ? AND quantity = '5'", (product_id,))
+        stock_item_int = cursor.fetchone()
         conn.close()
 
-        self.assertIsNotNone(stock_item)
-        self.assertEqual(stock_item['quantity'], '5 units')
-        self.assertEqual(stock_item['purchase_date'], purchase_date)
-        expected_expiry = (datetime.strptime(purchase_date, "%Y-%m-%d").date() + timedelta(days=10)).isoformat()
-        self.assertEqual(stock_item['expiry_date'], expected_expiry)
-        self.assertEqual(stock_item['name'], "Product B") # Name should be copied from product
+        self.assertIsNotNone(stock_item_int, "Integer quantity stock item not found in DB or quantity mismatch.")
+        self.assertEqual(stock_item_int['purchase_date'], purchase_date)
+        expected_expiry_int = (datetime.strptime(purchase_date, "%Y-%m-%d").date() + timedelta(days=10)).isoformat()
+        self.assertEqual(stock_item_int['expiry_date'], expected_expiry_int)
+        self.assertEqual(stock_item_int['name'], "Product B")
+        self.assertEqual(stock_item_int['original_quantity_string'], '5')
+
+        # Clean up for next part of test - delete the item added
+        with self._get_db_connection() as conn_del:
+            conn_del.execute("DELETE FROM inventory_items WHERE product_id = ?", (product_id,))
+            conn_del.commit()
+
+        # Test with float-like quantity
+        product_id_float = self._create_app_product(name="Product F", default_expiry_days=5, unit_of_measure="L")
+        purchase_date_float = "2023-06-10"
+        with self.client:
+            response_float = self.client.post('/inventory/add_stock', data={
+                'product_id': str(product_id_float),
+                'quantity_added': '2.5',
+                'purchase_date': purchase_date_float
+            }, follow_redirects=True)
+
+        self.assertEqual(response_float.status_code, 200)
+        self.assertIn(b"Stock for 'Product F' added successfully.", response_float.data)
+
+        conn = self._get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM inventory_items WHERE product_id = ? AND quantity = '2.5'", (product_id_float,))
+        stock_item_float = cursor.fetchone()
+        conn.close()
+
+        self.assertIsNotNone(stock_item_float, "Float quantity stock item not found in DB or quantity mismatch.")
+        self.assertEqual(stock_item_float['purchase_date'], purchase_date_float)
+        expected_expiry_float = (datetime.strptime(purchase_date_float, "%Y-%m-%d").date() + timedelta(days=5)).isoformat()
+        self.assertEqual(stock_item_float['expiry_date'], expected_expiry_float)
+        self.assertEqual(stock_item_float['name'], "Product F")
+        self.assertEqual(stock_item_float['original_quantity_string'], '2.5')
+
 
     def test_add_inventory_stock_post_invalid_data(self):
         product_id = self._create_app_product(name="Product C")
+        initial_item_count = len(self._get_all_inventory_items_from_db())
+
         with self.client:
             # Missing product_id
             response_no_pid = self.client.post('/inventory/add_stock', data={'quantity_added': '2', 'purchase_date': self.today_str})
-            self.assertEqual(response_no_pid.status_code, 200)
+            self.assertEqual(response_no_pid.status_code, 200) # Stays on page
             self.assertIn(b"Product selection is required.", response_no_pid.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
 
             # Missing quantity
             response_no_qty = self.client.post('/inventory/add_stock', data={'product_id': str(product_id), 'purchase_date': self.today_str})
-            self.assertEqual(response_no_qty.status_code, 200)
+            self.assertEqual(response_no_qty.status_code, 200) # Stays on page
             self.assertIn(b"Quantity added is required.", response_no_qty.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
 
             # Invalid quantity (negative)
             response_neg_qty = self.client.post('/inventory/add_stock', data={'product_id': str(product_id), 'quantity_added': '-1', 'purchase_date': self.today_str})
-            self.assertEqual(response_neg_qty.status_code, 200)
+            self.assertEqual(response_neg_qty.status_code, 200) # Stays on page
             self.assertIn(b"Quantity added must be a positive amount.", response_neg_qty.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
+
+            # Invalid quantity (zero)
+            response_zero_qty = self.client.post('/inventory/add_stock', data={'product_id': str(product_id), 'quantity_added': '0', 'purchase_date': self.today_str})
+            self.assertEqual(response_zero_qty.status_code, 200) # Stays on page
+            self.assertIn(b"Quantity added must be a positive amount.", response_zero_qty.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
+
+            # Invalid quantity (non-numeric "abc")
+            response_abc_qty = self.client.post('/inventory/add_stock', data={'product_id': str(product_id), 'quantity_added': 'abc', 'purchase_date': self.today_str})
+            self.assertEqual(response_abc_qty.status_code, 200) # Stays on page
+            self.assertIn(b"Quantity added must be a number.", response_abc_qty.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
+
+            # Invalid quantity (non-numeric "5 units")
+            response_units_qty = self.client.post('/inventory/add_stock', data={'product_id': str(product_id), 'quantity_added': '5 units', 'purchase_date': self.today_str})
+            self.assertEqual(response_units_qty.status_code, 200) # Stays on page
+            self.assertIn(b"Quantity added must be a number.", response_units_qty.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
 
             # Invalid purchase_date format
             response_bad_date = self.client.post('/inventory/add_stock', data={'product_id': str(product_id), 'quantity_added': '3', 'purchase_date': 'bad-date'})
-            self.assertEqual(response_bad_date.status_code, 200)
+            self.assertEqual(response_bad_date.status_code, 200) # Stays on page
             self.assertIn(b"Invalid purchase date format.", response_bad_date.data)
+            self.assertEqual(len(self._get_all_inventory_items_from_db()), initial_item_count)
 
     def test_add_inventory_stock_post_product_not_found(self):
+        initial_item_count = len(self._get_all_inventory_items_from_db())
         with self.client:
             response = self.client.post('/inventory/add_stock', data={
                 'product_id': '9999', # Non-existent product ID

@@ -34,14 +34,14 @@
                     {% for ing in ingredients_status %}
                         <tr class="{{ 'sufficient' if ing.sufficient else 'insufficient' }}">
                             <td>{{ ing.name }}</td>
-                            <td class="text-right">{{ "%.2f"|format(ing.required) if ing.required is number else ing.required }}</td>
-                            <td class="text-right">{{ "%.2f"|format(ing.available) if ing.available is number else ing.available }}</td>
-                            <td class="text-right">{{ "%.2f"|format(ing.remaining) if ing.remaining is number else ing.remaining }}</td>
+                            <td class="text-right">{{ "%.2f"|format(ing.required) if ing.required is number else ing.required }} {{ ing.unit_of_measure }}</td>
+                            <td class="text-right">{{ "%.2f"|format(ing.available) if ing.available is number else ing.available }} {{ ing.unit_of_measure }}</td>
+                            <td class="text-right">{{ "%.2f"|format(ing.remaining) if ing.remaining is number else ing.remaining }} {{ ing.unit_of_measure }}</td>
                             <td class="text-center">
                                 {% if ing.sufficient %}
                                     <span class="status-ok">OK</span>
                                 {% else %}
-                                    <span class="status-needed">Needed: {{ "%.2f"|format(ing.needed_more) if ing.needed_more is number else ing.needed_more }}</span>
+                                    <span class="status-needed">Needed: {{ "%.2f"|format(ing.needed_more) if ing.needed_more is number else ing.needed_more }} {{ ing.unit_of_measure }}</span>
                                 {% endif %}
                             </td>
                         </tr>
