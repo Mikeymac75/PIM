@@ -16,11 +16,14 @@
                 <ul>
                     <li class="{% if request.endpoint == 'home' %}current{% endif %}"><a href="{{ url_for('home') }}">Home</a></li>
                     <li class="{% if request.endpoint == 'current_inventory_view' %}current{% endif %}"><a href="{{ url_for('current_inventory_view') }}">Current Inventory</a></li>
+                    <li class="{% if request.endpoint == 'add_inventory_stock_view' %}current{% endif %}"><a href="{{ url_for('add_inventory_stock_view') }}">Add Stock</a></li>
                     <li class="{% if request.endpoint == 'historical_inventory_view' %}current{% endif %}"><a href="{{ url_for('historical_inventory_view') }}">Historical Inventory</a></li>
                     <li class="{% if request.endpoint == 'projections_view' %}current{% endif %}"><a href="{{ url_for('projections_view') }}">Demand Projections</a></li>
-                    <li class="{% if request.endpoint == 'add_item_view' %}current{% endif %}"><a href="{{ url_for('add_item_view') }}">Add Item</a></li>
+                    <li class="{% if request.endpoint == 'list_products_view' %}current{% endif %}"><a href="{{ url_for('list_products_view') }}">Manage Products</a></li>
+                    <li class="{% if request.endpoint == 'create_product_view' %}current{% endif %}"><a href="{{ url_for('create_product_view') }}">Create Product</a></li>
                     <li class="{% if request.endpoint == 'consume_item_view' %}current{% endif %}"><a href="{{ url_for('consume_item_view') }}">Consume Item</a></li>
                     <li class="{% if request.endpoint == 'upload_excel_view' %}current{% endif %}"><a href="{{ url_for('upload_excel_view') }}">Upload Excel</a></li>
+                    <li class="{% if request.endpoint == 'deprecated_add_item_view' %}current{% endif %}"><a href="{{ url_for('deprecated_add_item_view') }}">Add Item (Old)</a></li>
                     <li class="{% if request.endpoint == 'add_recipe_view' %}current{% endif %}"><a href="{{ url_for('add_recipe_view') }}">Add Recipe</a></li>
                     <li class="{% if request.endpoint == 'recipes_list_view' %}current{% endif %}"><a href="{{ url_for('recipes_list_view') }}">View Recipes</a></li>
                 </ul>
