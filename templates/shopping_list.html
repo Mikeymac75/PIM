@@ -26,7 +26,6 @@
         <tr>
             <th>Product Name</th>
             <th>Current Stock</th>
-            <th>Unit</th>
             <th>Par Level</th>
             <th>Avg. Daily Consumption</th>
             <th>Rec. Purchase Amount</th>
@@ -40,17 +39,16 @@
         <tr>
             <td>{{ item.name }}</td> {# Product name #}
             <td>{{ item.current_quantity_display }}</td> {# e.g., "10.00 kg" #}
-            <td>{{ item.unit_of_measure }}</td>
             <td>{{ "%.2f" | format(item.par_level) }}</td>
             <td>{{ "%.2f" | format(item.avg_daily_consumption) }} {{ item.unit_of_measure }}/day</td>
-            <td>{{ "%.2f" | format(item.recommended_purchase_amount) }}</td>
+            <td>{{ "%.2f" | format(item.recommended_purchase_amount) }} {{ item.unit_of_measure }}</td>
             <td>{{ item.purchase_location }}</td>
             <td>{{ item.days_to_next_shop }}</td>
             <td>{{ item.earliest_expiry_date if item.earliest_expiry_date != 'N/A' else 'N/A' }}</td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="9" style="text-align: center;">Your shopping list is currently empty. Adjust filters or check par levels for your products.</td>
+            <td colspan="8" style="text-align: center;">Your shopping list is currently empty. Adjust filters or check par levels for your products.</td>
         </tr>
         {% endfor %}
     </tbody>

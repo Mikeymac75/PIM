@@ -417,13 +417,20 @@ def recipe_detail_view(recipe_name):
             if not sufficient:
                 recipe_makeable = False # Mark recipe as not makeable
 
+            # Fetch product details to get unit_of_measure
+            product_details = manager.get_product_by_name(item_name)
+            product_unit_of_measure = 'units' # Default unit
+            if product_details and product_details.get('unit_of_measure'):
+                product_unit_of_measure = product_details['unit_of_measure']
+
             ingredients_status.append({
                 'name': item_name,
                 'required': required_qty,
                 'available': available_qty,
                 'remaining': remaining_qty,
                 'sufficient': sufficient,
-                'needed_more': -remaining_qty if not sufficient else 0
+                'needed_more': -remaining_qty if not sufficient else 0,
+                'unit_of_measure': product_unit_of_measure
             })
     else: # Recipe has no ingredients listed
         recipe_makeable = True # Technically makeable if no ingredients are needed
@@ -712,10 +719,19 @@ def add_inventory_stock_view():
 
         if not quantity_added: # Basic check, manager._parse_quantity_string will do more
             errors.append("Quantity added is required.")
-        else: # Check if quantity is positive using manager's parser
-            parsed_qty = manager._parse_quantity_string(quantity_added)
-            if parsed_qty <= 0:
-                errors.append("Quantity added must be a positive amount.")
+        else:
+            try:
+                # Validate that quantity_added is a number
+                float(quantity_added)
+                # Check if quantity is positive using manager's parser
+                # This part remains, as _parse_quantity_string might handle units in the future
+                # and it also ensures the string is appropriate for DB storage if it includes units.
+                # For now, it expects a string that can be converted to float.
+                parsed_qty = manager._parse_quantity_string(quantity_added)
+                if parsed_qty <= 0:
+                    errors.append("Quantity added must be a positive amount.")
+            except ValueError:
+                errors.append("Quantity added must be a number.")
 
         if not purchase_date_str:
             purchase_date_str = date.today().isoformat() # Default to today

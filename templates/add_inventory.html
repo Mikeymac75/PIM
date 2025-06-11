@@ -18,8 +18,8 @@
     </div>
     <div>
         <label for="quantity_added">Quantity Added:</label>
-        <input type="text" id="quantity_added" name="quantity_added" value="{{ form_data.quantity_added if form_data else '' }}" required>
-        <small>Example: "2 lbs", "10 units", "1 bag (5kg)"</small>
+        <input type="number" step="any" id="quantity_added" name="quantity_added" value="{{ form_data.quantity_added if form_data else '' }}" required>
+        <small>Enter a numeric value. The unit of measure is defined by the product (e.g., kg, pcs, liters).</small>
     </div>
     <div>
         <label for="purchase_date">Purchase Date:</label>
