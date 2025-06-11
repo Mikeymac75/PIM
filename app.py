@@ -826,26 +826,18 @@ def add_inventory_stock_view():
             except ValueError:
                 errors.append("Invalid product ID.")
 
-        if not quantity_added: # Basic check, manager._parse_quantity_string will do more
+        if not quantity_added:
             errors.append("Quantity added is required.")
         else:
             try:
-                # Validate that quantity_added is a number
-                float(quantity_added)
-                # Check if quantity is positive using manager's parser
-                # This part remains, as _parse_quantity_string might handle units in the future
-                # and it also ensures the string is appropriate for DB storage if it includes units.
-                # For now, it expects a string that can be converted to float.
-    # Ensure quantity_added is not empty before parsing
-    if quantity_added:
-        try:
-            parsed_qty = manager._parse_quantity_string(quantity_added)
-            if parsed_qty <= 0:
-                errors.append("Quantity added must be a positive amount.")
-        except ValueError: # Raised by float() conversion within _parse_quantity_string or directly
-            errors.append("Quantity added must be a valid number.")
-    # else: Error "Quantity added is required" is already appended if quantity_added is empty.
-
+                # Attempt to parse and validate the quantity.
+                # manager._parse_quantity_string should handle basic conversion.
+                parsed_qty = manager._parse_quantity_string(quantity_added) # This might raise ValueError if not a number
+                if parsed_qty <= 0:
+                    errors.append("Quantity added must be a positive amount.")
+            except ValueError:
+                # This catches errors if quantity_added is not a valid number string
+                errors.append("Quantity added must be a valid number.")
 
         if not purchase_date_str:
             purchase_date_str = date.today().isoformat() # Default to today
