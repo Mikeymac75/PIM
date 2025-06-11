@@ -42,7 +42,7 @@
                     <td>
                         {% if item.is_below_par %}
                             <span class="status-pill status-below-par">Below Par</span>
-                        {% elif item.expiry_date and item.expiry_date < (current_date + timedelta(days=3)) %} {# Assuming current_date is passed to template #}
+                        {% elif item.expiry_date and item.expiry_date < (today + timedelta(days=3)) %}
                             <span class="status-pill status-expiring-soon">Expiring Soon</span>
                         {% else %}
                             <span class="status-pill status-ok">OK</span>
