@@ -389,9 +389,13 @@ def add_recipe_view():
                 if not form_data_to_repopulate.get(f'ingredient_{i}_quantity'):
                      form_data_to_repopulate[f'ingredient_{i}_quantity'] = request.form.get(f'ingredient_{i}_quantity', '')
             
-            return render_template('add_recipe.html', form_data=form_data_to_repopulate)
+            # When POST fails and re-renders, we also need the products list for the dropdowns
+            products = manager.get_all_products()
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
 
-    return render_template('add_recipe.html', form_data=form_data_to_repopulate)
+    # This is for GET request
+    products = manager.get_all_products()
+    return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
 
 @app.route('/recipes')
 def recipes_list_view():
