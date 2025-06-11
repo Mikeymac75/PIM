@@ -545,7 +545,7 @@ class InventoryManager:
         print("---------------------------------------\n")
         return expiring_items_list
 
-    def project_demand(self, item_name, lookback_days=30, projection_days=7):
+    def project_demand(self, product_name_or_id, lookback_days=30, projection_days=7):
         """
         Analyzes historical consumption and current stock to project future demand using DB.
         - Calculates average daily consumption based on historical data within a lookback period.
