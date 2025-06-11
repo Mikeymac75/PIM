@@ -226,6 +226,7 @@ class TestAppInventoryRoutes(BaseAppTest):
         self.assertNotRegex(data_str, r'<tr class=".*?below-par-level.*?".*?>.*?No Par Item.*?</tr>', "No Par Item row should not have below-par-level class.")
 
     # --- Add Inventory Stock Route Tests ---
+    # test_deprecated_add_item_view_get and test_deprecated_add_item_post_success were here and are now removed.
     def test_add_inventory_stock_get(self):
         self._create_app_product(name="Product A") # Need at least one product for dropdown
         response = self.client.get('/inventory/add_stock')
@@ -302,33 +303,7 @@ class TestAppInventoryRoutes(BaseAppTest):
         self.assertIn(b"Product with ID 9999 not found.", response.data)
 
 
-    def test_deprecated_add_item_view_get(self):
-        response = self.client.get('/inventory/add_deprecated')
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Add New Item to Inventory (Deprecated)", response.data)
-
-    def test_deprecated_add_item_post_success(self):
-        # This test ensures the old route still functions if needed,
-        # but it relies on add_item_to_list which now has different behavior in FoodManager
-        # (it doesn't take category, par_level etc directly for inventory_items)
-        # For this test to pass as is, FoodManager.add_item_to_list would need to exist and handle this.
-        # Given the refactor, this test might need to be removed or adapted if add_item_to_list is removed/changed.
-        # Assuming add_item_to_list is GONE or heavily refactored, this test will likely FAIL or needs removal.
-        # For now, I'll comment it out as it depends on the old structure.
-        pass
-        # with self.client:
-        #     response = self.client.post('/inventory/add_deprecated', data={
-        #         'name': 'Old Cherry', 'quantity': '100g',
-        #         'purchase_date': '2023-10-01', 'expiry_days': '5',
-        #         'category': 'Fruit', 'subcategory': 'Stone Fruit', # These fields are no longer directly on inventory_items
-        #         'par_level': '2.5', 'max_holding_amount': '5.0',
-        #         'purchase_location': 'Sobeys'
-        #     }, follow_redirects=True)
-        # self.assertEqual(response.status_code, 200)
-        # self.assertIn(b"Item 'Old Cherry' added successfully!", response.data) # This message might change
-        # item_in_db = self._get_inventory_item_from_db('Old Cherry') # This helper might need update for product_id world
-        # self.assertIsNotNone(item_in_db)
-        # # Assertions for category, par_level on item_in_db would fail as they are on product table now.
+    # test_deprecated_add_item_view_get and test_deprecated_add_item_post_success were here and are now removed.
 
 
     def test_upload_excel_post_success_with_new_fields(self):
