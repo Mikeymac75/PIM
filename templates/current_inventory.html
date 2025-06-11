@@ -12,34 +12,49 @@
         <table>
             <thead>
                 <tr>
-                    <th class="current-inventory-header">Name</th>
-                    <th class="current-inventory-header">Quantity</th>
+                    <th class="current-inventory-header">Product Name</th>
+                    <th class="current-inventory-header">Stock Quantity</th>
+                    <th class="current-inventory-header">Unit</th>
                     <th class="current-inventory-header">Category</th>
                     <th class="current-inventory-header">Subcategory</th>
                     <th class="current-inventory-header text-right">Par Level</th>
-                    <th class="current-inventory-header text-right">Max Holding</th>
-                    <th class="current-inventory-header">Purchase Date</th>
-                    <th class="current-inventory-header">Expiry Date</th>
+                    {# Max Holding Amount might be less relevant for individual stock items, more for product definition #}
+                    {# <th class="current-inventory-header text-right">Max Holding</th> #}
+                    <th class="current-inventory-header">Purchase Location (Product Default)</th>
+                    <th class="current-inventory-header">Purchase Date (Stock)</th>
+                    <th class="current-inventory-header">Expiry Date (Stock)</th>
+                    <th class="current-inventory-header">Status</th>
                 </tr>
             </thead>
             <tbody>
-                {% for item in items %}
+                {% for item in items %} {# Each item is from inventory_items JOIN products #}
                 <tr class="{{ 'below-par-level' if item.is_below_par else '' }}">
-                    <td>{{ item.name }}</td>
-                    <td>{{ item.quantity }}</td>
-                    <td>{{ item.category if item.category else '-' }}</td>
-                    <td>{{ item.subcategory if item.subcategory else '-' }}</td>
-                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else item.par_level }}</td>
-                    <td class="text-right">{{ "%.2f"|format(item.max_holding_amount) if item.max_holding_amount is number else item.max_holding_amount }}</td>
-                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
-                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
+                    <td>{{ item.product_name }}</td> {# From products table #}
+                    <td>{{ item.quantity }}</td> {# From inventory_items table #}
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td> {# From products table #}
+                    <td>{{ item.category if item.category else '-' }}</td> {# From products table #}
+                    <td>{{ item.subcategory if item.subcategory else '-' }}</td> {# From products table #}
+                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else (item.par_level if item.par_level is not none else '-') }}</td> {# From products table #}
+                    {# <td>{{ "%.2f"|format(item.max_holding_amount) if item.max_holding_amount is number else item.max_holding_amount }}</td> #}
+                    <td>{{ item.purchase_location if item.purchase_location else '-' }}</td> {# From products table #}
+                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td> {# From inventory_items table #}
+                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td> {# From inventory_items table #}
+                    <td>
+                        {% if item.is_below_par %}
+                            <span class="status-pill status-below-par">Below Par</span>
+                        {% elif item.expiry_date and item.expiry_date < (current_date + timedelta(days=3)) %} {# Assuming current_date is passed to template #}
+                            <span class="status-pill status-expiring-soon">Expiring Soon</span>
+                        {% else %}
+                            <span class="status-pill status-ok">OK</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% else %}
-        <p class="empty-message">Current inventory is empty.</p>
+        <p class="empty-message">Current inventory is empty. <a href="{{ url_for('add_inventory_stock_view') }}">Add some stock!</a></p>
     {% endif %}
 
     <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>

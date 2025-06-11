@@ -12,20 +12,22 @@
         <table>
             <thead>
                 <tr>
-                    <th class="historical-inventory-header">Name</th>
+                    <th class="historical-inventory-header">Product Name</th>
                     <th class="historical-inventory-header">Quantity Consumed</th>
-                    <th class="historical-inventory-header">Original Quantity</th>
-                    <th class="historical-inventory-header">Purchase Date</th>
-                    <th class="historical-inventory-header">Expiry Date</th>
+                    <th class="historical-inventory-header">Unit</th>
+                    <th class="historical-inventory-header">Category</th>
+                    <th class="historical-inventory-header">Original Purchase Date</th>
+                    <th class="historical-inventory-header">Original Expiry Date</th>
                     <th class="historical-inventory-header">Consumed Date</th>
                 </tr>
             </thead>
             <tbody>
-                {% for item in items %}
+                {% for item in items %} {# Each item is from historical_items LEFT JOIN products #}
                 <tr>
-                    <td>{{ item.name }}</td>
+                    <td>{{ item.name }}</td> {# This is product_name or historical_item_name (handled in app.py) #}
                     <td>{{ "%.2f"|format(item.quantity_consumed_this_time) if item.quantity_consumed_this_time is number else item.quantity_consumed_this_time }}</td>
-                    <td>{{ item.original_quantity_string if item.original_quantity_string else 'N/A' }}</td>
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td> {# From products table #}
+                    <td>{{ item.category if item.category else '-' }}</td> {# From products table #}
                     <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
                     <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
                     <td>{{ item.consumed_date.isoformat() if item.consumed_date else 'N/A' }}</td>
@@ -35,7 +37,7 @@
         </table>
     </div>
     {% else %}
-        <p class="empty-message">Historical inventory is empty.</p>
+        <p class="empty-message">No historical items found. Items appear here after you consume them from your inventory.</p>
     {% endif %}
 
     <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>

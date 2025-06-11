@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Products{% endblock %}
+
+{% block content %}
+<h1>Product List</h1>
+<p><a href="{{ url_for('create_product_view') }}">Create New Product</a></p>
+
+{% if products %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Category</th>
+            <th>Subcategory</th>
+            <th>Unit of Measure</th>
+            <th>Default Expiry (Days)</th>
+            <th>Par Level</th>
+            <th>Max Holding</th>
+            <th>Purchase Location</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for product in products %}
+        <tr>
+            <td>{{ product.name }}</td>
+            <td>{{ product.category if product.category is not none else '' }}</td>
+            <td>{{ product.subcategory if product.subcategory is not none else '' }}</td>
+            <td>{{ product.unit_of_measure }}</td>
+            <td>{{ product.default_expiry_days }}</td>
+            <td>{{ product.par_level if product.par_level is not none else '' }}</td>
+            <td>{{ product.max_holding_amount if product.max_holding_amount is not none else '' }}</td>
+            <td>{{ product.purchase_location if product.purchase_location is not none else '' }}</td>
+            <td>
+                <a href="{{ url_for('edit_product_view', product_id=product.id) }}">Edit</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No products found. <a href="{{ url_for('create_product_view') }}">Create one now!</a></p>
+{% endif %}
+{% endblock %}
