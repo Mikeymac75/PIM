@@ -642,15 +642,14 @@ class InventoryManager:
                         cursor.execute('''
                             INSERT INTO historical_items
                             (product_id, name, quantity_consumed_this_time, original_quantity_string,
-                             purchase_date, expiry_date, consumed_date, notes)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                             purchase_date, expiry_date, consumed_date)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
                         ''', (product_id, item_name, amount_for_history, current_batch['original_quantity_string'],
                               current_batch['purchase_date'], current_batch['expiry_date'], # Log original batch dates
-                              date.today().isoformat(),
-                              f"Batch ID {batch_id} quantity adjusted from {current_quantity_numeric} to {new_quantity_float}."))
-                        log_message_parts.append(f"Adjustment of {amount_for_history} units recorded for projections.")
+                              date.today().isoformat()))
+                        log_message_parts.append(f"Adjustment of {amount_for_history} units recorded for projections. Note: Batch ID {batch_id} quantity adjusted from {current_quantity_numeric} to {new_quantity_float}.")
                     else:
-                        log_message_parts.append("Quantity updated without impacting projections history.")
+                        log_message_parts.append(f"Quantity updated without impacting projections history. Note: Batch ID {batch_id} quantity adjusted from {current_quantity_numeric} to {new_quantity_float}.")
 
                 conn.commit()
                 return {"success": True, "message": " ".join(log_message_parts)}
