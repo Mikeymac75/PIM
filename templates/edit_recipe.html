@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Recipe {{ recipe.name if recipe else 'Error' }} - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Edit Recipe: {{ recipe.name if recipe else 'Recipe Not Found' }}</h1>
+{% endblock %}
+
+{% block content %}
+    <form method="POST" action="{{ url_for('edit_recipe_view', recipe_id=recipe.id if recipe else 0) }}">
+        <div class="form-group">
+            <label for="recipe_name">Recipe Name:</label>
+            <input type="text" id="recipe_name" name="recipe_name" class="form-control"
+                   value="{{ form_data.get('recipe_name', recipe.name if recipe else '') }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Description:</label>
+            <textarea id="description" name="description" class="form-control" rows="3">{{ form_data.get('description', recipe.description if recipe else '') }}</textarea>
+        </div>
+
+        <h3 style="margin-top: 20px; margin-bottom: 10px;">Ingredients</h3>
+        <p><small class="help-text">Enter up to 10 ingredients. Leave rows blank if not needed. Ingredient quantities should be positive numbers.</small></p>
+
+        <div class="ingredients-section">
+            {% for i in range(1, 11) %} {# Create 10 sets of ingredient inputs #}
+            {# Define variables for current ingredient's name and quantity for cleaner access #}
+            {% set current_ing_name_from_form = form_data.get('ingredient_' + i|string + '_name') %}
+            {% set current_ing_qty_from_form = form_data.get('ingredient_' + i|string + '_quantity') %}
+
+            {% set current_ing_name_from_recipe = recipe.ingredients[i-1].item_name if recipe and recipe.ingredients and i-1 < recipe.ingredients|length else '' %}
+            {% set current_ing_qty_from_recipe = recipe.ingredients[i-1].quantity_required if recipe and recipe.ingredients and i-1 < recipe.ingredients|length else '' %}
+
+            {% set final_ing_name = current_ing_name_from_form if current_ing_name_from_form is defined else current_ing_name_from_recipe %}
+            {% set final_ing_qty = current_ing_qty_from_form if current_ing_qty_from_form is defined else current_ing_qty_from_recipe %}
+
+            <div class="ingredient-row">
+                <div class="form-group ingredient-name">
+                    <label for="ingredient_{{ i }}_name">Ingredient {{ i }} Name:</label>
+                    <select id="ingredient_{{ i }}_name" name="ingredient_{{ i }}_name" class="form-control ingredient-select" data-ingredient-index="{{ i }}">
+                        <option value="">Select Ingredient</option>
+                        {% if products %}
+                            {% for product in products %}
+                                <option value="{{ product.name }}"
+                                        {% if final_ing_name == product.name %}selected{% endif %}>
+                                    {{ product.name }}
+                                </option>
+                            {% endfor %}
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="form-group ingredient-quantity">
+                    <label for="ingredient_{{ i }}_quantity">Quantity:</label>
+                    <input type="number" id="ingredient_{{ i }}_quantity" name="ingredient_{{ i }}_quantity"
+                           class="form-control" min="0.01" step="any"
+                           value="{{ final_ing_qty }}"
+                           placeholder="e.g., 100, 0.5">
+                </div>
+                <div class="form-group ingredient-unit">
+                    <label for="ingredient_{{i}}_unit_display">Unit:</label>
+                    <span id="ingredient_{{ i }}_unit_display" class="unit-display">-</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <button type="submit" class="button" style="margin-top: 20px;">Update Recipe</button>
+    </form>
+
+    <p style="margin-top: 20px;"><a href="{{ url_for('recipes_list_view') }}" class="nav-link-button">Back to Recipes List</a></p>
+
+<script>
+    // Embed product data
+    const productData = {{ products | tojson | safe if products else '[]' }};
+
+    function updateUnit(ingredientIndex) {
+        const selectElement = document.getElementById(`ingredient_${ingredientIndex}_name`);
+        const unitDisplayElement = document.getElementById(`ingredient_${ingredientIndex}_unit_display`);
+        const selectedProductName = selectElement.value;
+
+        if (selectedProductName) {
+            const product = productData.find(p => p.name === selectedProductName);
+            if (product && product.unit_of_measure) {
+                unitDisplayElement.textContent = product.unit_of_measure;
+            } else {
+                unitDisplayElement.textContent = '-'; // Product found but no unit
+            }
+        } else {
+            unitDisplayElement.textContent = '-'; // No product selected
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Add event listeners to all ingredient dropdowns
+        const ingredientSelects = document.querySelectorAll('.ingredient-select');
+        ingredientSelects.forEach(function(selectElement) {
+            const ingredientIndex = selectElement.dataset.ingredientIndex;
+
+            // Call on page load for pre-filled forms
+            // This is crucial for edit page to show units for existing ingredients
+            updateUnit(ingredientIndex);
+
+            // Add change event listener
+            selectElement.addEventListener('change', function() {
+                updateUnit(ingredientIndex);
+            });
+        });
+    });
+</script>
+<style>
+.ingredient-row {
+    display: flex;
+    align-items: flex-end; /* Align items to the bottom for better label alignment */
+    margin-bottom: 10px; /* Space between ingredient rows */
+}
+.ingredient-name {
+    flex: 3; /* Takes more space */
+    margin-right: 10px;
+}
+.ingredient-quantity {
+    flex: 1; /* Takes less space */
+    margin-right: 10px;
+}
+.ingredient-unit {
+    flex: 0.5; /* Takes even less space */
+    padding-bottom: 0.6rem; /* Align with input baseline */
+}
+.unit-display {
+    font-weight: bold;
+}
+.help-text {
+    color: #6c757d; /* Bootstrap's default help text color */
+    font-size: 0.9em;
+}
+</style>
+{% endblock %}

@@ -397,6 +397,89 @@ def add_recipe_view():
     products = manager.get_all_products()
     return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
 
+@app.route('/recipes/<int:recipe_id>/edit', methods=['GET', 'POST'])
+def edit_recipe_view(recipe_id):
+    # Ensure recipe_mngr.get_recipe_by_id is available (it was added in a previous step)
+    recipe = recipe_mngr.get_recipe_by_id(recipe_id)
+
+    if not recipe:
+        flash(f"Recipe with ID {recipe_id} not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+
+    # Fetch all products for ingredient dropdowns
+    products = manager.get_all_products() # Assuming 'manager' is the InventoryManager instance
+
+    if request.method == 'POST':
+        recipe_name = request.form.get('recipe_name', '').strip()
+        description = request.form.get('description', '').strip()
+
+        ingredients = []
+        form_errors = []
+
+        for i in range(1, 11): # Assuming max 10 ingredients, consistent with add_recipe_view
+            ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
+            ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
+
+            if ing_name and ing_qty_str:
+                try:
+                    ing_qty = float(ing_qty_str)
+                    if ing_qty <= 0:
+                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number.")
+                    else:
+                        ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty})
+                except ValueError:
+                    form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'.")
+            elif ing_name and not ing_qty_str:
+                form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
+            # Silently skip if neither name nor quantity is provided for a slot
+
+        if not recipe_name:
+            form_errors.append("Recipe name is required.")
+
+        if form_errors:
+            for error in form_errors:
+                flash(error, 'error')
+            # Repopulate form with current (invalid) data
+            # The 'recipe' variable still holds the original recipe data for the GET part of the template,
+            # but for POST errors, we want to show what the user just submitted.
+            # We can pass request.form directly or construct a similar dict.
+            # Let's make it explicit, similar to add_recipe.
+            form_data_repopulate = {
+                'id': recipe_id, # Keep id for the form action URL
+                'name': recipe_name,
+                'description': description,
+                'ingredients': [] # This will be filled by the template from request.form
+            }
+            # The template 'edit_recipe.html' will need to be designed to handle this,
+            # potentially using form_data_repopulate for values if it exists, else recipe.
+            # For simplicity in the route, we can just pass request.form and let template decide.
+            return render_template('edit_recipe.html', recipe=recipe, products=products, form_data=request.form)
+
+        # If validation passes
+        updated_recipe_data = {
+            "name": recipe_name,
+            "description": description,
+            "ingredients": ingredients
+        }
+
+        # Call recipe_mngr.update_recipe (which now takes recipe_id)
+        result = recipe_mngr.update_recipe(recipe_id, updated_recipe_data)
+
+        if result.get("success"):
+            flash(result.get('message', "Recipe updated successfully!"), 'success')
+            # Redirect to recipe detail view using the *new* name
+            return redirect(url_for('recipe_detail_view', recipe_name=updated_recipe_data['name']))
+        else:
+            flash(result.get('message', "Failed to update recipe."), 'error')
+            # Re-render with submitted data if update fails at manager level (e.g., name conflict)
+            return render_template('edit_recipe.html', recipe=recipe, products=products, form_data=request.form)
+
+    # GET request:
+    # The 'recipe' dict fetched by get_recipe_by_id should be suitable for populating the form.
+    # It contains 'id', 'name', 'description', and 'ingredients' list.
+    # The template 'edit_recipe.html' will use this 'recipe' object.
+    return render_template('edit_recipe.html', recipe=recipe, products=products)
+
 @app.route('/recipes')
 def recipes_list_view():
     all_recipes = recipe_mngr.get_all_recipes()
@@ -404,8 +487,20 @@ def recipes_list_view():
     sorted_recipes = sorted(all_recipes, key=lambda r: r['name'].lower())
     return render_template('recipes_list.html', recipes=sorted_recipes)
 
-@app.route('/recipes/<path:recipe_name>') # Using path for flexibility with names
+@app.route('/recipes/id/<int:recipe_id>')
+def recipe_detail_view_by_id(recipe_id):
+    recipe = recipe_mngr.get_recipe_by_id(recipe_id)
+    if not recipe:
+        flash(f"Recipe with ID {recipe_id} not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+    # Since other parts of the app might link by name, we redirect to the name-based URL
+    # to maintain consistency and allow `make_recipe_view` to work as is.
+    # This also simplifies if the name changes; links using ID will find the new name.
+    return redirect(url_for('recipe_detail_view', recipe_name=recipe['name']))
+
+@app.route('/recipes/name/<path:recipe_name>') # Using path for flexibility with names
 def recipe_detail_view(recipe_name):
+    # This function now serves as the canonical URL for recipe details by name.
     recipe = recipe_mngr.get_recipe_by_name(recipe_name)
 
     if not recipe:
@@ -741,11 +836,16 @@ def add_inventory_stock_view():
                 # This part remains, as _parse_quantity_string might handle units in the future
                 # and it also ensures the string is appropriate for DB storage if it includes units.
                 # For now, it expects a string that can be converted to float.
-                parsed_qty = manager._parse_quantity_string(quantity_added)
-                if parsed_qty <= 0:
-                    errors.append("Quantity added must be a positive amount.")
-            except ValueError:
-                errors.append("Quantity added must be a number.")
+    # Ensure quantity_added is not empty before parsing
+    if quantity_added:
+        try:
+            parsed_qty = manager._parse_quantity_string(quantity_added)
+            if parsed_qty <= 0:
+                errors.append("Quantity added must be a positive amount.")
+        except ValueError: # Raised by float() conversion within _parse_quantity_string or directly
+            errors.append("Quantity added must be a valid number.")
+    # else: Error "Quantity added is required" is already appended if quantity_added is empty.
+
 
         if not purchase_date_str:
             purchase_date_str = date.today().isoformat() # Default to today
