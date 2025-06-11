@@ -616,5 +616,270 @@ if __name__ == '__main__':
     # The shopping list tests from the first TestInventoryManager class are more up-to-date.
     pass
 
+    # --- Tests for adjust_inventory_batch ---
+    def test_adjust_inventory_batch_quantity_decrease_no_projection_impact(self):
+        product_id = self._create_product(name="Adjustable Nuts", unit_of_measure="g")
+        add_result = self._add_inventory_stock(product_id, "100") # Add 100g
+        self.assertIsNotNone(add_result.get("stock_item_id"), "stock_item_id should be returned by _add_inventory_stock")
+        batch_id = add_result.get("stock_item_id")
+
+        adjust_result = self.manager.adjust_inventory_batch(
+            batch_id, "50", include_in_projections=False # new_quantity_str, include_in_projections
+        )
+        self.assertTrue(adjust_result["success"])
+
+        # Verify inventory_items
+        updated_batch = self.manager.get_inventory_batches_for_product(product_id, limit=1)[0]
+        self.assertEqual(updated_batch["quantity"], "50")
+
+        # Verify historical_items: NO new entry should be made for this adjustment.
+        historical_items_after = self.manager.get_historical_inventory()
+        # Filter for adjustment notes specifically for this batch
+        adjustment_notes_for_batch = [
+            h for h in historical_items_after
+            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']
+        ]
+        self.assertEqual(len(adjustment_notes_for_batch), 0, "Historical log should not be created when include_in_projections is False.")
+
+    def test_adjust_inventory_batch_quantity_decrease_with_projection_impact(self):
+        product_id = self._create_product(name="Projected Nuts", unit_of_measure="g")
+        add_result = self._add_inventory_stock(product_id, "200")
+        self.assertIsNotNone(add_result.get("stock_item_id"))
+        batch_id = add_result.get("stock_item_id")
+
+        adjust_result = self.manager.adjust_inventory_batch(
+            batch_id, "150", include_in_projections=True
+        )
+        self.assertTrue(adjust_result["success"])
+        updated_batch = self.manager.get_inventory_batches_for_product(product_id, limit=1)[0]
+        self.assertEqual(updated_batch["quantity"], "150")
+
+        historical_items = self.manager.get_historical_inventory()
+        adjustment_log = [h for h in historical_items if h['notes'] and f"Batch ID {batch_id} quantity adjusted" in h['notes']]
+        self.assertEqual(len(adjustment_log), 1)
+        self.assertEqual(adjustment_log[0]['quantity_consumed_this_time'], 50) # 200 - 150 = 50 "consumed"
+        # Here, if include_in_projections=True was meant to create a *different* type of historical log,
+        # the adjust_inventory_batch method would need to reflect that. Current impl logs same way.
+
+    def test_adjust_inventory_batch_quantity_increase_with_projection_impact(self):
+        product_id = self._create_product(name="More Nuts", unit_of_measure="g")
+        add_result = self._add_inventory_stock(product_id, "50")
+        self.assertIsNotNone(add_result.get("stock_item_id"))
+        batch_id = add_result.get("stock_item_id")
+
+        adjust_result = self.manager.adjust_inventory_batch(
+            batch_id, "100", include_in_projections=True
+        )
+        self.assertTrue(adjust_result["success"])
+        updated_batch = self.manager.get_inventory_batches_for_product(product_id, limit=1)[0]
+        self.assertEqual(updated_batch["quantity"], "100")
+
+        historical_items = self.manager.get_historical_inventory()
+        adjustment_log = [h for h in historical_items if h['notes'] and f"Batch ID {batch_id} quantity adjusted" in h['notes']]
+        self.assertEqual(len(adjustment_log), 1)
+        self.assertEqual(adjustment_log[0]['quantity_consumed_this_time'], -50) # 50 - 100 = -50 "consumed" (means added)
+
+
+    def test_adjust_inventory_batch_non_existent_id(self):
+        result = self.manager.adjust_inventory_batch(999, "10")
+        self.assertFalse(result["success"])
+        self.assertIn("not found", result["message"])
+
+    def test_adjust_inventory_batch_quantity_to_zero(self):
+        product_id = self._create_product(name="Zero Nuts")
+        add_result = self._add_inventory_stock(product_id, "10")
+        self.assertIsNotNone(add_result.get("stock_item_id"))
+        batch_id = add_result.get("stock_item_id")
+
+        # Test deletion when include_in_projections is True (should log)
+        adjust_result_proj_true = self.manager.adjust_inventory_batch(batch_id, "0", include_in_projections=True)
+        self.assertTrue(adjust_result_proj_true["success"])
+        self.assertIn(f"Batch ID {batch_id} ('Zero Nuts') deleted", adjust_result_proj_true["message"])
+
+        # Verify item is deleted
+        deleted_batch_check = self.manager.get_inventory_batches_for_product(product_id)
+        self.assertEqual(len(deleted_batch_check), 0, "Batch should be deleted from inventory_items.")
+
+        # Verify historical log was made
+        historical_items_true = self.manager.get_historical_inventory()
+        adjustment_log_true = [
+            h for h in historical_items_true
+            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes'] and h['quantity_consumed_this_time'] == 10 # Original quantity
+        ]
+        self.assertEqual(len(adjustment_log_true), 1, "Historical log for deletion (proj=True) should exist.")
+
+        # Re-add for next test case
+        add_result_2 = self._add_inventory_stock(product_id, "15") # New batch ID
+        batch_id_2 = add_result_2.get("stock_item_id")
+        self.assertIsNotNone(batch_id_2)
+
+        # Test deletion when include_in_projections is False (should NOT log adjustment for projection)
+        historical_count_before_false = len([
+            h for h in self.manager.get_historical_inventory()
+            if h.get('notes') and f"Batch ID {batch_id_2} quantity adjusted" in h['notes']
+        ])
+
+        adjust_result_proj_false = self.manager.adjust_inventory_batch(batch_id_2, "0", include_in_projections=False)
+        self.assertTrue(adjust_result_proj_false["success"])
+        self.assertIn(f"Batch ID {batch_id_2} ('Zero Nuts') deleted", adjust_result_proj_false["message"])
+
+        deleted_batch_check_2 = self.manager.get_inventory_batches_for_product(product_id)
+        self.assertEqual(len(deleted_batch_check_2), 0, "Batch should be deleted (proj=False).")
+
+        historical_count_after_false = len([
+            h for h in self.manager.get_historical_inventory()
+            if h.get('notes') and f"Batch ID {batch_id_2} quantity adjusted" in h['notes']
+        ])
+        self.assertEqual(historical_count_after_false, historical_count_before_false, "Historical log should NOT be created for deletion (proj=False).")
+
+
+    def test_adjust_inventory_batch_dates(self):
+        product_id = self._create_product(name="Date Nuts")
+        add_result = self._add_inventory_stock(product_id, "10", self.today_str)
+        self.assertIsNotNone(add_result.get("stock_item_id"))
+        batch_id = add_result.get("stock_item_id")
+
+        new_purchase_date = (self.today - timedelta(days=5)).isoformat()
+        new_expiry_date = (self.today + timedelta(days=25)).isoformat()
+
+        adjust_result = self.manager.adjust_inventory_batch(
+            batch_id, "10", new_purchase_date, new_expiry_date
+        )
+        self.assertTrue(adjust_result["success"])
+
+        updated_batch = self.manager.get_inventory_batches_for_product(product_id, limit=1)[0]
+        self.assertEqual(updated_batch["purchase_date"].isoformat(), new_purchase_date)
+        self.assertEqual(updated_batch["expiry_date"].isoformat(), new_expiry_date)
+
+    def test_adjust_inventory_batch_invalid_input(self):
+        product_id = self._create_product(name="Invalid Nuts")
+        add_result = self._add_inventory_stock(product_id, "10")
+        self.assertIsNotNone(add_result.get("stock_item_id"))
+        batch_id = add_result.get("stock_item_id")
+
+        # Invalid quantity
+        result_neg_qty = self.manager.adjust_inventory_batch(batch_id, "-5")
+        self.assertFalse(result_neg_qty["success"])
+        self.assertIn("Quantity cannot be negative", result_neg_qty["message"])
+
+        # Invalid purchase date format
+        result_bad_pdate = self.manager.adjust_inventory_batch(batch_id, "10", "2023/13/01")
+        self.assertFalse(result_bad_pdate["success"])
+        self.assertIn("Invalid new purchase date format", result_bad_pdate["message"])
+
+        # Invalid expiry date format
+        result_bad_edate = self.manager.adjust_inventory_batch(batch_id, "10", None, "bad-date")
+        self.assertFalse(result_bad_edate["success"])
+        self.assertIn("Invalid new expiry date format", result_bad_edate["message"])
+
+    # --- Tests for get_inventory_batches_for_product ---
+    def test_get_inventory_batches_for_product_basic(self):
+        p1_id = self._create_product("Product A")
+        p2_id = self._create_product("Product B")
+
+        # Batches for Product A
+        self._add_inventory_stock(p1_id, "10 A1", (self.today - timedelta(days=2)).isoformat()) # ID 1 (approx)
+        self._add_inventory_stock(p1_id, "20 A2", (self.today - timedelta(days=1)).isoformat()) # ID 2
+
+        # Batches for Product B
+        self._add_inventory_stock(p2_id, "30 B1", self.today_str) # ID 3
+
+        batches_A = self.manager.get_inventory_batches_for_product(p1_id)
+        self.assertEqual(len(batches_A), 2)
+        self.assertTrue(all(b['product_id'] == p1_id for b in batches_A))
+        # Default order is expiry ASC, then ID ASC.
+        # P1 Stock: A1 (pdate today-2, exp today-2+10=today+8), A2 (pdate today-1, exp today-1+10=today+9)
+        # Assuming default_expiry_days = 10 for product
+        self.assertEqual(batches_A[0]['quantity'], "10 A1") # Earlier expiry
+        self.assertEqual(batches_A[1]['quantity'], "20 A2")
+
+
+        batches_B = self.manager.get_inventory_batches_for_product(p2_id)
+        self.assertEqual(len(batches_B), 1)
+        self.assertEqual(batches_B[0]['product_id'], p2_id)
+        self.assertEqual(batches_B[0]['quantity'], "30 B1")
+
+
+    def test_get_inventory_batches_limit(self):
+        p_id = self._create_product("Limited Product")
+        self._add_inventory_stock(p_id, "10 units")
+        self._add_inventory_stock(p_id, "20 units")
+        self._add_inventory_stock(p_id, "30 units")
+
+        batches = self.manager.get_inventory_batches_for_product(p_id, limit=2)
+        self.assertEqual(len(batches), 2)
+        # Default order is expiry ASC, then ID ASC. Assuming all added today with same default expiry.
+        # So, order by ID ASC.
+        self.assertEqual(batches[0]['quantity'], "10 units")
+        self.assertEqual(batches[1]['quantity'], "20 units")
+
+
+    def test_get_inventory_batches_order_by_id_desc(self):
+        p_id = self._create_product("ID Order Product", default_expiry_days=5)
+        s1 = self._add_inventory_stock(p_id, "Batch1", (self.today - timedelta(days=2)).isoformat()) # Expires in 3 days
+        s2 = self._add_inventory_stock(p_id, "Batch2", (self.today - timedelta(days=1)).isoformat()) # Expires in 4 days
+        s3 = self._add_inventory_stock(p_id, "Batch3", self.today_str) # Expires in 5 days
+
+        batches = self.manager.get_inventory_batches_for_product(p_id, order_by_id_desc=True)
+        self.assertEqual(len(batches), 3)
+        self.assertEqual(batches[0]['id'], s3.get('stock_item_id')) # Most recent ID
+        self.assertEqual(batches[1]['id'], s2.get('stock_item_id'))
+        self.assertEqual(batches[2]['id'], s1.get('stock_item_id'))
+
+    def test_get_inventory_batches_order_by_purchase_date_desc(self):
+        p_id = self._create_product("Purchase Order Product", default_expiry_days=30)
+        # Add batches with purchase dates out of order of their ID
+        s1 = self._add_inventory_stock(p_id, "Oldest Purchase", (self.today - timedelta(days=10)).isoformat())
+        s2 = self._add_inventory_stock(p_id, "Newest Purchase", self.today_str)
+        s3 = self._add_inventory_stock(p_id, "Middle Purchase", (self.today - timedelta(days=5)).isoformat())
+
+        batches = self.manager.get_inventory_batches_for_product(p_id, order_by_purchase_desc=True)
+        self.assertEqual(len(batches), 3)
+        self.assertEqual(batches[0]['id'], s2.get('stock_item_id')) # Newest purchase
+        self.assertEqual(batches[1]['id'], s3.get('stock_item_id')) # Middle purchase
+        self.assertEqual(batches[2]['id'], s1.get('stock_item_id')) # Oldest purchase
+
+    def test_get_inventory_batches_default_order_expiry_asc_id_asc(self):
+        # This test requires careful setup of expiry dates.
+        # The product's default_expiry_days is used by _add_inventory_stock.
+        # To test sorting by expiry date, we need items with different expiry dates for the *same* product.
+
+        self.setUp() # Reset DB for clean IDs and consistent product creation.
+
+        p_mix_id = self._create_product("MixedExpiryProduct", default_expiry_days=10) # Default expiry for this product
+
+        # Batch 1: purchase_date=today, default expiry=today+10.
+        s_batch1_res = self._add_inventory_stock(p_mix_id, "StdExpiry", self.today_str)
+
+        # Batch 2: purchase_date=today-5, default expiry=today-5+10 = today+5 (earliest expiry)
+        s_batch2_res = self._add_inventory_stock(p_mix_id, "EarlyExpiry", (self.today - timedelta(days=5)).isoformat())
+
+        # Batch 3: purchase_date=today-2, default expiry=today-2+10 = today+8 (middle expiry)
+        # Add it last so its ID is higher than s_batch1_res if IDs are sequential, to test secondary sort by ID.
+        s_batch3_res = self._add_inventory_stock(p_mix_id, "MidExpiry", (self.today - timedelta(days=2)).isoformat())
+
+        batches = self.manager.get_inventory_batches_for_product(p_mix_id) # Default order
+
+        # Expected order: Batch2 (expires today+5), Batch3 (expires today+8), Batch1 (expires today+10)
+        self.assertEqual(len(batches), 3)
+        self.assertEqual(batches[0]['id'], s_batch2_res.get('stock_item_id'))
+        self.assertEqual(batches[1]['id'], s_batch3_res.get('stock_item_id'))
+        self.assertEqual(batches[2]['id'], s_batch1_res.get('stock_item_id'))
+
+    def test_get_inventory_batches_product_with_no_batches(self):
+        p_id = self._create_product("No Batch Product")
+        batches = self.manager.get_inventory_batches_for_product(p_id)
+        self.assertEqual(len(batches), 0)
+
+    def test_get_inventory_batches_invalid_product_id_format(self):
+        # Test with a non-integer product_id string
+        batches = self.manager.get_inventory_batches_for_product("not-an-id")
+        self.assertEqual(len(batches), 0) # Method should handle gracefully and return empty list
+
+        # Test with None product_id
+        batches_none = self.manager.get_inventory_batches_for_product(None)
+        self.assertEqual(len(batches_none), 0)
+
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

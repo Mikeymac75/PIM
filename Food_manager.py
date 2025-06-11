@@ -207,8 +207,9 @@ class InventoryManager:
                 ''', (product_id, product['name'], str(quantity_str), purchase_dt.isoformat(),
                       expiry_dt.isoformat(), str(quantity_str)))
                 conn.commit()
+                stock_item_id = cursor.lastrowid # Get the ID of the inserted item
             print(f"Added stock to DB: {product['name']} ({quantity_str}), Expires: {expiry_dt.isoformat()}")
-            return {"success": True, "message": f"Stock for '{product['name']}' added successfully."}
+            return {"success": True, "message": f"Stock for '{product['name']}' added successfully.", "stock_item_id": stock_item_id}
         except sqlite3.Error as e:
             print(f"Database error adding inventory stock: {e}")
             return {"success": False, "message": f"Database error: {e}"}
@@ -238,6 +239,62 @@ class InventoryManager:
                     items.append(item)
         except sqlite3.Error as e:
             print(f"Database error fetching current inventory: {e}")
+        return items
+
+    def get_inventory_batches_for_product(self, product_id, limit=None, order_by_purchase_desc=False, order_by_id_desc=False):
+        """
+        Retrieves specific inventory batches for a given product_id.
+        Can be ordered by purchase_date descending or id descending, and limited.
+        """
+        items = []
+        if not product_id: # Ensure product_id is not None or empty before query
+            return items
+
+        # Ensure product_id is an integer if it's coming from a form/URL
+        try:
+            valid_product_id = int(product_id)
+        except ValueError:
+            print(f"Invalid product_id format: {product_id}")
+            return items # Or raise an error
+
+        query = '''
+            SELECT
+                ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
+                ii.original_quantity_string,
+                p.name AS product_name, p.category, p.subcategory, p.unit_of_measure
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+            WHERE ii.product_id = ?
+        '''
+        params = [valid_product_id]
+
+        if order_by_id_desc:
+            query += " ORDER BY ii.id DESC"
+        elif order_by_purchase_desc:
+            query += " ORDER BY ii.purchase_date DESC, ii.id DESC"
+        else: # Default order (e.g., by expiry date as in get_current_inventory)
+            query += " ORDER BY ii.expiry_date ASC, ii.id ASC"
+
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                for row in rows:
+                    item = dict(row)
+                    # Convert date strings to date objects
+                    if item.get('purchase_date'):
+                        item['purchase_date'] = date.fromisoformat(item['purchase_date'])
+                    if item.get('expiry_date'):
+                        item['expiry_date'] = date.fromisoformat(item['expiry_date'])
+                    items.append(item)
+        except sqlite3.Error as e:
+            print(f"Database error fetching inventory batches for product ID {valid_product_id}: {e}")
         return items
 
     def get_shopping_list_items(self, store_filter=None, search_term=None):
@@ -494,6 +551,116 @@ class InventoryManager:
         
         print(final_message)
         return {"success": consumed_amount_total_overall > 0, "message": final_message, "details": log_messages}
+
+    def adjust_inventory_batch(self, batch_id, new_quantity_str, new_purchase_date_str=None, new_expiry_date_str=None, include_in_projections=False):
+        """
+        Adjusts the quantity, purchase date, or expiry date of a specific inventory batch.
+        - batch_id: The ID of the inventory_item to adjust.
+        - new_quantity_str: The new quantity for the batch (as a string).
+        - new_purchase_date_str: Optional. New purchase date in 'YYYY-MM-DD' format.
+        - new_expiry_date_str: Optional. New expiry date in 'YYYY-MM-DD' format.
+        - include_in_projections: Boolean. If True, quantity changes affect historical consumption for projections.
+        Logs changes to historical_items if quantity is changed AND include_in_projections is True.
+        Deletes batch if new quantity is 0.
+        Returns a dictionary with success status and message.
+        """
+        log_message_parts = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT * FROM inventory_items WHERE id = ?", (batch_id,))
+                batch_row = cursor.fetchone()
+
+                if not batch_row:
+                    return {"success": False, "message": f"Inventory batch with ID {batch_id} not found."}
+
+                current_batch = dict(batch_row)
+                item_name = current_batch['name'] # Use name from DB for messages
+                product_id = current_batch['product_id']
+                current_quantity_numeric = self._parse_quantity_string(current_batch['quantity'])
+
+                new_quantity_float = self._parse_quantity_string(new_quantity_str)
+                if new_quantity_float < 0:
+                    return {"success": False, "message": "Quantity cannot be negative."}
+
+                quantity_diff = new_quantity_float - current_quantity_numeric
+                final_quantity_db_str = str(new_quantity_str) # What will be stored if not deleting
+
+                # Date handling (validate and prepare for update if provided)
+                final_purchase_date_str = current_batch['purchase_date']
+                final_expiry_date_str = current_batch['expiry_date']
+                date_fields_to_update = {}
+
+                if new_purchase_date_str and new_purchase_date_str != current_batch['purchase_date']:
+                    try:
+                        date.fromisoformat(new_purchase_date_str) # Validate
+                        date_fields_to_update["purchase_date"] = new_purchase_date_str
+                        final_purchase_date_str = new_purchase_date_str
+                    except ValueError:
+                        return {"success": False, "message": "Invalid new purchase date format. Use YYYY-MM-DD."}
+
+                if new_expiry_date_str and new_expiry_date_str != current_batch['expiry_date']:
+                    try:
+                        date.fromisoformat(new_expiry_date_str) # Validate
+                        date_fields_to_update["expiry_date"] = new_expiry_date_str
+                        final_expiry_date_str = new_expiry_date_str
+                    except ValueError:
+                        return {"success": False, "message": "Invalid new expiry date format. Use YYYY-MM-DD."}
+
+                # --- Database Operations ---
+                if new_quantity_float == 0:
+                    cursor.execute("DELETE FROM inventory_items WHERE id = ?", (batch_id,))
+                    log_message_parts.append(f"Batch ID {batch_id} ('{item_name}') deleted (quantity set to 0).")
+                    # If deleted, quantity_diff is based on current_quantity_numeric becoming 0.
+                    # So quantity_diff will be -current_quantity_numeric
+                    # This ensures the full amount is logged as "consumed" or "removed" if projections are included.
+                    quantity_diff = -current_quantity_numeric
+                else:
+                    update_fields_sql = ["quantity = ?"]
+                    update_values_sql = [final_quantity_db_str]
+                    if "purchase_date" in date_fields_to_update:
+                        update_fields_sql.append("purchase_date = ?")
+                        update_values_sql.append(date_fields_to_update["purchase_date"])
+                    if "expiry_date" in date_fields_to_update:
+                        update_fields_sql.append("expiry_date = ?")
+                        update_values_sql.append(date_fields_to_update["expiry_date"])
+
+                    if update_fields_sql: # Only update if quantity or dates actually changed
+                        update_values_sql.append(batch_id)
+                        cursor.execute(f"UPDATE inventory_items SET {', '.join(update_fields_sql)} WHERE id = ?", tuple(update_values_sql))
+                        log_message_parts.append(f"Batch ID {batch_id} ('{item_name}') updated.")
+                    else: # No quantity change, no date change
+                         if quantity_diff == 0 and not date_fields_to_update:
+                             return {"success": True, "message": f"No changes detected for batch ID {batch_id} ('{item_name}')."}
+
+
+                # Historical Logging based on include_in_projections flag
+                if quantity_diff != 0: # Only log if quantity actually changed
+                    if include_in_projections:
+                        amount_for_history = -quantity_diff # Positive if decreased, negative if increased
+                        cursor.execute('''
+                            INSERT INTO historical_items
+                            (product_id, name, quantity_consumed_this_time, original_quantity_string,
+                             purchase_date, expiry_date, consumed_date, notes)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (product_id, item_name, amount_for_history, current_batch['original_quantity_string'],
+                              current_batch['purchase_date'], current_batch['expiry_date'], # Log original batch dates
+                              date.today().isoformat(),
+                              f"Batch ID {batch_id} quantity adjusted from {current_quantity_numeric} to {new_quantity_float}."))
+                        log_message_parts.append(f"Adjustment of {amount_for_history} units recorded for projections.")
+                    else:
+                        log_message_parts.append("Quantity updated without impacting projections history.")
+
+                conn.commit()
+                return {"success": True, "message": " ".join(log_message_parts)}
+
+        except sqlite3.Error as e:
+            print(f"Database error adjusting inventory batch ID {batch_id}: {e}")
+            return {"success": False, "message": f"Database error: {e}"}
+        except Exception as e: # Catch other potential errors like date parsing
+            print(f"Error adjusting inventory batch ID {batch_id}: {e}")
+            return {"success": False, "message": f"An unexpected error occurred: {e}"}
 
     def check_for_expiring_items(self, days_threshold=3):
         """Checks for items expiring within a certain number of days from DB."""
