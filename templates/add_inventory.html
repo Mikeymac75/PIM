@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Add Inventory Stock{% endblock %}
+
+{% block content %}
+<h1>Add Stock to Inventory</h1>
+<form method="POST" action="{{ url_for('add_inventory_stock_view') }}">
+    <div>
+        <label for="product_id">Product:</label>
+        <select id="product_id" name="product_id" required>
+            <option value="">Select a Product...</option>
+            {% for product in products %}
+            <option value="{{ product.id }}" {% if form_data.product_id == product.id|string %}selected{% endif %}>
+                {{ product.name }} (Unit: {{ product.unit_of_measure }})
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div>
+        <label for="quantity_added">Quantity Added:</label>
+        <input type="text" id="quantity_added" name="quantity_added" value="{{ form_data.quantity_added if form_data else '' }}" required>
+        <small>Example: "2 lbs", "10 units", "1 bag (5kg)"</small>
+    </div>
+    <div>
+        <label for="purchase_date">Purchase Date:</label>
+        <input type="date" id="purchase_date" name="purchase_date" value="{{ form_data.purchase_date if form_data else '' }}" required>
+    </div>
+    <div>
+        <button type="submit">Add Stock</button>
+    </div>
+</form>
+{% endblock %}

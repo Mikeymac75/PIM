@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash
 from Food_manager import InventoryManager
 from recipe_manager import RecipeManager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
 import os # For accessing environment variables
 
@@ -29,18 +29,13 @@ recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
 # --- Helper Functions ---
 def _get_unique_item_names(include_historical=False):
     """
-    Helper to get sorted unique item names from inventory.
-    - If include_historical is False, fetches from current inventory only.
-    - If include_historical is True, fetches from both current and historical inventory.
+    Helper to get sorted unique item names from the products table.
+    The `include_historical` parameter is less relevant now as we fetch from a definitive product list.
     """
-    current_inventory = manager.get_current_inventory()
-    unique_names = set(item['name'] for item in current_inventory)
-
-    if include_historical:
-        historical_inventory = manager.get_historical_inventory()
-        for item in historical_inventory:
-            unique_names.add(item['name'])
-
+    # manager.get_all_products() returns a list of product dictionaries
+    all_products = manager.get_all_products()
+    # Assuming each product dict has a 'name' key
+    unique_names = set(product['name'] for product in all_products if 'name' in product)
     return sorted(list(unique_names))
 
 # --- Flask Routes ---
@@ -68,16 +63,17 @@ def current_inventory_view():
 
         item_processed['is_below_par'] = (numeric_quantity < par_level and par_level > 0)
         processed_inventory_items.append(item_processed)
-        
-    return render_template('current_inventory.html', items=processed_inventory_items)
+
+    today = date.today() # Get current date
+    return render_template('current_inventory.html', items=processed_inventory_items, today=today, timedelta=timedelta)
 
 @app.route('/inventory/historical')
 def historical_inventory_view():
     historical_items = manager.get_historical_inventory()
     return render_template('historical_inventory.html', items=historical_items)
 
-@app.route('/inventory/add', methods=['GET', 'POST'])
-def add_item_view():
+@app.route('/inventory/add_deprecated', methods=['GET', 'POST'])
+def deprecated_add_item_view():
     if request.method == 'POST':
         name = request.form.get('name')
         quantity = request.form.get('quantity') 
@@ -635,6 +631,227 @@ def shopping_list_view():
                            items=shopping_list_items,
                            current_store_filter=store_filter,
                            current_search_term=search_term)
+
+# --- Product Management Routes ---
+@app.route('/products', methods=['GET'])
+def list_products_view():
+    products = manager.get_all_products()
+    return render_template('list_products.html', products=products)
+
+@app.route('/products/create', methods=['GET', 'POST'])
+def create_product_view():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        category = request.form.get('category', '').strip()
+        subcategory = request.form.get('subcategory', '').strip()
+        unit_of_measure = request.form.get('unit_of_measure', '').strip()
+        default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
+        par_level_str = request.form.get('par_level', '0').strip()
+        max_holding_amount_str = request.form.get('max_holding_amount', '0').strip()
+        purchase_location = request.form.get('purchase_location', '').strip()
+
+        errors = []
+        if not name: errors.append("Product name is required.")
+        if not unit_of_measure: errors.append("Unit of measure is required.")
+        if not default_expiry_days_str: errors.append("Default expiry days are required.")
+
+        default_expiry_days = None
+        try:
+            default_expiry_days = int(default_expiry_days_str)
+            if default_expiry_days < 0:
+                errors.append("Default expiry days must be a non-negative number.")
+        except ValueError:
+            if default_expiry_days_str: # Error only if it's not empty but invalid
+                 errors.append("Default expiry days must be a valid whole number.")
+
+        par_level = 0.0
+        try:
+            par_level = float(par_level_str)
+            if par_level < 0:
+                errors.append("Par level must be a non-negative number.")
+        except ValueError:
+            if par_level_str and par_level_str != '0': # Error if not empty, not '0', but invalid
+                errors.append("Par level must be a valid number.")
+
+        max_holding_amount = 0.0
+        try:
+            max_holding_amount = float(max_holding_amount_str)
+            if max_holding_amount < 0:
+                errors.append("Max holding amount must be a non-negative number.")
+        except ValueError:
+            if max_holding_amount_str and max_holding_amount_str != '0':
+                errors.append("Max holding amount must be a valid number.")
+
+        # Optional: Validate purchase_location against a predefined list if necessary
+        # For now, allowing free text based on Food_manager.py structure
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            return render_template('create_product.html', form_data=request.form)
+
+        result = manager.create_product(
+            name=name,
+            category=category if category else None,
+            subcategory=subcategory if subcategory else None,
+            unit_of_measure=unit_of_measure,
+            default_expiry_days=default_expiry_days,
+            par_level=par_level,
+            max_holding_amount=max_holding_amount,
+            purchase_location=purchase_location if purchase_location else None
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('list_products_view'))
+        else:
+            flash(result.get("message", "An error occurred creating the product."), 'error')
+            return render_template('create_product.html', form_data=request.form)
+
+    return render_template('create_product.html', form_data={})
+
+@app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
+def edit_product_view(product_id):
+    product = manager.get_product(product_id)
+    if not product:
+        flash(f"Product with ID {product_id} not found.", 'error')
+        return redirect(url_for('list_products_view'))
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        category = request.form.get('category', '').strip()
+        subcategory = request.form.get('subcategory', '').strip()
+        unit_of_measure = request.form.get('unit_of_measure', '').strip()
+        default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
+        par_level_str = request.form.get('par_level', '0').strip()
+        max_holding_amount_str = request.form.get('max_holding_amount', '0').strip()
+        purchase_location = request.form.get('purchase_location', '').strip()
+
+        errors = []
+        if not name: errors.append("Product name is required.")
+        if not unit_of_measure: errors.append("Unit of measure is required.")
+        if not default_expiry_days_str: errors.append("Default expiry days are required.")
+
+        default_expiry_days = None
+        try:
+            default_expiry_days = int(default_expiry_days_str)
+            if default_expiry_days < 0:
+                errors.append("Default expiry days must be a non-negative number.")
+        except ValueError:
+            if default_expiry_days_str:
+                 errors.append("Default expiry days must be a valid whole number.")
+
+        par_level = 0.0
+        try:
+            par_level = float(par_level_str)
+            if par_level < 0:
+                errors.append("Par level must be a non-negative number.")
+        except ValueError:
+            if par_level_str and par_level_str != '0':
+                errors.append("Par level must be a valid number.")
+
+        max_holding_amount = 0.0
+        try:
+            max_holding_amount = float(max_holding_amount_str)
+            if max_holding_amount < 0:
+                errors.append("Max holding amount must be a non-negative number.")
+        except ValueError:
+            if max_holding_amount_str and max_holding_amount_str != '0':
+                errors.append("Max holding amount must be a valid number.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Pass current form data back to template, merge with original product data for safety
+            form_data = request.form.to_dict()
+            product_data_for_template = {**product, **form_data} # Form data overrides product data if keys clash
+            return render_template('edit_product.html', product=product_data_for_template)
+
+        result = manager.update_product(
+            product_id=product_id,
+            name=name,
+            category=category if category else None,
+            subcategory=subcategory if subcategory else None,
+            unit_of_measure=unit_of_measure,
+            default_expiry_days=default_expiry_days,
+            par_level=par_level,
+            max_holding_amount=max_holding_amount,
+            purchase_location=purchase_location if purchase_location else None
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('list_products_view'))
+        else:
+            flash(result.get("message", f"An error occurred updating product ID {product_id}."), 'error')
+            form_data = request.form.to_dict()
+            product_data_for_template = {**product, **form_data}
+            return render_template('edit_product.html', product=product_data_for_template)
+
+    # GET request: pass the fetched product data to the template
+    return render_template('edit_product.html', product=product)
+
+# --- Inventory Management Routes ---
+@app.route('/inventory/add_stock', methods=['GET', 'POST'])
+def add_inventory_stock_view():
+    if request.method == 'POST':
+        product_id_str = request.form.get('product_id')
+        quantity_added = request.form.get('quantity_added', '').strip()
+        purchase_date_str = request.form.get('purchase_date', '').strip()
+
+        errors = []
+        if not product_id_str:
+            errors.append("Product selection is required.")
+
+        product_id = None
+        if product_id_str:
+            try:
+                product_id = int(product_id_str)
+            except ValueError:
+                errors.append("Invalid product ID.")
+
+        if not quantity_added: # Basic check, manager._parse_quantity_string will do more
+            errors.append("Quantity added is required.")
+        else: # Check if quantity is positive using manager's parser
+            parsed_qty = manager._parse_quantity_string(quantity_added)
+            if parsed_qty <= 0:
+                errors.append("Quantity added must be a positive amount.")
+
+        if not purchase_date_str:
+            purchase_date_str = date.today().isoformat() # Default to today
+        else:
+            try:
+                date.fromisoformat(purchase_date_str) # Validate format
+            except ValueError:
+                errors.append("Invalid purchase date format. Please use YYYY-MM-DD.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Repopulate products for dropdown
+            products_for_dropdown = manager.get_all_products()
+            return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
+
+        # If validation passes
+        result = manager.add_inventory_stock(
+            product_id=product_id,
+            quantity_str=quantity_added,
+            purchase_date_str=purchase_date_str
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('current_inventory_view'))
+        else:
+            flash(result.get("message", "An error occurred adding inventory stock."), 'error')
+            products_for_dropdown = manager.get_all_products() # Repopulate products
+            return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
+
+    # GET request
+    products_for_dropdown = manager.get_all_products()
+    # Default purchase date to today for GET request pre-fill
+    return render_template('add_inventory.html', products=products_for_dropdown, form_data={'purchase_date': date.today().isoformat()})
+
 
 if __name__ == '__main__':
     # Debug mode should be False in a production environment

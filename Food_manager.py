@@ -21,38 +21,141 @@ class InventoryManager:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Current Inventory Table
+
+                # Products Table
                 cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS inventory_items (
+                    CREATE TABLE IF NOT EXISTS products (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT NOT NULL,
-                        quantity TEXT NOT NULL, 
-                        purchase_date TEXT NOT NULL,
-                        expiry_date TEXT NOT NULL,
-                        original_quantity_string TEXT,
-                        category TEXT, 
+                        name TEXT NOT NULL UNIQUE,
+                        category TEXT,
                         subcategory TEXT,
+                        unit_of_measure TEXT NOT NULL,
+                        default_expiry_days INTEGER NOT NULL,
                         par_level REAL DEFAULT 0,
                         max_holding_amount REAL DEFAULT 0,
                         purchase_location TEXT
                     )
                 ''')
+
+                # Current Inventory Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS inventory_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER,
+                        name TEXT NOT NULL,
+                        quantity TEXT NOT NULL, 
+                        purchase_date TEXT NOT NULL,
+                        expiry_date TEXT NOT NULL,
+                        original_quantity_string TEXT,
+                        FOREIGN KEY (product_id) REFERENCES products (id)
+                    )
+                ''')
                 # Historical (Consumed) Items Table
+                # No changes needed for historical_items table in this subtask
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS historical_items (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER,
                         name TEXT NOT NULL,
                         quantity_consumed_this_time REAL NOT NULL,
                         original_quantity_string TEXT,
                         purchase_date TEXT, 
                         expiry_date TEXT,
-                        consumed_date TEXT NOT NULL
+                        consumed_date TEXT NOT NULL,
+                        FOREIGN KEY (product_id) REFERENCES products (id)
                     )
                 ''')
                 conn.commit()
         except sqlite3.Error as e:
             raise sqlite3.Error(f"Database initialization error: {e}")
             # Depending on app design, might want to raise this or handle more gracefully
+
+    # --- Product Management Methods ---
+    def create_product(self, name, category, subcategory, unit_of_measure, default_expiry_days,
+                       par_level=0, max_holding_amount=0, purchase_location=None):
+        """Inserts a new product into the products table."""
+        if not all([name, unit_of_measure, default_expiry_days is not None]): # category, subcategory can be None
+            return {"success": False, "message": "Missing required product fields (name, unit_of_measure, default_expiry_days)."}
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO products
+                    (name, category, subcategory, unit_of_measure, default_expiry_days,
+                     par_level, max_holding_amount, purchase_location)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, category, subcategory, unit_of_measure, default_expiry_days,
+                      par_level, max_holding_amount, purchase_location))
+                conn.commit()
+                product_id = cursor.lastrowid
+                return {"success": True, "message": f"Product '{name}' created successfully.", "product_id": product_id}
+        except sqlite3.IntegrityError:
+            return {"success": False, "message": f"Product name '{name}' already exists."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error creating product: {e}"}
+
+    def get_product(self, product_id):
+        """Retrieves a product by its ID."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Database error getting product by ID {product_id}: {e}")
+            return None # Or raise error
+
+    def get_product_by_name(self, name):
+        """Retrieves a product by its name."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM products WHERE LOWER(name) = LOWER(?)", (name,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Database error getting product by name '{name}': {e}")
+            return None
+
+    def get_all_products(self):
+        """Retrieves all products from the products table, ordered by name."""
+        items = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM products ORDER BY name ASC")
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all products: {e}")
+        return items
+
+    def update_product(self, product_id, name, category, subcategory, unit_of_measure,
+                       default_expiry_days, par_level, max_holding_amount, purchase_location):
+        """Updates an existing product in the products table."""
+        if not all([name, unit_of_measure, default_expiry_days is not None]):
+             return {"success": False, "message": "Missing required product fields for update."}
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE products SET
+                    name = ?, category = ?, subcategory = ?, unit_of_measure = ?,
+                    default_expiry_days = ?, par_level = ?, max_holding_amount = ?, purchase_location = ?
+                    WHERE id = ?
+                ''', (name, category, subcategory, unit_of_measure, default_expiry_days,
+                      par_level, max_holding_amount, purchase_location, product_id))
+                conn.commit()
+                if cursor.rowcount == 0:
+                    return {"success": False, "message": f"Product with ID {product_id} not found."}
+                return {"success": True, "message": f"Product ID {product_id} updated successfully."}
+        except sqlite3.IntegrityError:
+            return {"success": False, "message": f"Product name '{name}' may already exist for another product."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error updating product: {e}"}
 
     def _parse_quantity_string(self, quantity_str):
         """Attempts to parse a quantity string (e.g., "2 lbs", "10 units", "1") into a float.
@@ -82,52 +185,54 @@ class InventoryManager:
                 return 1.0 
             return 0.0 # Default for completely unparseable or empty strings
 
-    def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days,
-                         category=None, subcategory=None, par_level=0, max_holding_amount=0, purchase_location=None):
-        """Adds a new grocery item to the database, including new optional fields."""
+    def add_inventory_stock(self, product_id, quantity_str, purchase_date_str):
+        """Adds a new inventory item stock linked to a product."""
+        product = self.get_product(product_id)
+        if not product:
+            return {"success": False, "message": f"Product with ID {product_id} not found."}
+
         try:
             purchase_dt = date.fromisoformat(purchase_date_str)
-            expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
+            expiry_dt = purchase_dt + timedelta(days=int(product['default_expiry_days']))
         except (ValueError, TypeError) as e:
-            print(f"Error processing date/expiry for adding item: {e}")
-            return {"success": False, "message": f"Invalid date or expiry day format: {e}"}
-
-        # Ensure numeric fields have valid defaults if None is passed, though method signature defaults them.
-        par_level = par_level if par_level is not None else 0
-        max_holding_amount = max_holding_amount if max_holding_amount is not None else 0
+            return {"success": False, "message": f"Invalid date or expiry day format for product {product['name']}: {e}"}
 
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO inventory_items 
-                    (name, quantity, purchase_date, expiry_date, original_quantity_string,
-                     category, subcategory, par_level, max_holding_amount, purchase_location)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, str(quantity_str), purchase_dt.isoformat(), expiry_dt.isoformat(), str(quantity_str),
-                      category, subcategory, par_level, max_holding_amount, purchase_location))
+                    (product_id, name, quantity, purchase_date, expiry_date, original_quantity_string)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (product_id, product['name'], str(quantity_str), purchase_dt.isoformat(),
+                      expiry_dt.isoformat(), str(quantity_str)))
                 conn.commit()
-            print(f"Added to DB: {name} (Category: {category}, Expires: {expiry_dt.isoformat()}, Location: {purchase_location})")
-            return {"success": True, "message": f"Item '{name}' added successfully."}
+            print(f"Added stock to DB: {product['name']} ({quantity_str}), Expires: {expiry_dt.isoformat()}")
+            return {"success": True, "message": f"Stock for '{product['name']}' added successfully."}
         except sqlite3.Error as e:
-            print(f"Database error adding item: {e}")
+            print(f"Database error adding inventory stock: {e}")
             return {"success": False, "message": f"Database error: {e}"}
 
     def get_current_inventory(self):
-        """Retrieves all items from the current inventory, ordered by expiry date."""
+        """Retrieves all items from the current inventory, joined with product details, ordered by expiry date."""
         items = []
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                # Joined query to include product details
                 cursor.execute('''
-                    SELECT id, name, quantity, purchase_date, expiry_date, original_quantity_string,
-                           category, subcategory, par_level, max_holding_amount, purchase_location
-                    FROM inventory_items 
-                    ORDER BY expiry_date ASC
+                    SELECT
+                        ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
+                        ii.original_quantity_string,
+                        p.name AS product_name, p.category, p.subcategory, p.unit_of_measure,
+                        p.par_level, p.max_holding_amount, p.purchase_location
+                    FROM inventory_items ii
+                    JOIN products p ON ii.product_id = p.id
+                    ORDER BY ii.expiry_date ASC
                 ''')
                 rows = cursor.fetchall()
                 for row in rows:
-                    item = dict(row) # Convert sqlite3.Row to dict
+                    item = dict(row)
                     item['purchase_date'] = date.fromisoformat(item['purchase_date'])
                     item['expiry_date'] = date.fromisoformat(item['expiry_date'])
                     items.append(item)
@@ -144,61 +249,81 @@ class InventoryManager:
         COSTCO_FREQUENCY_WEEKS = 3
         shopping_list = []
 
-        inventory = self.get_current_inventory()
+        # get_current_inventory() now returns items with product details joined
+        inventory_with_product_details = self.get_current_inventory()
 
-        for item in inventory:
-            par_level = item.get('par_level', 0.0)
-            if par_level is None or par_level <= 0: # Ensure par_level is not None before comparison
+        # We need a unique list of product_ids that are below par to avoid multiple projections for the same product
+        # if it has multiple inventory batches.
+        # However, par_level is per product, so we should iterate through products that have par levels.
+
+        all_products = self.get_all_products()
+        products_to_check = [p for p in all_products if p.get('par_level', 0) is not None and p.get('par_level', 0) > 0]
+
+        for product in products_to_check:
+            product_id = product['id']
+            product_name = product['name']
+            par_level = product.get('par_level', 0.0)
+            purchase_location = product.get('purchase_location')
+            unit_of_measure = product.get('unit_of_measure', 'units')
+
+            # Skip if par_level is not set or not positive
+            if par_level <= 0:
                 continue
 
-            purchase_location = item.get('purchase_location')
             projection_days_for_item = 0
-
             if purchase_location == 'Sobeys':
                 projection_days_for_item = SOBEYS_FREQUENCY_WEEKS * 7
             elif purchase_location == 'Costco':
                 projection_days_for_item = COSTCO_FREQUENCY_WEEKS * 7
             else:
-                # If no purchase location, or not Sobeys/Costco, skip or use a default.
-                # For now, skipping as per initial thought in plan.
+                # If purchase location doesn't match known cycles, skip or use a default.
+                # For now, skipping.
                 continue
 
-            # Ensure item name is valid for project_demand
-            item_name = item.get('name')
-            if not item_name:
-                continue
+            # Use project_demand with product_id
+            demand_projection = self.project_demand(product_id, lookback_days=30, projection_days=projection_days_for_item)
 
-            demand_projection = self.project_demand(item_name, lookback_days=30, projection_days=projection_days_for_item)
+            if not demand_projection.get("success"):
+                print(f"Skipping shopping list item for {product_name} due to projection error: {demand_projection.get('message')}")
+                continue
 
             avg_daily_consumption = demand_projection.get('avg_daily_consumption', 0.0)
-            # current_numeric_quantity is based on the specific item instance from inventory, not a new call to get_total_item_quantity
-            current_numeric_quantity = self._parse_quantity_string(item['quantity'])
+            # current_numeric_quantity is the total stock for this product_id
+            current_numeric_quantity = self.get_total_item_quantity(product_id)
 
-            # Target stock level at the END of the next shopping cycle for this item
             target_stock_after_shopping = par_level + (avg_daily_consumption * projection_days_for_item)
-
-            # Amount to buy is the difference between this target and current stock
             recommended_purchase_amount = target_stock_after_shopping - current_numeric_quantity
-            recommended_purchase_amount = max(0, round(recommended_purchase_amount, 2)) # Ensure non-negative and round
+            recommended_purchase_amount = max(0, round(recommended_purchase_amount, 2))
 
             if recommended_purchase_amount > 0:
-                # Expiry date can be a date object, convert to string for consistency in the list
-                expiry_date_str = item['expiry_date'].isoformat() if isinstance(item['expiry_date'], date) else str(item['expiry_date'])
+                # Find the earliest expiry date for this product from inventory for display (optional)
+                earliest_expiry_date_str = "N/A"
+                relevant_inventory_batches = [
+                    item for item in inventory_with_product_details if item['product_id'] == product_id
+                ]
+                if relevant_inventory_batches:
+                    earliest_expiry_date_str = min(item['expiry_date'] for item in relevant_inventory_batches).isoformat()
+
+                # Current quantity display string (sum of original strings might be complex, so just use numeric total with unit)
+                current_quantity_display = f"{current_numeric_quantity:.2f} {unit_of_measure}"
+
 
                 shopping_list_item = {
-                    'name': item_name,
-                    'current_quantity': item['quantity'], # Keep original quantity string for display if needed
-                    'current_numeric_quantity': current_numeric_quantity, # Parsed numeric quantity
+                    'product_id': product_id,
+                    'name': product_name, # This is product_name from products table
+                    'current_quantity_display': current_quantity_display,
+                    'current_numeric_quantity': current_numeric_quantity,
+                    'unit_of_measure': unit_of_measure,
                     'purchase_location': purchase_location,
-                    'expiry_date': expiry_date_str,
+                    'earliest_expiry_date': earliest_expiry_date_str, # Informational
                     'recommended_purchase_amount': recommended_purchase_amount,
                     'par_level': par_level,
-                    'days_to_next_shop': projection_days_for_item, # How long this purchase should last
+                    'days_to_next_shop': projection_days_for_item,
                     'avg_daily_consumption': round(avg_daily_consumption, 2)
                 }
                 shopping_list.append(shopping_list_item)
 
-        # Filter logic
+        # Filter logic (remains largely the same, but fields might have changed names slightly)
         if store_filter:
             shopping_list = [
                 item for item in shopping_list
@@ -219,15 +344,24 @@ class InventoryManager:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                # Joined query to include product details, if product_id is not null
+                # Using LEFT JOIN in case some historical items don't have a product_id (legacy data)
+                # or if a product was deleted.
                 cursor.execute('''
-                    SELECT id, name, quantity_consumed_this_time, original_quantity_string, 
-                           purchase_date, expiry_date, consumed_date 
-                    FROM historical_items 
-                    ORDER BY consumed_date DESC
+                    SELECT
+                        hi.id, hi.product_id, hi.name AS historical_item_name,
+                        hi.quantity_consumed_this_time, hi.original_quantity_string,
+                        hi.purchase_date, hi.expiry_date, hi.consumed_date,
+                        p.name AS product_name, p.category, p.subcategory, p.unit_of_measure
+                    FROM historical_items hi
+                    LEFT JOIN products p ON hi.product_id = p.id
+                    ORDER BY hi.consumed_date DESC
                 ''')
                 rows = cursor.fetchall()
                 for row in rows:
                     item = dict(row)
+                    # Use product_name from products table if available, otherwise use historical_item_name
+                    item['name'] = item['product_name'] if item['product_name'] else item['historical_item_name']
                     if item['purchase_date']: item['purchase_date'] = date.fromisoformat(item['purchase_date'])
                     if item['expiry_date']: item['expiry_date'] = date.fromisoformat(item['expiry_date'])
                     item['consumed_date'] = date.fromisoformat(item['consumed_date'])
@@ -236,19 +370,36 @@ class InventoryManager:
             print(f"Database error fetching historical inventory: {e}")
         return items
 
-    def get_total_item_quantity(self, item_name_to_find):
-        """Calculates total quantity of a specific item in current inventory."""
+    def get_total_item_quantity(self, product_name_or_id):
+        """Calculates total quantity of a specific item in current inventory, using product_id or name."""
         total_quantity = 0.0
-        item_name_lower = item_name_to_find.lower()
+        product_id = None
+
+        if isinstance(product_name_or_id, int): # Assume it's an ID
+            product_id = product_name_or_id
+        elif isinstance(product_name_or_id, str): # Assume it's a name
+            product = self.get_product_by_name(product_name_or_id)
+            if product:
+                product_id = product['id']
+            else:
+                print(f"Product '{product_name_or_id}' not found for quantity check.")
+                return 0.0 # Product not found
+        else:
+            print(f"Invalid identifier type for get_total_item_quantity: {product_name_or_id}")
+            return 0.0
+
+        if product_id is None: # Handles case where name was given but not found
+             return 0.0
+
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT quantity FROM inventory_items WHERE LOWER(name) = ?", (item_name_lower,))
+                cursor.execute("SELECT quantity FROM inventory_items WHERE product_id = ?", (product_id,))
                 rows = cursor.fetchall()
                 for row in rows:
                     total_quantity += self._parse_quantity_string(row['quantity'])
         except sqlite3.Error as e:
-            print(f"Database error getting total item quantity for {item_name_to_find}: {e}")
+            print(f"Database error getting total item quantity for product ID {product_id}: {e}")
         return total_quantity
 
     def consume_item(self, item_name_to_consume, quantity_to_consume_float):
@@ -264,94 +415,92 @@ class InventoryManager:
         consumed_amount_total_overall = 0.0
         quantity_remaining_to_consume = float(quantity_to_consume_float)
 
+        product_to_consume = self.get_product_by_name(item_name_to_consume)
+        if not product_to_consume:
+            return {"success": False, "message": f"Product '{item_name_to_consume}' not found in products table."}
+
+        product_id_to_consume = product_to_consume['id']
+        # Ensure product_name is the canonical name from the products table
+        product_name_canonical = product_to_consume['name']
+
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 # Fetch all batches of the item, ordered by expiry_date to consume oldest first.
                 cursor.execute('''
-                    SELECT id, name, quantity, purchase_date, expiry_date, original_quantity_string 
+                    SELECT id, product_id, name, quantity, purchase_date, expiry_date, original_quantity_string
                     FROM inventory_items 
-                    WHERE LOWER(name) = ? 
+                    WHERE product_id = ?
                     ORDER BY expiry_date ASC
-                ''', (item_name_to_consume.lower(),))
+                ''', (product_id_to_consume,))
                 items_in_stock = [dict(row) for row in cursor.fetchall()]
 
                 if not items_in_stock:
-                    return {"success": False, "message": f"Item '{item_name_to_consume}' not found."}
+                    return {"success": False, "message": f"Item '{product_name_canonical}' not found in inventory."}
 
                 for item_stock_dict in items_in_stock:
                     if quantity_remaining_to_consume <= 0:
                         break
                     
                     item_id = item_stock_dict['id']
-                    current_original_qty_str = item_stock_dict['original_quantity_string'] # This is the original string when added
-                    current_qty_str_in_db = item_stock_dict['quantity'] # This is current quantity string in DB
+                    current_original_qty_str = item_stock_dict['original_quantity_string']
+                    current_qty_str_in_db = item_stock_dict['quantity']
                     
-                    # Use _parse_quantity_string for the current quantity in DB
                     numeric_qty_in_stock = self._parse_quantity_string(current_qty_str_in_db)
-
                     consumable_from_this_batch = min(quantity_remaining_to_consume, numeric_qty_in_stock)
 
-                    if consumable_from_this_batch <= 0: # Should not happen if numeric_qty_in_stock > 0
+                    if consumable_from_this_batch <= 0:
                         continue
 
-                    # Update inventory_items table
                     new_numeric_qty = numeric_qty_in_stock - consumable_from_this_batch
                     
-                    # Determine new quantity string, attempting to preserve original unit label if present.
-                    new_quantity_db_str = "0" # Default for fully consumed
+                    new_quantity_db_str = "0"
                     if new_numeric_qty > 0:
                         original_parts = str(current_qty_str_in_db).split(maxsplit=1)
-                        if len(original_parts) > 1: # If there was a unit part
-                            # Check if the first part was indeed a number before, implies unit was second part
+                        if len(original_parts) > 1:
                             try:
-                                float(original_parts[0]) # Check if original first part was number
+                                float(original_parts[0])
                                 unit_suffix = original_parts[1]
                                 new_quantity_db_str = f"{new_numeric_qty:.2f} {unit_suffix}"
-                            except ValueError: # Original first part was not a number (e.g. "a loaf")
-                                # If original was "a loaf" and new_numeric_qty is 0.5, this might be tricky.
-                                # For simplicity, if original was not like "X unit", just store the number.
+                            except ValueError:
                                 new_quantity_db_str = str(new_numeric_qty) if new_numeric_qty % 1 else str(int(new_numeric_qty))
-                        else: # Original quantity was just a number
+                        else:
                              new_quantity_db_str = str(new_numeric_qty) if new_numeric_qty % 1 else str(int(new_numeric_qty))
                     
-                    # Update or delete the item batch in the inventory
                     if new_numeric_qty <= 0:
                         cursor.execute("DELETE FROM inventory_items WHERE id = ?", (item_id,))
-                        log_messages.append(f"Fully consumed batch ID {item_id} of '{item_name_to_consume}'.")
+                        log_messages.append(f"Fully consumed batch ID {item_id} of '{product_name_canonical}'.")
                     else:
                         cursor.execute("UPDATE inventory_items SET quantity = ? WHERE id = ?", 
                                        (new_quantity_db_str, item_id))
-                        log_messages.append(f"Partially consumed batch ID {item_id} of '{item_name_to_consume}'. New qty: {new_quantity_db_str}")
+                        log_messages.append(f"Partially consumed batch ID {item_id} of '{product_name_canonical}'. New qty: {new_quantity_db_str}")
                     
-                    # Log to historical_items
+                    # Log to historical_items, now including product_id
                     cursor.execute('''
                         INSERT INTO historical_items 
-                        (name, quantity_consumed_this_time, original_quantity_string, 
+                        (product_id, name, quantity_consumed_this_time, original_quantity_string,
                          purchase_date, expiry_date, consumed_date) 
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (item_stock_dict['name'], consumable_from_this_batch, current_original_qty_str,
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (product_id_to_consume, product_name_canonical, consumable_from_this_batch, current_original_qty_str,
                           item_stock_dict['purchase_date'], item_stock_dict['expiry_date'],
                           date.today().isoformat()))
                     
                     consumed_amount_total_overall += consumable_from_this_batch
                     quantity_remaining_to_consume -= consumable_from_this_batch
                 
-                conn.commit() # Commit all changes if loop completes
+                conn.commit()
 
         except sqlite3.Error as e:
-            # No explicit rollback needed with `with conn:` if an error occurs before commit.
-            # If commit fails, changes are not persisted.
             print(f"Database error consuming item: {e}")
             return {"success": False, "message": f"Database error: {e}", "details": log_messages}
 
-        final_message = f"Total consumed: {consumed_amount_total_overall:.2f} of {item_name_to_consume}."
+        final_message = f"Total consumed: {consumed_amount_total_overall:.2f} of {product_name_canonical}."
         if quantity_remaining_to_consume > 0 and consumed_amount_total_overall > 0 :
             final_message += f" Could not consume the full requested amount. {quantity_remaining_to_consume:.2f} still pending."
         elif consumed_amount_total_overall == 0 and quantity_to_consume_float > 0:
-             final_message = f"No quantity of '{item_name_to_consume}' could be consumed (possibly none in stock or issue with parsing quantity)."
+             final_message = f"No quantity of '{product_name_canonical}' could be consumed (possibly none in stock or issue with parsing quantity)."
         
-        print(final_message) # For server logs
+        print(final_message)
         return {"success": consumed_amount_total_overall > 0, "message": final_message, "details": log_messages}
 
     def check_for_expiring_items(self, days_threshold=3):
@@ -406,32 +555,50 @@ class InventoryManager:
         today = date.today()
         lookback_start_dt = today - timedelta(days=lookback_days)
         total_consumed_in_lookback = 0.0
+        product_id = None
+        product_name = None
+        product_unit = "units" # Default unit
+
+        if isinstance(product_name_or_id, int): # Assume it's an ID
+            product_id = product_name_or_id
+            product = self.get_product(product_id)
+            if not product:
+                return {"success": False, "message": f"Product with ID {product_id} not found."}
+            product_name = product['name']
+            product_unit = product.get('unit_of_measure', product_unit)
+        elif isinstance(product_name_or_id, str): # Assume it's a name
+            product = self.get_product_by_name(product_name_or_id)
+            if not product:
+                return {"success": False, "message": f"Product '{product_name_or_id}' not found."}
+            product_id = product['id']
+            product_name = product['name']
+            product_unit = product.get('unit_of_measure', product_unit)
+        else:
+            return {"success": False, "message": "Invalid product identifier for projection."}
 
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Sum quantity_consumed_this_time for the item within the lookback period.
-                # Using LOWER(name) for case-insensitive matching.
                 cursor.execute('''
                     SELECT SUM(quantity_consumed_this_time) as total_consumed
                     FROM historical_items 
-                    WHERE LOWER(name) = ? AND consumed_date >= ? AND consumed_date <= ?
-                ''', (item_name.lower(), lookback_start_dt.isoformat(), today.isoformat()))
+                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date <= ?
+                ''', (product_id, lookback_start_dt.isoformat(), today.isoformat()))
                 result_row = cursor.fetchone()
                 if result_row and result_row['total_consumed'] is not None:
                     total_consumed_in_lookback = float(result_row['total_consumed'])
         except sqlite3.Error as e:
-            print(f"Database error fetching historical data for demand projection: {e}")
-            # Return a result indicating failure or partial data
+            print(f"Database error fetching historical data for demand projection (Product ID: {product_id}): {e}")
             return {
-                "item_name": item_name, "current_stock": self.get_total_item_quantity(item_name),
+                "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
+                "current_stock": self.get_total_item_quantity(product_id),
                 "avg_daily_consumption": 0, "days_to_depletion": "Error fetching history",
                 "projected_need": 0, "lookback_days": lookback_days, "projection_days": projection_days,
                 "success": False, "message": f"DB error calculating historical consumption: {e}"
             }
 
         avg_daily_consumption = (total_consumed_in_lookback / lookback_days) if lookback_days > 0 else 0.0
-        current_quantity_sum = self.get_total_item_quantity(item_name)
+        current_quantity_sum = self.get_total_item_quantity(product_id)
         
         days_to_depletion_str = "N/A"
         if avg_daily_consumption > 0:
@@ -448,19 +615,21 @@ class InventoryManager:
         projected_need = avg_daily_consumption * projection_days
         
         result = {
-            "item_name": item_name, "current_stock": current_quantity_sum,
+            "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
+            "current_stock": current_quantity_sum,
             "avg_daily_consumption": avg_daily_consumption, "days_to_depletion": days_to_depletion_str,
             "projected_need": projected_need, "lookback_days": lookback_days, "projection_days": projection_days,
-            "success": True # Indicate successful projection calculation
+            "success": True
         }
-        # Print output for command-line use, Flask will use the return value
-        print(f"\n--- Demand Projection for '{item_name}' (DB) ---")
+
+        print(f"\n--- Demand Projection for '{product_name}' (ID: {product_id}) ---")
+        print(f"Unit of Measure: {product_unit}")
         print(f"Lookback: {lookback_days} days, Projection: {projection_days} days")
-        print(f"Total consumed (lookback): {total_consumed_in_lookback:.2f} units")
-        print(f"Current stock: {current_quantity_sum:.2f} units")
-        print(f"Avg daily consumption: {avg_daily_consumption:.2f} units/day")
+        print(f"Total consumed (lookback): {total_consumed_in_lookback:.2f} {product_unit}")
+        print(f"Current stock: {current_quantity_sum:.2f} {product_unit}")
+        print(f"Avg daily consumption: {avg_daily_consumption:.2f} {product_unit}/day")
         print(f"Est. days to depletion: {days_to_depletion_str}")
-        print(f"Projected need (next {projection_days} days): {projected_need:.2f} units")
+        print(f"Projected need (next {projection_days} days): {projected_need:.2f} {product_unit}")
         print("-----------------------------------------\n")
         return result
 
