@@ -214,6 +214,84 @@ class InventoryManager:
             print(f"Database error adding inventory stock: {e}")
             return {"success": False, "message": f"Database error: {e}"}
 
+    # This method is called by the Excel upload in app.py
+    # It now relies on product_id for linking, and creates product if not found.
+    def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days,
+                         category=None, subcategory=None, par_level=0, max_holding_amount=0,
+                         purchase_location=None, unit_of_measure=None): # Added unit_of_measure
+        """
+        Adds an item to the inventory. If the product doesn't exist, it creates it first.
+        Then, it adds the stock item to inventory_items.
+        expiry_days is used to calculate expiry_date from purchase_date_str for the batch,
+        AND as default_expiry_days if a new product is created.
+        par_level and max_holding_amount are for the product definition if created.
+        unit_of_measure is used for new product creation.
+        """
+        product_info = self.get_product_by_name(name)
+        product_id_to_use = None
+
+        if not product_info:
+            # Product does not exist, create it
+            print(f"Product '{name}' not found, attempting to create it...")
+            # unit_of_measure is now passed to create_product.
+            # create_product itself handles validation for unit_of_measure being present.
+            create_product_result = self.create_product(
+                name=name,
+                category=category,
+                subcategory=subcategory,
+                unit_of_measure=unit_of_measure, # Pass the new parameter here
+                default_expiry_days=expiry_days, # Current behavior: uses batch expiry as default for new product
+                par_level=par_level,
+                max_holding_amount=max_holding_amount,
+                purchase_location=purchase_location
+            )
+            if create_product_result.get("success"):
+                product_id_to_use = create_product_result.get("product_id")
+                product_info = self.get_product(product_id_to_use) # Fetch newly created product info
+                print(f"Product '{name}' created successfully with ID {product_id_to_use}.")
+            else:
+                # Failed to create product, cannot add inventory item
+                error_message = create_product_result.get("message", f"Failed to create product '{name}'.")
+                print(error_message)
+                raise ValueError(error_message)
+        else:
+            product_id_to_use = product_info['id']
+            print(f"Product '{name}' found with ID {product_id_to_use}. Using existing product.")
+            # If product exists, unit_of_measure from Excel is ignored as per plan.
+
+        if product_id_to_use is None:
+            final_error_msg = f"Could not find or create product '{name}'. Inventory item not added."
+            print(final_error_msg)
+            raise ValueError(final_error_msg)
+
+        # Calculate expiry_date for THIS BATCH
+        try:
+            purchase_dt = date.fromisoformat(purchase_date_str)
+            batch_expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
+        except (ValueError, TypeError) as e:
+            error_msg = f"Invalid purchase date '{purchase_date_str}' or expiry days '{expiry_days}' for item '{name}': {e}"
+            print(error_msg)
+            raise ValueError(error_msg)
+
+        # Add to inventory_items table
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO inventory_items
+                    (product_id, name, quantity, purchase_date, expiry_date, original_quantity_string)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (product_id_to_use, name, str(quantity_str), purchase_dt.isoformat(),
+                      batch_expiry_dt.isoformat(), str(quantity_str)))
+                conn.commit()
+                item_id = cursor.lastrowid
+                print(f"Successfully added item '{name}' (Batch ID: {item_id}) to inventory. Expires: {batch_expiry_dt.isoformat()}")
+                return {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use}
+        except sqlite3.Error as e:
+            db_error_msg = f"Database error adding item '{name}' to inventory: {e}"
+            print(db_error_msg)
+            raise sqlite3.Error(db_error_msg)
+
     def get_current_inventory(self):
         """Retrieves all items from the current inventory, joined with product details, ordered by expiry date."""
         items = []

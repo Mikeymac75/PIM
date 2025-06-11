@@ -165,6 +165,7 @@ def upload_excel_view():
                 par_level_col = header_map.get('par level')
                 max_holding_col = header_map.get('max holding amount')
                 purchase_location_col = header_map.get('purchase location') # New
+                unit_of_measure_col = header_map.get('unit of measure') # New
                 
                 items_added_count = 0
                 error_messages = []
@@ -187,21 +188,22 @@ def upload_excel_view():
                     par_level_val = row[par_level_col] if par_level_col is not None and row[par_level_col] is not None else "0" # Default to "0" if cell empty/col missing
                     max_holding_val = row[max_holding_col] if max_holding_col is not None and row[max_holding_col] is not None else "0" # Default to "0"
                     purchase_location_val = str(row[purchase_location_col]).strip() if purchase_location_col is not None and row[purchase_location_col] is not None else None # New
+                    unit_of_measure_val = str(row[unit_of_measure_col]).strip() if unit_of_measure_col is not None and row[unit_of_measure_col] is not None else None # New
 
                     # Skip row if essential 'name' field is missing
                     if not name:
                         # Check if any other relevant cell in the row has data to avoid skipping genuinely sparse rows
                         # vs. completely blank rows often found at the end of sheets.
                         other_cells_have_data = any(
-                            row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col, 
-                                                         category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col]
+                            row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col,
+                                                         category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col, unit_of_measure_col]
                             if col_idx is not None and len(row) > col_idx and row[col_idx] is not None
                         )
                         if other_cells_have_data:
                             error_messages.append(f"Row {row_idx}: Name is missing but other data present. Skipped.")
                         # If all relevant cells are effectively empty, it's likely an empty row, so just continue
-                        elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col, 
-                                                                category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col]
+                        elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col,
+                                                                category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col, unit_of_measure_col]
                                      if col_idx is not None and len(row) > col_idx and row[col_idx] is not None):
                             continue
                         else: # Name missing, other fields might be empty too, but log it
@@ -270,6 +272,11 @@ def upload_excel_view():
                         else:
                             row_errors.append(f"Invalid Purchase Location '{purchase_location_val}'. If provided, must be one of: {', '.join(allowed_locations)}.")
                     
+                    # Conditional requirement for unit_of_measure
+                    product_exists = manager.get_product_by_name(name)
+                    if not product_exists and not unit_of_measure_val:
+                        row_errors.append("Unit of Measure is required for new products.")
+
                     if row_errors: 
                         error_messages.append(f"Row {row_idx} ('{name}'): " + "; ".join(row_errors))
                         continue 
@@ -285,7 +292,8 @@ def upload_excel_view():
                             subcategory=subcategory if subcategory else None,
                             par_level=par_level_float,
                             max_holding_amount=max_holding_float,
-                            purchase_location=purchase_location_to_pass # New
+                            purchase_location=purchase_location_to_pass, # New
+                            unit_of_measure=unit_of_measure_val # New
                         )
                         items_added_count += 1
                     except Exception as e: # Catch errors from manager.add_item_to_list

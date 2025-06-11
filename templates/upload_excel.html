@@ -19,8 +19,10 @@
             <li><strong>Subcategory</strong>: (Optional) The subcategory of the item (Text, e.g., "Milk", "Fruit").</li>
             <li><strong>Par Level</strong>: (Optional) The minimum desired quantity in stock (Number, e.g., 2, 0.5). Defaults to 0 if blank/missing. Must be non-negative.</li>
             <li><strong>Max Holding Amount</strong>: (Optional) The maximum preferred quantity to stock (Number, e.g., 4, 1). Defaults to 0 if blank/missing. Must be non-negative.</li>
+            <li><strong>Purchase Location</strong>: (Optional) The store or source of purchase (Text, e.g., "Sobeys", "Costco"). If provided, must be one of the allowed locations.</li>
+            <li><strong>Unit of Measure</strong>: (Conditionally Required) The unit of measure for the item (Text, e.g., "kg", "lbs", "pcs", "liters"). This is required if the item is being added for the first time (i.e., does not exist as a product yet). If the product already exists, this column is optional and will be ignored.</li>
         </ul>
-        <p>The first row of the sheet should be the header row. The order of columns does not strictly matter as long as the names are recognized (case-insensitive for "Name", "Quantity", "Purchase Date", "Expiry Days", "Category", "Subcategory", "Par Level", "Max Holding Amount").</p>
+        <p>The first row of the sheet should be the header row. The order of columns does not strictly matter as long as the names are recognized (case-insensitive for "Name", "Quantity", "Purchase Date", "Expiry Days", "Category", "Subcategory", "Par Level", "Max Holding Amount", "Purchase Location", "Unit of Measure").</p>
         <p>Example:</p>
         <table class="example-table">
             <thead>
@@ -33,6 +35,8 @@
                     <th>Subcategory</th>
                     <th>Par Level</th>
                     <th>Max Holding Amount</th>
+                    <th>Purchase Location</th>
+                    <th>Unit of Measure</th>
                 </tr>
             </thead>
             <tbody>
@@ -45,6 +49,8 @@
                     <td>Fruit</td>
                     <td>5</td>
                     <td>20</td>
+                    <td>Costco</td>
+                    <td>bags</td>
                 </tr>
                 <tr>
                     <td>Milk</td>
@@ -55,6 +61,8 @@
                     <td></td>
                     <td>1</td>
                     <td>2</td>
+                    <td>Sobeys</td>
+                    <td>gallon</td>
                 </tr>
             </tbody>
         </table>
