@@ -515,6 +515,8 @@ def projections_view():
             # Flask app will use the returned dict.
             projection_data = manager.project_demand(item_name) # Uses default lookback/projection days
             if projection_data and projection_data.get("success", True): # Check for success if manager might return that
+                if 'product_name' in projection_data:
+                    projection_data['item_name'] = projection_data.pop('product_name')
                 projection_results_list.append(projection_data)
             elif projection_data and not projection_data.get("success", True):
                 flash(f"Could not generate projection for {item_name}: {projection_data.get('message', 'Unknown error')}", "error")
