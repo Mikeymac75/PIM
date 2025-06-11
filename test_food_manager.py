@@ -655,11 +655,16 @@ if __name__ == '__main__':
         self.assertEqual(updated_batch["quantity"], "150")
 
         historical_items = self.manager.get_historical_inventory()
-        adjustment_log = [h for h in historical_items if h['notes'] and f"Batch ID {batch_id} quantity adjusted" in h['notes']]
-        self.assertEqual(len(adjustment_log), 1)
-        self.assertEqual(adjustment_log[0]['quantity_consumed_this_time'], 50) # 200 - 150 = 50 "consumed"
-        # Here, if include_in_projections=True was meant to create a *different* type of historical log,
-        # the adjust_inventory_batch method would need to reflect that. Current impl logs same way.
+        # Check for a historical item matching the adjustment criteria
+        adjustment_log = [
+            h for h in historical_items
+            if h['product_id'] == product_id and
+               h['quantity_consumed_this_time'] == 50.0 and # 200 - 150
+               h['consumed_date'].isoformat() == self.today_str
+        ]
+        self.assertEqual(len(adjustment_log), 1, "Historical log for decrease (proj=True) should exist and match criteria.")
+        self.assertEqual(adjustment_log[0]['original_quantity_string'], "200")
+
 
     def test_adjust_inventory_batch_quantity_increase_with_projection_impact(self):
         product_id = self._create_product(name="More Nuts", unit_of_measure="g")
@@ -675,9 +680,14 @@ if __name__ == '__main__':
         self.assertEqual(updated_batch["quantity"], "100")
 
         historical_items = self.manager.get_historical_inventory()
-        adjustment_log = [h for h in historical_items if h['notes'] and f"Batch ID {batch_id} quantity adjusted" in h['notes']]
-        self.assertEqual(len(adjustment_log), 1)
-        self.assertEqual(adjustment_log[0]['quantity_consumed_this_time'], -50) # 50 - 100 = -50 "consumed" (means added)
+        adjustment_log = [
+            h for h in historical_items
+            if h['product_id'] == product_id and
+               h['quantity_consumed_this_time'] == -50.0 and # 50 - 100
+               h['consumed_date'].isoformat() == self.today_str
+        ]
+        self.assertEqual(len(adjustment_log), 1, "Historical log for increase (proj=True) should exist and match criteria.")
+        self.assertEqual(adjustment_log[0]['original_quantity_string'], "50")
 
 
     def test_adjust_inventory_batch_non_existent_id(self):
@@ -704,9 +714,13 @@ if __name__ == '__main__':
         historical_items_true = self.manager.get_historical_inventory()
         adjustment_log_true = [
             h for h in historical_items_true
-            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes'] and h['quantity_consumed_this_time'] == 10 # Original quantity
+            if h['product_id'] == product_id and
+               h['quantity_consumed_this_time'] == 10.0 and # Original quantity of 10 removed
+               h['consumed_date'].isoformat() == self.today_str
         ]
-        self.assertEqual(len(adjustment_log_true), 1, "Historical log for deletion (proj=True) should exist.")
+        self.assertEqual(len(adjustment_log_true), 1, "Historical log for deletion (proj=True) should exist and match criteria.")
+        self.assertEqual(adjustment_log_true[0]['original_quantity_string'], "10")
+
 
         # Re-add for next test case
         add_result_2 = self._add_inventory_stock(product_id, "15") # New batch ID
@@ -714,10 +728,12 @@ if __name__ == '__main__':
         self.assertIsNotNone(batch_id_2)
 
         # Test deletion when include_in_projections is False (should NOT log adjustment for projection)
-        historical_count_before_false = len([
+        historical_logs_before_false_delete = [
             h for h in self.manager.get_historical_inventory()
-            if h.get('notes') and f"Batch ID {batch_id_2} quantity adjusted" in h['notes']
-        ])
+            if h['product_id'] == product_id and h['original_quantity_string'] == "15" # Check for logs related to this specific batch
+        ]
+        count_before_false_delete = len(historical_logs_before_false_delete)
+
 
         adjust_result_proj_false = self.manager.adjust_inventory_batch(batch_id_2, "0", include_in_projections=False)
         self.assertTrue(adjust_result_proj_false["success"])
@@ -726,11 +742,11 @@ if __name__ == '__main__':
         deleted_batch_check_2 = self.manager.get_inventory_batches_for_product(product_id)
         self.assertEqual(len(deleted_batch_check_2), 0, "Batch should be deleted (proj=False).")
 
-        historical_count_after_false = len([
+        historical_logs_after_false_delete = [
             h for h in self.manager.get_historical_inventory()
-            if h.get('notes') and f"Batch ID {batch_id_2} quantity adjusted" in h['notes']
-        ])
-        self.assertEqual(historical_count_after_false, historical_count_before_false, "Historical log should NOT be created for deletion (proj=False).")
+            if h['product_id'] == product_id and h['original_quantity_string'] == "15"
+        ]
+        self.assertEqual(len(historical_logs_after_false_delete), count_before_false_delete, "Historical log should NOT be created for deletion (proj=False).")
 
 
     def test_adjust_inventory_batch_dates(self):
