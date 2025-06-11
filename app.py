@@ -770,6 +770,106 @@ def add_inventory_stock_view():
     # Default purchase date to today for GET request pre-fill
     return render_template('add_inventory.html', products=products_for_dropdown, form_data={'purchase_date': date.today().isoformat()})
 
+@app.route('/inventory/edit', methods=['GET', 'POST'])
+def edit_inventory_view():
+    products_for_dropdown = manager.get_all_products()
+    selected_product_id = request.args.get('product_id')
+    inventory_batches = []
+    selected_product_name = None
+
+    if selected_product_id:
+        try:
+            # Fetch current and last 3 lines (total 4), ordered by id descending
+            # to get the most recently added batches.
+            inventory_batches = manager.get_inventory_batches_for_product(
+                product_id=int(selected_product_id),
+                limit=4,
+                order_by_id_desc=True
+            )
+            # The method returns them in DESC order of ID (most recent first).
+            # The template iterates as is (most recent first). If oldest of these 4 should be first,
+            # they would need to be reversed here: inventory_batches.reverse()
+
+            selected_product = manager.get_product(int(selected_product_id))
+            if selected_product:
+                selected_product_name = selected_product['name']
+        except ValueError: # Handles error from int(selected_product_id)
+            flash("Invalid product ID format provided.", "error")
+            selected_product_id = None # Reset to avoid further errors
+            inventory_batches = [] # Ensure it's an empty list
+            # selected_product_name remains None or its previous state
+
+    if request.method == 'POST':
+        include_in_projections = request.form.get('include_in_projections') == 'true'
+
+        # selected_product_id is needed for the redirect, try to get it from form if hidden field added,
+        # or from the original GET param if still in context.
+        # For safety, it's better if product_id is part of the form submission.
+        # Let's assume 'product_id' (the one for the dropdown) is also submitted,
+        # or we re-fetch/validate it if necessary.
+        # The current HTML form doesn't explicitly submit the overall 'product_id' for the page,
+        # only 'product_id' for the dropdown selection (which causes a GET).
+        # The `selected_product_id` variable should be available from the GET part of the view if the page reloads.
+        # For the redirect:
+        page_product_id_for_redirect = request.form.get('product_id_for_redirect') # Assuming we add this hidden field
+
+        # Iterate through form data to find batch adjustments
+        i = 0
+        while True:
+            batch_id_str = request.form.get(f'batch_id_{i}')
+            if batch_id_str is None:
+                break # No more batches in the form
+
+            new_quantity_str = request.form.get(f'quantity_{i}')
+            new_purchase_date_str = request.form.get(f'purchase_date_{i}')
+            new_expiry_date_str = request.form.get(f'expiry_date_{i}')
+
+            if not batch_id_str: # Should not happen if form is structured correctly
+                i += 1
+                continue
+
+            try:
+                batch_id = int(batch_id_str)
+                # Call the manager method
+                # NOTE: The `include_in_projections` variable is captured but not yet passed to `adjust_inventory_batch`.
+                # This will be addressed if `adjust_inventory_batch` is updated to use it.
+                result = manager.adjust_inventory_batch(
+                    batch_id=batch_id,
+                    new_quantity_str=new_quantity_str,
+                    new_purchase_date_str=new_purchase_date_str,
+                    new_expiry_date_str=new_expiry_date_str,
+                    include_in_projections=include_in_projections # Ensure this is passed
+                )
+
+                if result.get("success"):
+                    flash(result["message"], 'success')
+                else:
+                    flash(f"Error for batch ID {batch_id}: {result.get('message', 'Unknown error.')}", 'error')
+
+            except ValueError:
+                flash(f"Invalid Batch ID format: {batch_id_str}", "error")
+            except Exception as e: # Catch any other unexpected errors during adjustment
+                flash(f"An unexpected error occurred processing batch ID {batch_id_str}: {e}", "error")
+
+            i += 1
+
+        # If page_product_id_for_redirect was not available, try selected_product_id from GET context
+        redirect_product_id = page_product_id_for_redirect if page_product_id_for_redirect else selected_product_id
+
+        if redirect_product_id:
+            return redirect(url_for('edit_inventory_view', product_id=redirect_product_id))
+        else:
+            # If no product_id is known (e.g., if form submission was manipulated or state lost)
+            # redirect to the plain edit page or current inventory.
+            flash("No product context for redirect, returning to general edit page.", "warning")
+            return redirect(url_for('edit_inventory_view'))
+
+    return render_template('edit_inventory.html',
+                           products=products_for_dropdown,
+                           selected_product_id=selected_product_id,
+                           selected_product_name=selected_product_name,
+                           inventory_batches=inventory_batches)
+
 
 if __name__ == '__main__':
     # Debug mode should be False in a production environment

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Inventory{% endblock %}
+
+{% block content %}
+<h1>Edit Inventory</h1>
+<form method="POST" action="{{ url_for('edit_inventory_view') }}">
+    {% if selected_product_id %}
+    <input type="hidden" name="product_id_for_redirect" value="{{ selected_product_id }}">
+    {% endif %}
+    <div>
+        <label for="include_in_projections">Include in Demand Projections:</label>
+        <input type="checkbox" id="include_in_projections" name="include_in_projections" value="true">
+    </div>
+    <div>
+        <label for="product_id">Product:</label>
+        <select id="product_id" name="product_id" required>
+            <option value="">Select a Product...</option>
+            {% for product in products %}
+            <option value="{{ product.id }}" {% if selected_product_id == product.id|string %}selected{% endif %}>
+                {{ product.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    {% if inventory_batches %}
+    <h2>Inventory Batches for {{ selected_product_name }}</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Batch ID</th>
+                <th>Current Quantity</th>
+                <th>Purchase Date</th>
+                <th>Expiry Date</th>
+                <th>New Quantity</th>
+                <th>New Purchase Date</th>
+                <th>New Expiry Date</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for batch in inventory_batches %}
+            <tr>
+                <td>{{ batch.id }}<input type="hidden" name="batch_id_{{ loop.index0 }}" value="{{ batch.id }}"></td>
+                <td>{{ batch.quantity }}</td>
+                <td>{{ batch.purchase_date.isoformat() if batch.purchase_date else 'N/A' }}</td>
+                <td>{{ batch.expiry_date.isoformat() if batch.expiry_date else 'N/A' }}</td>
+                <td><input type="number" step="any" name="quantity_{{ loop.index0 }}" value="{{ batch.quantity }}"></td>
+                <td><input type="date" name="purchase_date_{{ loop.index0 }}" value="{{ batch.purchase_date.isoformat() if batch.purchase_date else '' }}"></td>
+                <td><input type="date" name="expiry_date_{{ loop.index0 }}" value="{{ batch.expiry_date.isoformat() if batch.expiry_date else '' }}"></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% elif selected_product_id %}
+    <p>No inventory batches found for {{ selected_product_name }}.</p>
+    {% endif %}
+
+    <div>
+        <button type="submit">Save Changes</button>
+    </div>
+</form>
+
+<script>
+    // Add event listener to product dropdown to reload page with selected product
+    document.getElementById('product_id').addEventListener('change', function() {
+        if (this.value) {
+            window.location.href = "{{ url_for('edit_inventory_view') }}?product_id=" + this.value;
+        } else {
+            window.location.href = "{{ url_for('edit_inventory_view') }}";
+        }
+    });
+</script>
+{% endblock %}

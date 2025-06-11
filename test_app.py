@@ -871,3 +871,214 @@ class TestProductRoutes(BaseAppTest):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestAppEditInventoryRoute(BaseAppTest):
+
+    def test_edit_inventory_get_no_product_id(self):
+        response = self.client.get('/inventory/edit')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Edit Inventory", response.data)
+        self.assertIn(b"Select a Product...", response.data)
+        self.assertNotIn(b"Inventory Batches for", response.data) # No product selected, so no batches table
+
+    def test_edit_inventory_get_with_product_id_no_batches(self):
+        p_id = self._create_app_product(name="Product NoBatch", default_expiry_days=7)
+        response = self.client.get(f'/inventory/edit?product_id={p_id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Edit Inventory", response.data)
+        self.assertIn(f'value="{p_id}" selected'.encode(), response.data) # Check if product is selected
+        self.assertIn(b"Inventory Batches for Product NoBatch", response.data)
+        self.assertIn(b"No inventory batches found for Product NoBatch", response.data)
+
+    def test_edit_inventory_get_with_product_id_with_batches(self):
+        p_id = self._create_app_product(name="Product WithBatches", default_expiry_days=5)
+        stock_res_1 = self._add_app_inventory_stock(p_id, "10 units", self.today_str)
+        stock_res_2 = self._add_app_inventory_stock(p_id, "5 units", (self.today - timedelta(days=1)).isoformat())
+
+        response = self.client.get(f'/inventory/edit?product_id={p_id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Edit Inventory", response.data)
+        self.assertIn(f'value="{p_id}" selected'.encode(), response.data)
+        self.assertIn(b"Inventory Batches for Product WithBatches", response.data)
+
+        # Check if batch data is in the form. Batches are ordered by ID DESC in the view logic.
+        # The get_inventory_batches_for_product orders by id DESC, so most recent first.
+        # stock_res_2 should have a higher ID than stock_res_1 if DB IDs are sequential
+        self.assertIn(f'name="batch_id_0" value="{stock_res_2.get("stock_item_id")}"'.encode(), response.data)
+        self.assertIn(b'value="5 units"', response.data)
+        self.assertIn(f'name="batch_id_1" value="{stock_res_1.get("stock_item_id")}"'.encode(), response.data)
+        self.assertIn(b'value="10 units"', response.data)
+
+    def test_edit_inventory_get_invalid_product_id(self):
+        # response = self.client.get('/inventory/edit?product_id=invalid999')
+        # self.assertEqual(response.status_code, 200)
+        # self.assertIn(b"Edit Inventory", response.data)
+        with self.client: # Use context manager to access session for flashed messages
+            response = self.client.get('/inventory/edit?product_id=invalid999')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Edit Inventory", response.data)
+            flashed_messages = [msg for category, msg in self.client.session.get('_flashes', [])]
+        self.assertIn("Invalid product ID format provided.", flashed_messages)
+        self.assertNotIn(b"Inventory Batches for", response.data)
+
+
+    def test_edit_inventory_post_adjust_quantity_include_projections_true(self):
+        p_id = self._create_app_product(name="Product AdjustTrue", default_expiry_days=10)
+        stock_res = self._add_app_inventory_stock(p_id, "100 units", self.today_str)
+        batch_id = stock_res.get("stock_item_id")
+
+        initial_historical_count = len(app.manager.get_historical_inventory())
+
+        form_data = {
+            f'batch_id_0': str(batch_id),
+            f'quantity_0': '80',
+            f'purchase_date_0': self.today_str,
+            f'expiry_date_0': (self.today + timedelta(days=10)).isoformat(),
+            'include_in_projections': 'true',
+            'product_id_for_redirect': str(p_id)
+        }
+        with self.client:
+            response = self.client.post(f'/inventory/edit?product_id={p_id}', data=form_data, follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Batch ID " + str(batch_id).encode() + b" ('Product AdjustTrue') updated.", response.data)
+        self.assertIn(b"Adjustment of 20.0 units recorded for projections.", response.data)
+
+        updated_batches = app.manager.get_inventory_batches_for_product(p_id)
+        self.assertEqual(len(updated_batches), 1)
+        self.assertEqual(updated_batches[0]['id'], batch_id)
+        self.assertEqual(updated_batches[0]['quantity'], "80")
+
+        historical_items = app.manager.get_historical_inventory()
+        self.assertEqual(len(historical_items), initial_historical_count + 1)
+        adjustment_log = [h for h in historical_items if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']]
+        self.assertEqual(len(adjustment_log), 1)
+        self.assertEqual(adjustment_log[0]['quantity_consumed_this_time'], 20.0)
+
+    def test_edit_inventory_post_adjust_quantity_include_projections_false(self):
+        p_id = self._create_app_product(name="Product AdjustFalse", default_expiry_days=10)
+        stock_res = self._add_app_inventory_stock(p_id, "50 units", self.today_str)
+        batch_id = stock_res.get("stock_item_id")
+
+        # Count specific adjustment logs before action
+        relevant_historical_before = [
+            h for h in app.manager.get_historical_inventory()
+            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']
+        ]
+        initial_relevant_historical_count = len(relevant_historical_before)
+
+        form_data = {
+            f'batch_id_0': str(batch_id),
+            f'quantity_0': '40',
+            f'purchase_date_0': self.today_str,
+            f'expiry_date_0': (self.today + timedelta(days=10)).isoformat(),
+            'product_id_for_redirect': str(p_id)
+            # include_in_projections is not sent, simulating unchecked box
+        }
+
+        with self.client:
+            response = self.client.post(f'/inventory/edit?product_id={p_id}', data=form_data, follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Batch ID " + str(batch_id).encode() + b" ('Product AdjustFalse') updated.", response.data)
+        self.assertIn(b"Quantity updated without impacting projections history.", response.data)
+
+        updated_batches = app.manager.get_inventory_batches_for_product(p_id)
+        self.assertEqual(updated_batches[0]['quantity'], "40")
+
+        relevant_historical_after = [
+            h for h in app.manager.get_historical_inventory()
+            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']
+        ]
+        self.assertEqual(len(relevant_historical_after), initial_relevant_historical_count, "Historical log should not be created for this adjustment.")
+
+    def test_edit_inventory_post_adjust_quantity_to_zero_delete_and_log(self):
+        p_id = self._create_app_product(name="Product ToDeleteLog", default_expiry_days=10)
+        stock_res = self._add_app_inventory_stock(p_id, "25 units", self.today_str)
+        batch_id = stock_res.get("stock_item_id")
+        initial_historical_count = len(app.manager.get_historical_inventory())
+
+        form_data = {
+            f'batch_id_0': str(batch_id),
+            f'quantity_0': '0',
+            f'purchase_date_0': self.today_str,
+            f'expiry_date_0': (self.today + timedelta(days=10)).isoformat(),
+            'include_in_projections': 'true',
+            'product_id_for_redirect': str(p_id)
+        }
+        with self.client:
+            response = self.client.post(f'/inventory/edit?product_id={p_id}', data=form_data, follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Batch ID " + str(batch_id).encode() + b" ('Product ToDeleteLog') deleted", response.data)
+        self.assertIn(b"Adjustment of 25.0 units recorded for projections.", response.data)
+
+        batches_after_delete = app.manager.get_inventory_batches_for_product(p_id)
+        self.assertEqual(len(batches_after_delete), 0)
+
+        historical_items = app.manager.get_historical_inventory()
+        self.assertEqual(len(historical_items), initial_historical_count + 1)
+        adjustment_log = [h for h in historical_items if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']]
+        self.assertEqual(len(adjustment_log), 1)
+        self.assertEqual(adjustment_log[0]['quantity_consumed_this_time'], 25.0)
+
+    def test_edit_inventory_post_adjust_quantity_to_zero_delete_no_log(self):
+        p_id = self._create_app_product(name="Product ToDeleteNoLog", default_expiry_days=10)
+        stock_res = self._add_app_inventory_stock(p_id, "30 units", self.today_str)
+        batch_id = stock_res.get("stock_item_id")
+
+        relevant_historical_before = [
+            h for h in app.manager.get_historical_inventory()
+            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']
+        ]
+        initial_relevant_historical_count = len(relevant_historical_before)
+
+        form_data = {
+            f'batch_id_0': str(batch_id),
+            f'quantity_0': '0',
+            f'purchase_date_0': self.today_str,
+            f'expiry_date_0': (self.today + timedelta(days=10)).isoformat(),
+            # include_in_projections not sent
+            'product_id_for_redirect': str(p_id)
+        }
+        with self.client:
+            response = self.client.post(f'/inventory/edit?product_id={p_id}', data=form_data, follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Batch ID " + str(batch_id).encode() + b" ('Product ToDeleteNoLog') deleted", response.data)
+        self.assertIn(b"Quantity updated without impacting projections history.", response.data)
+
+        batches_after_delete = app.manager.get_inventory_batches_for_product(p_id)
+        self.assertEqual(len(batches_after_delete), 0)
+
+        relevant_historical_after = [
+            h for h in app.manager.get_historical_inventory()
+            if h.get('notes') and f"Batch ID {batch_id} quantity adjusted" in h['notes']
+        ]
+        self.assertEqual(len(relevant_historical_after), initial_relevant_historical_count)
+
+
+    def test_edit_inventory_post_invalid_batch_data(self):
+        p_id = self._create_app_product(name="Product InvalidBatch", default_expiry_days=10)
+        stock_res = self._add_app_inventory_stock(p_id, "10 units", self.today_str)
+        batch_id = stock_res.get("stock_item_id")
+
+        form_data = {
+            f'batch_id_0': str(batch_id),
+            f'quantity_0': '-5',
+            f'purchase_date_0': 'bad-date-format',
+            f'expiry_date_0': (self.today + timedelta(days=10)).isoformat(),
+            'include_in_projections': 'true',
+            'product_id_for_redirect': str(p_id)
+        }
+
+        with self.client:
+            response = self.client.post(f'/inventory/edit?product_id={p_id}', data=form_data, follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Quantity cannot be negative.", response.data)
+
+        batches_after_attempt = app.manager.get_inventory_batches_for_product(p_id)
+        self.assertEqual(len(batches_after_attempt), 1)
+        self.assertEqual(batches_after_attempt[0]['quantity'], "10 units")
