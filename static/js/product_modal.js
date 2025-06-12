@@ -1,0 +1,184 @@
+// Wait for the DOM to be fully loaded before trying to access elements
+document.addEventListener('DOMContentLoaded', () => {
+
+    // Modal DOM Elements
+    const productDetailModal = document.getElementById('productDetailModal');
+    const modalProductName = document.getElementById('modalProductName');
+    const modalProductInfo = document.getElementById('modalProductInfo');
+    const dailyConsumptionChartCanvas = document.getElementById('dailyConsumptionChart');
+    const monthlyConsumptionChartCanvas = document.getElementById('monthlyConsumptionChart');
+
+    // Attempt to get the close button. QuerySelector for class.
+    const closeButton = document.querySelector('#productDetailModal .close-button');
+
+    // Chart Instances
+    let dailyChartInstance;
+    let monthlyChartInstance;
+
+    // Check if all essential modal elements are found
+    if (!productDetailModal || !modalProductName || !modalProductInfo || !dailyConsumptionChartCanvas || !monthlyConsumptionChartCanvas || !closeButton) {
+        console.error('Essential modal elements not found. Product modal functionality may be affected.');
+        // You might want to disable features or return if critical elements are missing.
+        // For now, we'll let it proceed, and individual functions will handle null checks if necessary.
+    }
+
+    function formatLabel(key) {
+        // Converts snake_case or camelCase to Title Case
+        const result = key.replace(/([A-Z])/g, " $1").replace(/_/g, " ");
+        return result.charAt(0).toUpperCase() + result.slice(1);
+    }
+
+    // openProductModal function (globally accessible for now, or can be attached to window)
+    window.openProductModal = async function(productId) {
+        if (!productDetailModal) {
+            console.error("Modal element not found, cannot open.");
+            return;
+        }
+        try {
+            const response = await fetch(`/product_modal_details/${productId}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+
+            // Populate Product Information
+            if (modalProductName) {
+                modalProductName.textContent = data.product_details.name || 'N/A';
+            }
+
+            if (modalProductInfo) {
+                modalProductInfo.innerHTML = ''; // Clear existing items
+                const detailsToShow = [
+                    'name', 'category', 'subcategory', 'unit_of_measure',
+                    'default_expiry_days', 'par_level', 'max_holding_amount', 'purchase_location'
+                ];
+                detailsToShow.forEach(key => {
+                    const value = data.product_details[key];
+                    const li = document.createElement('li');
+                    li.innerHTML = `<strong>${formatLabel(key)}:</strong> ${value !== null && value !== undefined ? value : 'N/A'}`;
+                    modalProductInfo.appendChild(li);
+                });
+            }
+
+            // Render Charts
+            if (dailyConsumptionChartCanvas) {
+                 renderDailyChart(data.daily_consumption || []);
+            }
+            if (monthlyConsumptionChartCanvas) {
+                renderMonthlyChart(data.monthly_consumption || []);
+            }
+
+            productDetailModal.style.display = 'block';
+        } catch (error) {
+            console.error('Error fetching product details:', error);
+            if (modalProductInfo) {
+                modalProductInfo.innerHTML = '<li>Error loading product details. Please try again later.</li>';
+            }
+            if (modalProductName) {
+                modalProductName.textContent = "Error";
+            }
+             // Still display the modal to show the error message
+            if (productDetailModal) productDetailModal.style.display = 'block';
+        }
+    }
+
+    // closeProductModal function
+    window.closeProductModal = function() {
+        if (!productDetailModal) return;
+        productDetailModal.style.display = 'none';
+
+        if (dailyChartInstance) {
+            dailyChartInstance.destroy();
+            dailyChartInstance = null; // Clear instance
+        }
+        if (monthlyChartInstance) {
+            monthlyChartInstance.destroy();
+            monthlyChartInstance = null; // Clear instance
+        }
+    }
+
+    // Event Listener for Close Button
+    if (closeButton) {
+        closeButton.addEventListener('click', closeProductModal);
+    } else {
+        console.warn("Close button not found for product detail modal.");
+    }
+
+    // Event Listener for Clicking Outside Modal
+    window.addEventListener('click', (event) => {
+        if (event.target === productDetailModal) {
+            closeProductModal();
+        }
+    });
+
+    // renderDailyChart function
+    function renderDailyChart(dailyData) {
+        if (!dailyConsumptionChartCanvas) return;
+        const ctx = dailyConsumptionChartCanvas.getContext('2d');
+
+        const labels = dailyData.map(item => item.consumption_date); // Corrected from item.date
+        const dataValues = dailyData.map(item => item.total_quantity_consumed);
+
+        if (dailyChartInstance) {
+            dailyChartInstance.destroy();
+        }
+        dailyChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Quantity Consumed',
+                    data: dataValues,
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    tension: 0.1,
+                    fill: true,
+                }]
+            },
+            options: {
+                scales: { y: { beginAtZero: true, suggestedMax: Math.max(...dataValues, 0) + 1  } }, // Ensure y-axis adapts
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true },
+                    title: { display: false } // No separate title, using h4 above canvas
+                }
+            }
+        });
+    }
+
+    // renderMonthlyChart function
+    function renderMonthlyChart(monthlyData) {
+        if (!monthlyConsumptionChartCanvas) return;
+        const ctx = monthlyConsumptionChartCanvas.getContext('2d');
+
+        const labels = monthlyData.map(item => item.consumption_month); // Corrected from item.month
+        const dataValues = monthlyData.map(item => item.total_quantity_consumed);
+
+        if (monthlyChartInstance) {
+            monthlyChartInstance.destroy();
+        }
+        monthlyChartInstance = new Chart(ctx, {
+            type: 'bar', // Changed to bar for variety, can be line too
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Quantity Consumed',
+                    data: dataValues,
+                    borderColor: 'rgb(153, 102, 255)',
+                    backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                }]
+            },
+            options: {
+                scales: { y: { beginAtZero: true, suggestedMax: Math.max(...dataValues, 0) + 1 } }, // Ensure y-axis adapts
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true },
+                    title: { display: false }
+                }
+            }
+        });
+    }
+});

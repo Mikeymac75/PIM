@@ -90,7 +90,13 @@
             <tbody>
                 {% for item in items %}
                 <tr>
-                    <td>{{ item.name }}</td>
+                    <td>
+                        {% if item.product_id %}
+                        <a href="#" class="product-name-link" data-product-id="{{ item.product_id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ item.name }}</a>
+                        {% else %}
+                        {{ item.name }}
+                        {% endif %}
+                    </td>
                     <td>{{ "%.2f"|format(item.quantity_consumed_this_time) if item.quantity_consumed_this_time is number else item.quantity_consumed_this_time }}</td>
                     <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td>
                     <td>{{ item.category if item.category else '-' }}</td>

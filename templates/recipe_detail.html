@@ -33,7 +33,13 @@
                 <tbody>
                     {% for ing in ingredients_status %}
                         <tr class="{{ 'sufficient' if ing.sufficient else 'insufficient' }}">
-                            <td>{{ ing.name }}</td>
+                            <td>
+                                {% if ing.product_id %}
+                                <a href="#" class="product-name-link" data-product-id="{{ ing.product_id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ ing.name }}</a>
+                                {% else %}
+                                {{ ing.name }}
+                                {% endif %}
+                            </td>
                             <td class="text-right">{{ "%.2f"|format(ing.required) if ing.required is number else ing.required }} {{ ing.unit_of_measure }}</td>
                             <td class="text-right">{{ "%.2f"|format(ing.available) if ing.available is number else ing.available }} {{ ing.unit_of_measure }}</td>
                             <td class="text-right">{{ "%.2f"|format(ing.remaining) if ing.remaining is number else ing.remaining }} {{ ing.unit_of_measure }}</td>

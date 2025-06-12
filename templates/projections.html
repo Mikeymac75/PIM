@@ -87,7 +87,13 @@
             <tbody>
                 {% for proj in projections %}
                 <tr {% if proj.consumption_override_rate is not none and proj.consumption_override_rate != "" %}class="override-active"{% endif %}> {# Row Styling #}
-                    <td>{{ proj.item_name }}</td> {# This is product_name or historical_item_name #}
+                    <td>
+                        {% if proj.product_id %}
+                        <a href="#" class="product-name-link" data-product-id="{{ proj.product_id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ proj.item_name }}</a>
+                        {% else %}
+                        {{ proj.item_name }}
+                        {% endif %}
+                    </td> {# This is product_name or historical_item_name #}
                     <td class="text-right">{{ "%.2f"|format(proj.current_stock) if proj.current_stock is number else proj.current_stock }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
                     <td class="text-right"> {# Avg Daily Consumption with Override Indicator #}
                         {{ "%.2f"|format(proj.avg_daily_consumption) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}/day

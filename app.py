@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from Food_manager import InventoryManager
 from recipe_manager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
@@ -687,17 +687,22 @@ def recipe_detail_view(recipe_name):
             # Fetch product details to get unit_of_measure
             product_details = manager.get_product_by_name(item_name)
             product_unit_of_measure = 'units' # Default unit
-            if product_details and product_details.get('unit_of_measure'):
-                product_unit_of_measure = product_details['unit_of_measure']
+            ingredient_product_id = None # Default to None
+            if product_details:
+                if product_details.get('unit_of_measure'):
+                    product_unit_of_measure = product_details['unit_of_measure']
+                if product_details.get('id'):
+                    ingredient_product_id = product_details['id']
 
             ingredients_status.append({
                 'name': item_name,
+                'product_id': ingredient_product_id, # Add product_id here
                 'required': required_qty,
                 'available': available_qty,
                 'remaining': remaining_qty,
                 'sufficient': sufficient,
                 'needed_more': -remaining_qty if not sufficient else 0,
-                'unit_of_measure': product_unit_of_measure
+                'unit_of_measure': product_unit_of_measure,
             })
     else: # Recipe has no ingredients listed
         recipe_makeable = True # Technically makeable if no ingredients are needed
@@ -1314,6 +1319,27 @@ def edit_inventory_view():
                            selected_product_name=selected_product_name,
                            inventory_batches=inventory_batches)
 
+@app.route('/product_modal_details/<int:product_id>', methods=['GET'])
+def product_modal_details(product_id):
+    product_details = manager.get_product_details(product_id)
+
+    if not product_details:
+        return jsonify({"error": "Product not found"}), 404
+
+    # get_daily_consumption defaults to 30 days
+    daily_consumption = manager.get_daily_consumption(product_id)
+    # get_monthly_consumption defaults to 12 months
+    monthly_consumption = manager.get_monthly_consumption(product_id)
+
+    # Ensure all date/datetime objects are converted to ISO format strings for JSON serialization
+    # For product_details, this depends on its structure. Assuming it's a dict from DB Row.
+    # For consumption data, the manager methods already format dates as strings.
+
+    return jsonify({
+        "product_details": product_details, # Assuming product_details is already JSON serializable
+        "daily_consumption": daily_consumption,
+        "monthly_consumption": monthly_consumption
+    })
 
 if __name__ == '__main__':
     # Debug mode should be False in a production environment

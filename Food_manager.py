@@ -121,6 +121,89 @@ class InventoryManager:
             print(f"Database error getting product by ID {product_id}: {e}")
             return None # Or raise error
 
+    def get_product_details(self, product_id):
+        """Retrieves a product by its ID, ensuring all necessary fields for the modal are present."""
+        # For now, this is a simple wrapper.
+        # Future enhancements could involve joining with other tables or specific field validation.
+        return self.get_product(product_id)
+
+    def get_daily_consumption(self, product_id, days=30):
+        """
+        Retrieves daily consumption for a product over a specified number of days.
+        - product_id: The ID of the product.
+        - days: The number of past days to fetch data for.
+        """
+        consumption_data = []
+        today = date.today()
+        start_date = today - timedelta(days=days)
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT
+                        strftime('%Y-%m-%d', consumed_date) as consumption_date,
+                        SUM(quantity_consumed_this_time) as total_quantity_consumed
+                    FROM historical_items
+                    WHERE product_id = ? AND consumed_date >= ?
+                    GROUP BY consumption_date
+                    ORDER BY consumption_date ASC
+                ''', (product_id, start_date.isoformat()))
+                rows = cursor.fetchall()
+                for row in rows:
+                    consumption_data.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error getting daily consumption for product ID {product_id}: {e}")
+            # Depending on requirements, could return empty list or raise error
+        return consumption_data
+
+    def get_monthly_consumption(self, product_id, months=12):
+        """
+        Retrieves monthly consumption for a product over a specified number of months.
+        - product_id: The ID of the product.
+        - months: The number of past months to fetch data for.
+        """
+        consumption_data = []
+        # Calculate the first day of the month 'months' ago
+        # This is a bit tricky to get precisely the Nth month back.
+        # A simpler approach for SQL is to filter for dates >= the first day of that month.
+        today = date.today()
+        # Approximate start_date: go back (months * average_days_in_month)
+        # A more robust way is to iterate back month by month or use date library functions
+        # For SQL, we can use date functions if available and portable,
+        # or filter for a wider range and then process in Python if needed.
+        # Simplest for SQLite: calculate the date string for "N months ago"
+        # and group by YYYY-MM.
+
+        # Calculate the first day of the current month
+        first_day_current_month = today.replace(day=1)
+
+        # Iterate backwards to find the first day of the month N months ago
+        target_month_date = first_day_current_month
+        for _ in range(months -1): # Subtract 1 because current month counts as one of the 'months'
+            # Move to the last day of the previous month
+            target_month_date = (target_month_date - timedelta(days=1)).replace(day=1)
+
+        start_month_iso = target_month_date.isoformat()
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT
+                        strftime('%Y-%m', consumed_date) as consumption_month,
+                        SUM(quantity_consumed_this_time) as total_quantity_consumed
+                    FROM historical_items
+                    WHERE product_id = ? AND date(consumed_date) >= date(?)
+                    GROUP BY consumption_month
+                    ORDER BY consumption_month ASC
+                ''', (product_id, start_month_iso))
+                rows = cursor.fetchall()
+                for row in rows:
+                    consumption_data.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error getting monthly consumption for product ID {product_id}: {e}")
+        return consumption_data
+
     def get_product_by_name(self, name):
         """Retrieves a product by its name."""
         try:
