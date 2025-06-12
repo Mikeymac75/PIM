@@ -54,8 +54,7 @@
                     {# Helper macro for sortable headers #}
                     {% macro sortable_header(column_key, display_name, current_sort_by_products, current_sort_order_products, current_product_filters) %}
                         {% set new_sort_order_products = 'DESC' if current_sort_by_products == column_key and current_sort_order_products == 'ASC' else 'ASC' %}
-                        {% set updated_filters = current_product_filters.copy() %}
-                        {% do updated_filters.update({'sort_by': column_key, 'sort_order': new_sort_order_products}) %}
+                        {% set updated_filters = dict(current_product_filters, sort_by=column_key, sort_order=new_sort_order_products) %}
                         <th class="projections-header">
                             <a href="{{ url_for('projections_view', **updated_filters) }}">
                                 {{ display_name }}

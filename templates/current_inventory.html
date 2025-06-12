@@ -79,8 +79,7 @@
                     {# Helper macro for sortable headers #}
                     {% macro sortable_header(column_key, display_name, current_sort_by, current_sort_order, current_filters) %}
                         {% set new_sort_order = 'DESC' if current_sort_by == column_key and current_sort_order == 'ASC' else 'ASC' %}
-                        {% set updated_filters = current_filters.copy() %}
-                        {% do updated_filters.update({'sort_by': column_key, 'sort_order': new_sort_order}) %}
+                        {% set updated_filters = dict(current_filters, sort_by=column_key, sort_order=new_sort_order) %}
                         <th class="current-inventory-header">
                             <a href="{{ url_for('current_inventory_view', **updated_filters) }}">
                                 {{ display_name }}
