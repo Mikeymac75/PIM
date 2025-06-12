@@ -546,6 +546,9 @@ class InventoryManager:
         - Logs each consumption event (even partial from a batch) to `historical_items`.
         - Returns a dictionary with success status and detailed messages.
         """
+        if quantity_to_consume_float <= 0:
+            return {"success": False, "message": "Quantity to consume must be positive."}
+
         log_messages = []
         consumed_amount_total_overall = 0.0
         quantity_remaining_to_consume = float(quantity_to_consume_float)
