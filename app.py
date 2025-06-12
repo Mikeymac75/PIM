@@ -45,32 +45,182 @@ def home():
 
 @app.route('/inventory/current')
 def current_inventory_view():
-    inventory_items_raw = manager.get_current_inventory()
+    # Retrieve filter and sort parameters from request.args
+    search_term = request.args.get('search_term', '').strip()
+    selected_category = request.args.get('category', '').strip()
+    selected_purchase_location = request.args.get('purchase_location', '').strip()
+    expiry_start_date = request.args.get('expiry_start_date', '').strip()
+    expiry_end_date = request.args.get('expiry_end_date', '').strip()
+
+    filter_is_below_par_str = request.args.get('filter_is_below_par', 'false').strip().lower()
+    filter_is_below_par = filter_is_below_par_str == 'true'
+
+    sort_by = request.args.get('sort_by', 'expiry_date').strip()
+    sort_order = request.args.get('sort_order', 'ASC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20)) # Default 20 items per page
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Fetch data from manager using SQL-filterable parameters
+    inventory_items_raw = manager.get_current_inventory(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None,
+        expiry_start_date=expiry_start_date if expiry_start_date else None,
+        expiry_end_date=expiry_end_date if expiry_end_date else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
+
+    total_items = manager.get_current_inventory_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None,
+        expiry_start_date=expiry_start_date if expiry_start_date else None,
+        expiry_end_date=expiry_end_date if expiry_end_date else None
+    )
+
+    # Process items and apply is_below_par filter if requested
     processed_inventory_items = []
-    for item_dict in inventory_items_raw: # manager.get_current_inventory() returns list of dicts
-        # Ensure item_dict is a mutable dictionary if it's not already (e.g. if it was a sqlite3.Row)
-        item_processed = dict(item_dict) 
-        
-        # Parse current quantity string to a number for comparison
-        # The _parse_quantity_string method is in InventoryManager
+    for item_dict in inventory_items_raw:
+        item_processed = dict(item_dict)
         numeric_quantity = manager._parse_quantity_string(item_processed['quantity'])
+        par_level = item_processed.get('par_level', 0.0)
+        if par_level is None: par_level = 0.0
+        else: par_level = float(par_level)
         
-        par_level = item_processed.get('par_level', 0.0) # Default to 0.0 if not present
-        if par_level is None: # Handle cases where par_level might be None from DB (though schema defaults to 0)
-            par_level = 0.0
-        else:
-            par_level = float(par_level)
-
         item_processed['is_below_par'] = (numeric_quantity < par_level and par_level > 0)
-        processed_inventory_items.append(item_processed)
 
-    today = date.today() # Get current date
-    return render_template('current_inventory.html', items=processed_inventory_items, today=today, timedelta=timedelta)
+        if filter_is_below_par:
+            if item_processed['is_below_par']:
+                processed_inventory_items.append(item_processed)
+        else:
+            processed_inventory_items.append(item_processed)
+
+    # Pagination calculation (uses total_items from DB before Python-level 'is_below_par' filtering)
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    if page > total_pages and total_pages > 0: # Adjust page if it's out of bounds after filtering
+        page = total_pages
+        # Re-fetching might be needed if is_below_par drastically changed item count for the page
+        # For this iteration, we accept the limitation that a page might show fewer items
+        # if is_below_par is filtered in Python.
+
+    # Fetch filter options
+    categories_options = manager.get_current_inventory_categories()
+    purchase_locations_options = manager.get_current_inventory_purchase_locations()
+
+    today = date.today()
+    return render_template(
+        'current_inventory.html',
+        items=processed_inventory_items,
+        today=today,
+        timedelta=timedelta,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        selected_purchase_location=selected_purchase_location,
+        expiry_start_date=expiry_start_date,
+        expiry_end_date=expiry_end_date,
+        filter_is_below_par=filter_is_below_par, # Pass the boolean
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options,
+        purchase_locations=purchase_locations_options
+    )
 
 @app.route('/inventory/historical')
 def historical_inventory_view():
-    historical_items = manager.get_historical_inventory()
-    return render_template('historical_inventory.html', items=historical_items)
+    # Retrieve filter and sort parameters
+    search_term = request.args.get('search_term', '').strip()
+    selected_category = request.args.get('category', '').strip()
+    consumed_start_date = request.args.get('consumed_start_date', '').strip()
+    consumed_end_date = request.args.get('consumed_end_date', '').strip()
+
+    sort_by = request.args.get('sort_by', 'consumed_date').strip()
+    sort_order = request.args.get('sort_order', 'DESC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'DESC'
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20))
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Fetch data from manager
+    historical_items = manager.get_historical_inventory(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        consumed_start_date=consumed_start_date if consumed_start_date else None,
+        consumed_end_date=consumed_end_date if consumed_end_date else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
+
+    total_items = manager.get_historical_inventory_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        consumed_start_date=consumed_start_date if consumed_start_date else None,
+        consumed_end_date=consumed_end_date if consumed_end_date else None
+    )
+
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+
+    # Adjust page if out of bounds (e.g., after filters change total item count)
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+        # Re-fetch for the new valid page
+        historical_items = manager.get_historical_inventory(
+            search_term=search_term if search_term else None,
+            category=selected_category if selected_category else None,
+            consumed_start_date=consumed_start_date if consumed_start_date else None,
+            consumed_end_date=consumed_end_date if consumed_end_date else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            per_page=per_page
+        )
+
+    # Fetch filter options
+    categories_options = manager.get_historical_inventory_categories()
+
+    return render_template(
+        'historical_inventory.html',
+        items=historical_items,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        consumed_start_date=consumed_start_date,
+        consumed_end_date=consumed_end_date,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options
+    )
 
 @app.route('/inventory/consume', methods=['GET', 'POST'])
 def consume_item_view():
@@ -623,22 +773,90 @@ def make_recipe_view(recipe_name):
 
 @app.route('/inventory/projections')
 def projections_view():
-    unique_item_names_for_proj = _get_unique_item_names(include_historical=True) # Use new helper
+    # Retrieve filter, sort, and pagination parameters for the product list
+    search_term = request.args.get('search_term', '').strip()
+    selected_category = request.args.get('category', '').strip()
+    selected_purchase_location = request.args.get('purchase_location', '').strip()
+
+    sort_by = request.args.get('sort_by', 'name').strip() # Default sort for product list
+    sort_order = request.args.get('sort_order', 'ASC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 10)) # Default 10 products per page for projections
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 10
+
+    # Fetch total count of products for pagination of the product list
+    total_products_for_list = manager.get_products_for_projection_list_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None
+    )
+
+    total_pages = (total_products_for_list + per_page - 1) // per_page if per_page > 0 else 1
+
+    # Adjust page if out of bounds
+    original_page = page
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+    elif page == 0 and total_pages > 0: # Should not happen if page default is 1 and min is 1
+        page = 1
+
+
+    # Fetch the paginated list of products
+    products_on_page = manager.get_products_for_projection_list(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
 
     projection_results_list = []
-    if unique_item_names_for_proj:
-        for item_name in unique_item_names_for_proj:
-            # project_demand in InventoryManager now prints to console AND returns dict.
-            # Flask app will use the returned dict.
-            projection_data = manager.project_demand(item_name) # Uses default lookback/projection days
-            if projection_data and projection_data.get("success", True): # Check for success if manager might return that
-                if 'product_name' in projection_data:
-                    projection_data['item_name'] = projection_data.pop('product_name')
+    if products_on_page:
+        for product_dict in products_on_page:
+            # Using product ID for project_demand is more robust
+            projection_data = manager.project_demand(product_dict['id'])
+            if projection_data: # project_demand returns a dict, might include success status
+                 # Ensure item_name is consistently set from product_name for template
+                if 'product_name' in projection_data and 'item_name' not in projection_data:
+                     projection_data['item_name'] = projection_data['product_name']
                 projection_results_list.append(projection_data)
-            elif projection_data and not projection_data.get("success", True):
-                flash(f"Could not generate projection for {item_name}: {projection_data.get('message', 'Unknown error')}", "error")
-    
-    return render_template('projections.html', projections=projection_results_list)
+            # Optionally, flash a message if a specific projection failed
+            # elif projection_data and not projection_data.get("success", True):
+            #     flash(f"Could not generate projection for {product_dict['name']}: {projection_data.get('message', 'Unknown error')}", "error")
+
+
+    # Fetch filter options for product attributes
+    categories_options = manager.get_all_categories() # Reusing existing method for product categories
+    purchase_locations_options = manager.get_all_purchase_locations() # Reusing existing method
+
+    return render_template(
+        'projections.html',
+        projections=projection_results_list,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        selected_purchase_location=selected_purchase_location,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options,
+        purchase_locations=purchase_locations_options
+        # lookback_days and projection_days can be added if they become configurable
+    )
 
 @app.route('/shopping_list')
 def shopping_list_view():
