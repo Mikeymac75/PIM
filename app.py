@@ -858,6 +858,45 @@ def projections_view():
         # lookback_days and projection_days can be added if they become configurable
     )
 
+@app.route('/projections/save_overrides', methods=['POST'])
+def save_overrides_view():
+    if request.method == 'POST':
+        overrides_to_save = []
+        for key, value in request.form.items():
+            if key.startswith('overrides['):
+                try:
+                    # Extract product_id from 'overrides[<product_id>]'
+                    start_index = key.find('[') + 1
+                    end_index = key.find(']')
+                    product_id_str = key[start_index:end_index]
+                    product_id = int(product_id_str)
+
+                    # Value is the override rate string
+                    # Empty string will be handled by manager as None/NULL
+                    rate_str = value.strip()
+
+                    overrides_to_save.append({
+                        'product_id': product_id,
+                        'override_rate': rate_str if rate_str else None
+                    })
+                except (ValueError, IndexError) as e:
+                    flash(f"Error parsing override data for key {key}: {e}", 'error')
+                    # Continue to process other valid entries
+
+        if not overrides_to_save and not request.form:
+             flash("No override data submitted.", 'info')
+        elif overrides_to_save:
+            result = manager.save_consumption_overrides(overrides_to_save)
+            if result.get("success"):
+                flash(result.get("message", "Consumption overrides saved successfully."), 'success')
+            else:
+                flash(result.get("message", "Failed to save consumption overrides."), 'error')
+        elif not overrides_to_save and request.form: # request.form was not empty, but parsing failed for all
+            flash("Submitted override data was not in the expected format.", "error")
+
+
+    return redirect(url_for('projections_view'))
+
 @app.route('/shopping_list')
 def shopping_list_view():
     store_filter = request.args.get('store', '').strip()

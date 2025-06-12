@@ -434,3 +434,44 @@ tr.below-par-level:hover td {
 
 /* Product List Table Header Color */
 th.product-list-header { background-color: #6c757d; }
+
+/* Styling for Demand Projections Override Feature */
+.projections-header { /* Minor adjustment for consistency if needed, or leave as is */
+    /* text-align: left; */ /* Example, if headers need specific alignment */
+}
+
+.override-input {
+    width: 80px; /* Adjust width as needed */
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Important for width calculation */
+}
+
+.override-input:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+}
+
+tr.override-active {
+    background-color: #e6f7ff; /* A light blue background for overridden rows */
+    font-weight: normal; /* Ensure text isn't unexpectedly bolded unless specified */
+}
+
+tr.override-active td {
+    /* font-weight: bold; */ /* Optional: if you want all text in active override rows to be bold */
+}
+
+.override-indicator {
+    font-size: 0.8em;
+    color: #007bff; /* Blue to match focus rings or primary buttons */
+    margin-left: 5px;
+    font-style: italic;
+    font-weight: bold; /* Make the (Override) text stand out */
+}
+
+/* Ensure the save button has some spacing if it's too close to the table */
+/* The inline style 'margin-top: 15px;' was added in the HTML, which is fine. */
+/* form[action*="save_overrides_view"] button[type="submit"] { */
+/* margin-top: 15px; */
+/* } */

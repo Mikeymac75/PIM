@@ -46,7 +46,8 @@ class InventoryManager:
                         default_expiry_days INTEGER NOT NULL,
                         par_level REAL DEFAULT 0,
                         max_holding_amount REAL DEFAULT 0,
-                        purchase_location TEXT
+    purchase_location TEXT,
+    consumption_override_rate REAL DEFAULT NULL
                     )
                 ''')
 
@@ -315,6 +316,71 @@ class InventoryManager:
             return {"success": False, "message": f"Product name '{name}' may already exist for another product."}
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error updating product: {e}"}
+
+    def save_consumption_overrides(self, product_overrides: list):
+        """
+        Saves consumption override rates for products.
+        - product_overrides: A list of dictionaries, where each dictionary is
+                             {'product_id': int, 'override_rate': float_or_none_or_empty_str}.
+        """
+        if not isinstance(product_overrides, list):
+            return {"success": False, "message": "Invalid input: product_overrides must be a list."}
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                updates_made = 0
+                errors_encountered = 0
+
+                for override_item in product_overrides:
+                    if not isinstance(override_item, dict) or \
+                       'product_id' not in override_item or \
+                       'override_rate' not in override_item:
+                        print(f"Skipping invalid override item: {override_item}")
+                        errors_encountered += 1
+                        continue
+
+                    product_id = override_item['product_id']
+                    override_rate_input = override_item['override_rate']
+
+                    final_override_rate = None # Default to NULL
+
+                    if isinstance(override_rate_input, str):
+                        if override_rate_input.strip() == "":
+                            final_override_rate = None
+                        else:
+                            try:
+                                final_override_rate = float(override_rate_input)
+                            except ValueError:
+                                print(f"Warning: Could not parse override_rate '{override_rate_input}' for product ID {product_id}. Setting to NULL.")
+                                final_override_rate = None # Explicitly NULL if unparsable
+                    elif isinstance(override_rate_input, (int, float)):
+                        final_override_rate = float(override_rate_input)
+                    # If override_rate_input is None, final_override_rate remains None (SQL NULL)
+
+                    try:
+                        cursor.execute('''
+                            UPDATE products
+                            SET consumption_override_rate = ?
+                            WHERE id = ?
+                        ''', (final_override_rate, product_id))
+                        if cursor.rowcount > 0:
+                            updates_made += 1
+                        # No error if product_id not found, rowcount will be 0
+                    except sqlite3.Error as e_item:
+                        print(f"Error updating override for product ID {product_id}: {e_item}")
+                        errors_encountered += 1
+
+                conn.commit()
+
+                message = f"Consumption overrides saved. {updates_made} products updated."
+                if errors_encountered > 0:
+                    message += f" {errors_encountered} items had errors."
+
+                return {"success": errors_encountered == 0, "message": message, "updates_made": updates_made, "errors": errors_encountered}
+
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error saving consumption overrides: {e}"}
 
     def _parse_quantity_string(self, quantity_str):
         """Attempts to parse a quantity string (e.g., "2 lbs", "10 units", "1") into a float.
@@ -1311,9 +1377,20 @@ class InventoryManager:
         else:
             return {"success": False, "message": "Invalid product identifier for projection."}
 
-        try:
-            with self._get_db_connection() as conn:
-                cursor = conn.cursor()
+        avg_daily_consumption = 0.0
+        consumption_rate_overridden = False
+        if product.get('consumption_override_rate') is not None:
+            try:
+                avg_daily_consumption = float(product['consumption_override_rate'])
+                consumption_rate_overridden = True
+                print(f"Using consumption_override_rate: {avg_daily_consumption} for {product_name}")
+            except ValueError:
+                print(f"Warning: Could not parse consumption_override_rate '{product['consumption_override_rate']}' for {product_name}. Proceeding with historical calculation.")
+
+        if not consumption_rate_overridden:
+            try:
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
                 cursor.execute('''
                     SELECT SUM(quantity_consumed_this_time) as total_consumed
                     FROM historical_items 
@@ -1322,17 +1399,22 @@ class InventoryManager:
                 result_row = cursor.fetchone()
                 if result_row and result_row['total_consumed'] is not None:
                     total_consumed_in_lookback = float(result_row['total_consumed'])
-        except sqlite3.Error as e:
-            print(f"Database error fetching historical data for demand projection (Product ID: {product_id}): {e}")
-            return {
-                "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
-                "current_stock": self.get_total_item_quantity(product_id),
-                "avg_daily_consumption": 0, "days_to_depletion": "Error fetching history",
-                "projected_need": 0, "lookback_days": lookback_days, "projection_days": projection_days,
-                "success": False, "message": f"DB error calculating historical consumption: {e}"
-            }
 
-        avg_daily_consumption = (total_consumed_in_lookback / lookback_days) if lookback_days > 0 else 0.0
+                # Calculate avg_daily_consumption based on historical data if not overridden
+                avg_daily_consumption = (total_consumed_in_lookback / lookback_days) if lookback_days > 0 else 0.0
+
+            except sqlite3.Error as e:
+                print(f"Database error fetching historical data for demand projection (Product ID: {product_id}): {e}")
+                return {
+                    "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
+                    "consumption_override_rate": product.get('consumption_override_rate'),
+                    "current_stock": self.get_total_item_quantity(product_id),
+                    "avg_daily_consumption": 0, "days_to_depletion": "Error fetching history",
+                    "projected_need": 0, "lookback_days": lookback_days, "projection_days": projection_days,
+                    "success": False, "message": f"DB error calculating historical consumption: {e}"
+                }
+        # else: avg_daily_consumption is already set from override
+
         current_quantity_sum = self.get_total_item_quantity(product_id)
         
         days_to_depletion_str = "N/A"
@@ -1354,6 +1436,7 @@ class InventoryManager:
             "current_stock": current_quantity_sum,
             "avg_daily_consumption": avg_daily_consumption, "days_to_depletion": days_to_depletion_str,
             "projected_need": projected_need, "lookback_days": lookback_days, "projection_days": projection_days,
+            "consumption_override_rate": product.get('consumption_override_rate'), # Ensure it's in the result
             "success": True
         }
 
