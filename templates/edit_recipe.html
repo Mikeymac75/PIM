@@ -1,22 +1,22 @@
 {% extends "base.html" %}
 
-{% block title %}Edit Recipe {{ recipe.name if recipe else 'Error' }} - Food Inventory Manager{% endblock %}
+{% block title %}Edit Recipe {{ recipe['name'] if recipe else 'Error' }} - Food Inventory Manager{% endblock %}
 
 {% block page_header %}
-    <h1 class="page-title">Edit Recipe: {{ recipe.name if recipe else 'Recipe Not Found' }}</h1>
+    <h1 class="page-title">Edit Recipe: {{ recipe['name'] if recipe else 'Recipe Not Found' }}</h1>
 {% endblock %}
 
 {% block content %}
-    <form method="POST" action="{{ url_for('edit_recipe_view', recipe_id=recipe.id if recipe else 0) }}">
+    <form method="POST" action="{{ url_for('edit_recipe_view', recipe_id=recipe['id'] if recipe else 0) }}">
         <div class="form-group">
             <label for="recipe_name">Recipe Name:</label>
             <input type="text" id="recipe_name" name="recipe_name" class="form-control"
-                   value="{{ form_data.get('recipe_name', recipe.name if recipe else '') }}" required>
+                   value="{{ form_data.get('recipe_name', recipe['name'] if recipe else '') }}" required>
         </div>
 
         <div class="form-group">
             <label for="description">Description:</label>
-            <textarea id="description" name="description" class="form-control" rows="3">{{ form_data.get('description', recipe.description if recipe else '') }}</textarea>
+            <textarea id="description" name="description" class="form-control" rows="3">{{ form_data.get('description', recipe['description'] if recipe else '') }}</textarea>
         </div>
 
         <h3 style="margin-top: 20px; margin-bottom: 10px;">Ingredients</h3>
@@ -24,15 +24,15 @@
 
         <div class="ingredients-section">
             {% for i in range(1, 11) %} {# Create 10 sets of ingredient inputs #}
-            {# Define variables for current ingredient's name and quantity for cleaner access #}
-            {% set current_ing_name_from_form = form_data.get('ingredient_' + i|string + '_name') %}
-            {% set current_ing_qty_from_form = form_data.get('ingredient_' + i|string + '_quantity') %}
+            {# Define keys for accessing form_data and default values from recipe #}
+            {% set ing_name_key = 'ingredient_' + i|string + '_name' %}
+            {% set ing_qty_key = 'ingredient_' + i|string + '_quantity' %}
 
-            {% set current_ing_name_from_recipe = recipe.ingredients[i-1].item_name if recipe and recipe.ingredients and i-1 < recipe.ingredients|length else '' %}
-            {% set current_ing_qty_from_recipe = recipe.ingredients[i-1].quantity_required if recipe and recipe.ingredients and i-1 < recipe.ingredients|length else '' %}
+            {% set recipe_ing_name = recipe['ingredients'][i-1]['item_name'] if recipe and recipe['ingredients'] and i-1 < recipe['ingredients']|length else '' %}
+            {% set recipe_ing_qty = recipe['ingredients'][i-1]['quantity_required'] if recipe and recipe['ingredients'] and i-1 < recipe['ingredients']|length else '' %}
 
-            {% set final_ing_name = current_ing_name_from_form if current_ing_name_from_form is defined else current_ing_name_from_recipe %}
-            {% set final_ing_qty = current_ing_qty_from_form if current_ing_qty_from_form is defined else current_ing_qty_from_recipe %}
+            {% set final_ing_name = form_data.get(ing_name_key, recipe_ing_name) %}
+            {% set final_ing_qty = form_data.get(ing_qty_key, recipe_ing_qty) %}
 
             <div class="ingredient-row">
                 <div class="form-group ingredient-name">

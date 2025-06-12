@@ -488,7 +488,7 @@ def edit_recipe_view(recipe_id):
     # The 'recipe' dict fetched by get_recipe_by_id should be suitable for populating the form.
     # It contains 'id', 'name', 'description', and 'ingredients' list.
     # The template 'edit_recipe.html' will use this 'recipe' object.
-    return render_template('edit_recipe.html', recipe=recipe, products=products)
+    return render_template('edit_recipe.html', recipe=recipe, products=products, form_data={})
 
 @app.route('/recipes')
 def recipes_list_view():
@@ -609,10 +609,10 @@ def make_recipe_view(recipe_name):
                 break 
     
     if all_consumed_successfully and not consumption_error_messages:
-        flash(f"Recipe '{recipe.name}' made successfully! Ingredients have been consumed.", 'success')
+        flash(f"Recipe '{recipe['name']}' made successfully! Ingredients have been consumed.", 'success')
     else:
         # If loop was broken due to consumption failure after availability check (should be rare)
-        flash(f"Error making recipe '{recipe.name}'. Some ingredients could not be consumed:", 'error')
+        flash(f"Error making recipe '{recipe['name']}'. Some ingredients could not be consumed:", 'error')
         for err_msg in consumption_error_messages:
             flash(err_msg, 'error')
         # It's also possible recipe_makeable_now was false and we already flashed that.
