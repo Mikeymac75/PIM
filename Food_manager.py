@@ -6,15 +6,28 @@ import os # For the demo part
 class InventoryManager:
     def __init__(self, db_filepath="inventory.db"):
         self.db_filepath = db_filepath
+        self.conn = None  # For persistent in-memory connection
+        if self.db_filepath == ":memory:":
+            self.conn = sqlite3.connect(":memory:")
+            self.conn.row_factory = sqlite3.Row
         self._initialize_db()
         # Garden produce is not part of this class for now
-        # self.my_garden_produce = [] 
+        # self.my_garden_produce = []
 
     def _get_db_connection(self):
         """Establishes and returns a database connection."""
+        if self.conn and self.db_filepath == ":memory:":
+            return self.conn
+        # For file-based databases, create a new connection each time
         conn = sqlite3.connect(self.db_filepath)
         conn.row_factory = sqlite3.Row # Access columns by name
         return conn
+
+    def close_connection(self):
+        """Closes the persistent connection if it exists (mainly for in-memory DBs)."""
+        if self.conn and self.db_filepath == ":memory:":
+            self.conn.close()
+            self.conn = None
 
     def _initialize_db(self):
         """Creates database tables if they don't already exist."""
@@ -119,19 +132,133 @@ class InventoryManager:
             print(f"Database error getting product by name '{name}': {e}")
             return None
 
-    def get_all_products(self):
-        """Retrieves all products from the products table, ordered by name."""
+    def get_all_products(self, search_term=None, category=None, purchase_location=None,
+                         sort_by='name', sort_order='ASC', page=1, per_page=10):
+        """
+        Retrieves products from the products table with filtering, sorting, and pagination.
+        - search_term: Filters by product name (case-insensitive).
+        - category: Filters by category name (case-insensitive).
+        - purchase_location: Filters by purchase location (case-insensitive).
+        - sort_by: Column to sort by ('name', 'category', 'subcategory', 'purchase_location').
+                   Defaults to 'name'. Invalid values also default to 'name'.
+        - sort_order: 'ASC' or 'DESC'. Defaults to 'ASC'.
+        - page: For pagination, the page number to retrieve. Defaults to 1.
+        - per_page: For pagination, items per page. Defaults to 10.
+        """
         items = []
+        params = []
+
+        # Base query
+        query = "SELECT * FROM products"
+
+        # Filtering
+        where_clauses = []
+        if search_term:
+            where_clauses.append("LOWER(name) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("LOWER(category) = ?")
+            params.append(category.lower())
+        if purchase_location:
+            where_clauses.append("LOWER(purchase_location) = ?")
+            params.append(purchase_location.lower())
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        # Sorting
+        valid_sort_columns = {
+            'name': 'name',
+            'category': 'category',
+            'subcategory': 'subcategory',
+            'purchase_location': 'purchase_location'
+        }
+        sort_column = valid_sort_columns.get(sort_by.lower(), 'name') # Default to 'name' if invalid
+
+        sort_order_upper = sort_order.upper()
+        if sort_order_upper not in ['ASC', 'DESC']:
+            sort_order_upper = 'ASC' # Default to 'ASC'
+
+        query += f" ORDER BY {sort_column} {sort_order_upper}"
+
+        # Pagination
+        if page is not None and per_page is not None and page > 0 and per_page > 0:
+            offset = (page - 1) * per_page
+            query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
+        elif per_page is not None and per_page > 0: # If only per_page is specified, assume page 1
+            query += " LIMIT ?"
+            params.append(per_page)
+
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM products ORDER BY name ASC")
+                cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
                 for row in rows:
                     items.append(dict(row))
         except sqlite3.Error as e:
-            print(f"Database error fetching all products: {e}")
+            print(f"Database error fetching all products with filters: {e}")
         return items
+
+    def get_product_count(self, search_term=None, category=None, purchase_location=None):
+        """
+        Gets the total number of products, filtered by search_term, category, and purchase_location.
+        """
+        params = []
+        query = "SELECT COUNT(*) as count FROM products"
+
+        where_clauses = []
+        if search_term:
+            where_clauses.append("LOWER(name) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("LOWER(category) = ?")
+            params.append(category.lower())
+        if purchase_location:
+            where_clauses.append("LOWER(purchase_location) = ?")
+            params.append(purchase_location.lower())
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                result = cursor.fetchone()
+                return result['count'] if result else 0
+        except sqlite3.Error as e:
+            print(f"Database error getting product count: {e}")
+            return 0
+
+    def get_all_categories(self):
+        """Retrieves all unique category names from the products table."""
+        categories = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL ORDER BY category ASC")
+                rows = cursor.fetchall()
+                for row in rows:
+                    categories.append(row['category'])
+        except sqlite3.Error as e:
+            print(f"Database error fetching all categories: {e}")
+        return categories
+
+    def get_all_purchase_locations(self):
+        """Retrieves all unique purchase location names from the products table."""
+        locations = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT purchase_location FROM products WHERE purchase_location IS NOT NULL ORDER BY purchase_location ASC")
+                rows = cursor.fetchall()
+                for row in rows:
+                    locations.append(row['purchase_location'])
+        except sqlite3.Error as e:
+            print(f"Database error fetching all purchase locations: {e}")
+        return locations
 
     def update_product(self, product_id, name, category, subcategory, unit_of_measure,
                        default_expiry_days, par_level, max_holding_amount, purchase_location):
