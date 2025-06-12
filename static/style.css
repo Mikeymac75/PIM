@@ -475,3 +475,165 @@ tr.override-active td {
 /* form[action*="save_overrides_view"] button[type="submit"] { */
 /* margin-top: 15px; */
 /* } */
+
+/* Product Detail Modal Styles */
+#productDetailModal {
+    display: none; /* Default state */
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.4);
+}
+
+.modal-content {
+    background-color: #fefefe;
+    margin: 10% auto;
+    padding: 25px; /* Increased padding */
+    border: 1px solid #bbb; /* Slightly darker border */
+    width: 75%; /* Adjusted width */
+    max-width: 800px; /* Max width */
+    border-radius: 10px; /* Softer radius */
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3); /* More pronounced shadow */
+}
+
+/* Modal Header (Flex container for title and close button) */
+.modal-content h3 { /* Targeting the h3 directly as a simple header area */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #e0e0e0; /* Lighter border */
+    padding-bottom: 15px; /* Increased padding */
+    margin-bottom: 20px; /* Increased margin */
+    margin-top: 0; /* Remove default h3 margin top */
+    font-size: 1.6em; /* Larger title */
+    color: #333;
+}
+
+/* Actual span for product name, if needed for specific styling, otherwise h3 styling applies */
+#modalProductName {
+    /* No specific styles needed if h3 covers it, unless for color or font weight */
+}
+
+.close-button {
+    color: #888; /* Darker gray */
+    /* float: right; -- Not needed with flex header */
+    font-size: 32px; /* Larger size */
+    font-weight: bold;
+    padding: 0 5px; /* Add some padding for easier clicking */
+    line-height: 1; /* Ensure consistent vertical alignment */
+}
+
+.close-button:hover,
+.close-button:focus {
+    color: #333; /* Darker on hover */
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.modal-body {
+    display: flex;
+    flex-wrap: wrap; /* Allow panels to wrap on smaller screens if needed */
+    gap: 20px; /* Space between left and right panels */
+}
+
+.modal-left-panel {
+    flex: 1;
+    min-width: 280px; /* Slightly increased min-width */
+    /* padding-right: 20px; -- Replaced by gap in modal-body */
+}
+
+.modal-right-panel {
+    flex: 2; /* Give more space to charts */
+    min-width: 450px; /* Ensure charts have enough space */
+    display: flex;
+    flex-direction: column;
+    gap: 15px; /* Space between chart title and canvas, and between charts */
+}
+
+.modal-left-panel h4, .modal-right-panel h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #555;
+    font-size: 1.1em;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+}
+
+#modalProductInfo {
+    list-style-type: none;
+    padding: 0;
+    font-size: 0.95em; /* Slightly larger font for readability */
+}
+
+#modalProductInfo li {
+    margin-bottom: 10px; /* Increased margin */
+    padding-bottom: 8px; /* Increased padding */
+    border-bottom: 1px dashed #e0e0e0; /* Lighter dashed border */
+    line-height: 1.5;
+}
+#modalProductInfo li:last-child {
+    border-bottom: none; /* No border for the last item */
+}
+
+#modalProductInfo li strong {
+    color: #222; /* Darker label color */
+    margin-right: 8px; /* Increased margin */
+    font-weight: 600; /* Slightly bolder */
+}
+
+/* Chart Canvas Styling */
+#dailyConsumptionChart, #monthlyConsumptionChart {
+    width: 100% !important; /* Ensure canvas takes full width of its container */
+    height: 280px !important; /* Fixed height, adjust as needed. Chart.js will scale. */
+    /* margin-bottom: 20px; -- Handled by gap in .modal-right-panel */
+    border: 1px solid #eee; /* Optional: border around canvas */
+    border-radius: 4px; /* Optional: rounded corners for canvas */
+}
+
+/* Product Name Links */
+.product-name-link {
+    color: #007bff;
+    text-decoration: none;
+    cursor: pointer;
+    font-weight: 500; /* Slightly bolder than normal text */
+}
+
+.product-name-link:hover {
+    text-decoration: underline;
+    color: #0056b3; /* Darker blue on hover */
+}
+
+
+/* Responsive adjustments for Modal */
+@media (max-width: 768px) {
+    .modal-content {
+        width: 95%;
+        margin: 5% auto; /* Less top/bottom margin for small screens */
+        padding: 15px; /* Slightly less padding */
+    }
+
+    .modal-body {
+        flex-direction: column; /* Stack panels */
+    }
+
+    .modal-left-panel, .modal-right-panel {
+        flex-basis: auto; /* Reset flex basis to allow natural sizing in column */
+        min-width: 100%; /* Take full width when stacked */
+        padding-right: 0; /* No padding when stacked */
+    }
+
+    .modal-right-panel {
+        margin-top: 20px; /* Add space between stacked panels */
+    }
+
+    #dailyConsumptionChart, #monthlyConsumptionChart {
+        height: 220px !important; /* Reduce chart height on smaller screens */
+    }
+    .modal-content h3 {
+        font-size: 1.3em; /* Smaller title on mobile */
+    }
+}

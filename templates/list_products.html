@@ -98,7 +98,7 @@
         {% for product in products %}
         <tr>
             <td>{{ product.id }}</td>
-            <td>{{ product.name }}</td>
+            <td><a href="#" class="product-name-link" data-product-id="{{ product.id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ product.name }}</a></td>
             <td>{{ product.category if product.category is not none else '' }}</td>
             <td>{{ product.subcategory if product.subcategory is not none else '' }}</td>
             <td>{{ product.unit_of_measure }}</td>
