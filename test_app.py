@@ -225,6 +225,63 @@ class TestAppInventoryRoutes(BaseAppTest):
         self.assertNotRegex(data_str, r'<tr class=".*?below-par-level.*?".*?>.*?Surplus Bread.*?</tr>', "Surplus Bread row should not have below-par-level class.")
         self.assertNotRegex(data_str, r'<tr class=".*?below-par-level.*?".*?>.*?No Par Item.*?</tr>', "No Par Item row should not have below-par-level class.")
 
+
+    # --- Tests for /inventory/consume route specific behaviors ---
+    def test_consume_page_get_request_loads_data(self):
+        # Arrange
+        product_name = "Test Product For Consume Page"
+        recipe_name = "Test Recipe For Consume Page"
+        self._create_app_product(name=product_name)
+        self.recipe_manager.add_recipe({"name": recipe_name, "ingredients": []})
+
+        # Act
+        response = self.client.get('/inventory/consume')
+
+        # Assert
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(bytes(product_name, 'utf-8'), response.data)
+        self.assertIn(bytes(recipe_name, 'utf-8'), response.data)
+        self.assertIn(b"Consume Item or Recipe", response.data) # Page title/header
+
+    def test_consume_page_post_select_recipe_redirects_to_make_view(self):
+        # Arrange
+        recipe_name = "MyRedirectRecipe"
+        # Add a dummy ingredient as add_recipe might expect it
+        self.recipe_manager.add_recipe({"name": recipe_name, "ingredients": [{"item_name": "DummyIngredient", "quantity_required": 1.0}]})
+
+        # Act
+        response = self.client.post('/inventory/consume', data={
+            'consumption_type': 'recipe',
+            'recipe_name_to_consume': recipe_name
+        }) # No follow_redirects=True to check 302 and location
+
+        # Assert
+        self.assertEqual(response.status_code, 302)
+        # For url_for('make_recipe_view', recipe_name=recipe_name), the path is /recipes/<recipe_name>/make
+        # Need to handle potential URL encoding if recipe_name has spaces or special chars.
+        # In this case, "MyRedirectRecipe" is safe.
+        expected_redirect_path = f"/recipes/{recipe_name}/make"
+        self.assertTrue(response.location.endswith(expected_redirect_path))
+
+    def test_consume_page_post_select_recipe_no_recipe_name_selected(self):
+        # Arrange: Create some data so the page has items/recipes to load
+        product_name = "DummyProductForConsumeError"
+        recipe_name = "DummyRecipeForConsumeError"
+        self._create_app_product(name=product_name)
+        self.recipe_manager.add_recipe({"name": recipe_name, "ingredients": []})
+
+        # Act
+        response = self.client.post('/inventory/consume', data={
+            'consumption_type': 'recipe',
+            'recipe_name_to_consume': '' # Empty string for recipe name
+        }, follow_redirects=True)
+
+        # Assert
+        self.assertEqual(response.status_code, 200) # Should re-render the form
+        self.assertIn(b"Please select a recipe to consume.", response.data) # Check for flash message
+        self.assertIn(bytes(product_name, 'utf-8'), response.data) # Check product still listed
+        self.assertIn(bytes(recipe_name, 'utf-8'), response.data) # Check recipe still listed
+
     # --- Add Inventory Stock Route Tests ---
     # test_deprecated_add_item_view_get and test_deprecated_add_item_post_success were here and are now removed.
     def test_add_inventory_stock_get(self):
