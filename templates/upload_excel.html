@@ -73,8 +73,8 @@
             <label for="excel_file">Choose Excel File (.xlsx):</label>
             <input type="file" id="excel_file" name="excel_file" class="form-control-file" accept=".xlsx" required>
         </div>
-        <button type="submit" class="button">Upload and Process File</button>
+        <button type="submit" class="button"><i class="fas fa-upload"></i> Upload and Process File</button>
     </form>
 
-    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a></p>
+    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
 {% endblock %}

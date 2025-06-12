@@ -38,8 +38,8 @@
         <input type="text" id="purchase_location" name="purchase_location" value="{{ product.purchase_location if product.purchase_location is not none else '' }}">
     </div>
     <div>
-        <button type="submit">Update Product</button>
+        <button type="submit" class="button"><i class="fas fa-save"></i> Update Product</button>
     </div>
 </form>
-<p><a href="{{ url_for('list_products_view') }}">Cancel and return to Product List</a></p>
+<p><a href="{{ url_for('list_products_view') }}" class="nav-link-button"><i class="fas fa-times-circle"></i> Cancel and return to Product List</a></p>
 {% endblock %}

@@ -61,10 +61,10 @@
         </div>
         
         {# The button text will be updated by JS, or simply "Submit Consumption" #}
-        <button type="submit" class="button" id="submitButton">Consume</button>
+        <button type="submit" class="button" id="submitButton"><i class="fas fa-check-circle"></i> Consume</button>
     </form>
 
-    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a></p>
+    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -85,7 +85,7 @@
                     if(itemNameSelect) itemNameSelect.required = true;
                     quantityConsumedInput.required = true;
                     if(recipeNameSelect) recipeNameSelect.required = false;
-                    submitButton.textContent = 'Consume Item';
+                    submitButton.innerHTML = '<i class="fas fa-minus-circle"></i> Consume Item';
                 } else { // Recipe selected
                     itemFieldsDiv.style.display = 'none';
                     recipeFieldsDiv.style.display = 'block';
@@ -93,7 +93,7 @@
                     if(itemNameSelect) itemNameSelect.required = false;
                     quantityConsumedInput.required = false;
                     if(recipeNameSelect) recipeNameSelect.required = true;
-                    submitButton.textContent = 'Consume Recipe Ingredients';
+                    submitButton.innerHTML = '<i class="fas fa-blender"></i> Consume Recipe Ingredients';
                 }
             }
 

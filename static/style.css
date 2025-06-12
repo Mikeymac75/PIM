@@ -1,6 +1,6 @@
 /* General Body Styles */
 body {
-    font-family: Arial, sans-serif;
+    font-family: 'Roboto', Arial, sans-serif; /* Added Roboto */
     margin: 0;
     padding: 0;
     background-color: #f4f4f4;
@@ -59,7 +59,7 @@ header .highlight, header .current a {
 }
 
 header a:hover {
-    color: #ddd;
+    color: #5cb85c; /* Theme color for hover */
 }
 
 header li {
@@ -68,12 +68,16 @@ header li {
     padding: 0 20px 0 20px;
 }
 
+header nav ul li a i {
+    margin-right: 8px; /* Add space between icon and text */
+}
+
 /* Main Content Area */
 .main-content {
-    padding: 20px;
+    padding: 25px; /* Increased padding */
     background: #fff;
     margin-top: 20px;
-    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    box-shadow: 0 0 15px rgba(0,0,0,0.07); /* Softer shadow */
 }
 
 /* Headings */
@@ -82,7 +86,7 @@ h1, h2, h3 {
 }
 
 h1.page-title { /* For main titles on each page */
-    margin-bottom: 20px;
+    margin-bottom: 25px; /* Increased bottom margin */
     color: #333;
     border-bottom: 1px solid #eee;
     padding-bottom: 10px;
@@ -90,7 +94,7 @@ h1.page-title { /* For main titles on each page */
 
 /* Form Styling */
 .form-group {
-    margin-bottom: 15px;
+    margin-bottom: 20px; /* Increased bottom margin */
 }
 
 .form-group label {
@@ -102,7 +106,7 @@ h1.page-title { /* For main titles on each page */
 .form-control, /* For text, date, number, textarea, select */
 .form-control-file { /* For file inputs */
     width: 100%;
-    padding: 10px;
+    padding: 12px; /* Increased padding */
     border: 1px solid #ddd;
     border-radius: 4px;
     box-sizing: border-box; /* Important for width 100% */
@@ -135,7 +139,7 @@ table {
 }
 
 th, td {
-    padding: 12px;
+    padding: 15px; /* Increased padding */
     border: 1px solid #ddd;
     text-align: left;
     vertical-align: middle; /* Better vertical alignment for cell content */
@@ -158,8 +162,8 @@ tr:nth-child(even) {
     background-color: #f9f9f9;
 }
 
-tr:hover {
-    background-color: #f1f1f1;
+tr:hover td { /* Target td to ensure background covers cells */
+    background-color: #e9e9e9; /* Slightly darker hover */
 }
 
 /* Links */
@@ -176,18 +180,26 @@ a:hover {
 .button, .nav-link-button {
     display: inline-block;
     margin-top: 20px;
-    padding: 10px 20px;
+    padding: 12px 22px; /* Adjusted padding */
     background-color: #5cb85c;
     color: white !important; /* Ensure text is white */
     border-radius: 4px;
     text-decoration: none;
     border: none;
     cursor: pointer;
+    margin-right: 10px; /* Added for spacing between adjacent buttons */
+    margin-bottom: 10px; /* Added for spacing when buttons wrap */
+    transition: transform 0.2s ease-out, background-color 0.2s ease-out; /* Added transitions */
 }
 
 .button:hover, .nav-link-button:hover {
     background-color: #4cae4c;
-    text-decoration: none;
+    text-decoration: none; /* Ensure no underline appears on hover */
+    transform: scale(1.05); /* Slight zoom effect */
+}
+
+.button i, .nav-link-button i {
+    margin-right: 6px; /* Space between icon and button text */
 }
 
 
@@ -202,6 +214,7 @@ a:hover {
     padding: 10px;
     margin: 10px 0;
     border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07); /* Add subtle shadow */
 }
 .flash-success { background-color: #dff0d8; color: #3c763d; border: 1px solid #d6e9c6; }
 .flash-error { background-color: #f2dede; color: #a94442; border: 1px solid #ebccd1; }
@@ -218,19 +231,29 @@ a:hover {
 .recipes-container {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); /* Responsive cards */
-    gap: 20px;
+    gap: 25px; /* Increased gap */
     margin-top: 20px;
 }
 .recipe-card {
     background-color: #fff;
     border: 1px solid #ddd;
     border-radius: 5px;
-    padding: 20px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    padding: 25px; /* Increased padding */
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08); /* Refined shadow */
+    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out; /* Smooth transition */
 }
+
+.recipe-card:hover {
+    transform: translateY(-5px); /* Lift effect */
+    box-shadow: 0 4px 10px rgba(0,0,0,0.15); /* Enhanced shadow */
+}
+
 .recipe-card h2 {
     margin-top: 0;
     font-size: 1.5em;
+    padding-bottom: 10px; /* Separation for header */
+    margin-bottom: 15px; /* Space below header */
+    border-bottom: 1px solid #eee; /* Line below header */
 }
 .recipe-card h2 a {
     color: #337ab7; /* Link color for recipe name */
@@ -269,6 +292,7 @@ a:hover {
     padding: 15px;
     border-radius: 5px;
     margin-bottom: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08); /* Add shadow */
 }
 .excel-instructions h3 {
     margin-top: 0;
@@ -351,13 +375,7 @@ footer {
 }
 
 /* Styling for Excel Upload Instructions Page */
-.excel-instructions {
-    background-color: #e9f5e9; /* Light green background */
-    border: 1px solid #c8e6c9; /* Green border */
-    padding: 15px;
-    border-radius: 5px;
-    margin-bottom: 20px;
-}
+/* .excel-instructions rule is defined earlier with other card-like styles */
 .excel-instructions h3 {
     margin-top: 0;
     color: #2e7d32; /* Darker green for heading */
