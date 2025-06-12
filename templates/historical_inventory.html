@@ -7,27 +7,92 @@
 {% endblock %}
 
 {% block content %}
+
+{# Filter Bar #}
+<form method="GET" action="{{ url_for('historical_inventory_view') }}" class="filter-form">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="search_term">Search Product:</label>
+            <input type="text" name="search_term" id="search_term" value="{{ search_term or '' }}" placeholder="Product name...">
+        </div>
+        <div class="form-group">
+            <label for="category">Category:</label>
+            <select name="category" id="category">
+                <option value="" {% if not selected_category %}selected{% endif %}>All Categories</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="consumed_start_date">Consumed From:</label>
+            <input type="date" name="consumed_start_date" id="consumed_start_date" value="{{ consumed_start_date or '' }}">
+        </div>
+        <div class="form-group">
+            <label for="consumed_end_date">Consumed To:</label>
+            <input type="date" name="consumed_end_date" id="consumed_end_date" value="{{ consumed_end_date or '' }}">
+        </div>
+    </div>
+    {# Hidden fields to retain current sort order and pagination when filtering #}
+    <input type="hidden" name="sort_by" value="{{ sort_by or 'consumed_date' }}">
+    <input type="hidden" name="sort_order" value="{{ sort_order or 'DESC' }}">
+    <input type="hidden" name="page" value="{{ current_page or 1 }}">
+    <input type="hidden" name="per_page" value="{{ per_page or 20 }}">
+
+    <div class="form-actions">
+        <button type="submit" class="button"><i class="fas fa-filter"></i> Filter</button>
+        <a href="{{ url_for('historical_inventory_view') }}" class="button button-secondary"><i class="fas fa-times-circle"></i> Clear Filters</a>
+    </div>
+</form>
+
     {% if items %}
     <div class="table-responsive-wrapper">
         <table>
             <thead>
                 <tr>
-                    <th class="historical-inventory-header">Product Name</th>
-                    <th class="historical-inventory-header">Quantity Consumed</th>
-                    <th class="historical-inventory-header">Unit</th>
-                    <th class="historical-inventory-header">Category</th>
-                    <th class="historical-inventory-header">Original Purchase Date</th>
-                    <th class="historical-inventory-header">Original Expiry Date</th>
-                    <th class="historical-inventory-header">Consumed Date</th>
+                    {# Helper macro for sortable headers (assuming it's defined in base.html or included, or define here if not) #}
+                    {# For this example, let's define it locally if not already globally available from current_inventory.html's changes affecting base #}
+                    {% macro sortable_header(column_key, display_name, current_sort_by, current_sort_order, current_filters) %}
+                        {% set new_sort_order = 'DESC' if current_sort_by == column_key and current_sort_order == 'ASC' else 'ASC' %}
+                        <th class="historical-inventory-header">
+                            <a href="{{ url_for('historical_inventory_view', **current_filters, sort_by=column_key, sort_order=new_sort_order) }}">
+                                {{ display_name }}
+                                {% if current_sort_by == column_key %}
+                                    <i class="fas fa-sort-{{ 'up' if current_sort_order == 'ASC' else 'down' }}"></i>
+                                {% else %}
+                                    <i class="fas fa-sort"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                    {% endmacro %}
+
+                    {% set current_filters = {
+                        'search_term': search_term,
+                        'category': selected_category,
+                        'consumed_start_date': consumed_start_date,
+                        'consumed_end_date': consumed_end_date,
+                        'page': current_page,
+                        'per_page': per_page
+                    } %}
+
+                    {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('quantity_consumed', 'Quantity Consumed', sort_by, sort_order, current_filters) }}
+                    <th class="historical-inventory-header">Unit</th> {# Not sortable as per plan #}
+                    {{ sortable_header('category', 'Category', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('purchase_date', 'Original Purchase Date', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('expiry_date', 'Original Expiry Date', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('consumed_date', 'Consumed Date', sort_by, sort_order, current_filters) }}
                 </tr>
             </thead>
             <tbody>
-                {% for item in items %} {# Each item is from historical_items LEFT JOIN products #}
+                {% for item in items %}
                 <tr>
-                    <td>{{ item.name }}</td> {# This is product_name or historical_item_name (handled in app.py) #}
+                    <td>{{ item.name }}</td>
                     <td>{{ "%.2f"|format(item.quantity_consumed_this_time) if item.quantity_consumed_this_time is number else item.quantity_consumed_this_time }}</td>
-                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td> {# From products table #}
-                    <td>{{ item.category if item.category else '-' }}</td> {# From products table #}
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td>
+                    <td>{{ item.category if item.category else '-' }}</td>
                     <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
                     <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
                     <td>{{ item.consumed_date.isoformat() if item.consumed_date else 'N/A' }}</td>
@@ -36,9 +101,49 @@
             </tbody>
         </table>
     </div>
-    {% else %}
-        <p class="empty-message">No historical items found. Items appear here after you consume them from your inventory.</p>
+
+    {# Pagination Controls #}
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        <span>Page {{ current_page }} of {{ total_pages }}</span>
+        <div class="page-navigation">
+            {% set pagination_filters = {
+                'search_term': search_term,
+                'category': selected_category,
+                'consumed_start_date': consumed_start_date,
+                'consumed_end_date': consumed_end_date,
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'per_page': per_page
+            } %}
+            {% if current_page > 1 %}
+            <a href="{{ url_for('historical_inventory_view', **pagination_filters, page=current_page - 1) }}" class="button button-small">
+                <i class="fas fa-chevron-left"></i> Previous
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled"><i class="fas fa-chevron-left"></i> Previous</span>
+            {% endif %}
+
+            {% if current_page < total_pages %}
+            <a href="{{ url_for('historical_inventory_view', **pagination_filters, page=current_page + 1) }}" class="button button-small">
+                Next <i class="fas fa-chevron-right"></i>
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled">Next <i class="fas fa-chevron-right"></i></span>
+            {% endif %}
+        </div>
+    </div>
     {% endif %}
 
-    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>
+    {% else %}
+        <p class="empty-message">
+            {% if search_term or selected_category or consumed_start_date or consumed_end_date %}
+                No historical items match your current filters. <a href="{{ url_for('historical_inventory_view') }}">Clear filters</a> to see all items.
+            {% else %}
+                No historical items found. Items appear here after you consume them from your inventory.
+            {% endif %}
+        </p>
+    {% endif %}
+
+    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
 {% endblock %}

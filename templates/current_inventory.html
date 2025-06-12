@@ -4,42 +4,128 @@
 
 {% block page_header %}
     <h1 class="page-title">Current Inventory</h1>
-    <a href="{{ url_for('edit_inventory_view') }}" class="nav-link-button" style="margin-bottom: 15px; display: inline-block;"><i class="fas fa-edit"></i> Edit Inventory Items</a>
+    <div style="margin-bottom: 15px;">
+        <a href="{{ url_for('add_inventory_stock_view') }}" class="nav-link-button" style="margin-right: 10px;"><i class="fas fa-plus-circle"></i> Add Stock</a>
+        <a href="{{ url_for('edit_inventory_view') }}" class="nav-link-button"><i class="fas fa-edit"></i> Edit Inventory Items</a>
+    </div>
 {% endblock %}
 
 {% block content %}
+
+{# Filter Bar #}
+<form method="GET" action="{{ url_for('current_inventory_view') }}" class="filter-form">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="search_term">Search Product:</label>
+            <input type="text" name="search_term" id="search_term" value="{{ search_term or '' }}" placeholder="Product name...">
+        </div>
+        <div class="form-group">
+            <label for="category">Category:</label>
+            <select name="category" id="category">
+                <option value="" {% if not selected_category %}selected{% endif %}>All Categories</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="purchase_location">Purchase Location:</label>
+            <select name="purchase_location" id="purchase_location">
+                <option value="" {% if not selected_purchase_location %}selected{% endif %}>All Locations</option>
+                {% for loc in purchase_locations %}
+                <option value="{{ loc }}" {% if loc == selected_purchase_location %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="expiry_start_date">Expiry From:</label>
+            <input type="date" name="expiry_start_date" id="expiry_start_date" value="{{ expiry_start_date or '' }}">
+        </div>
+        <div class="form-group">
+            <label for="expiry_end_date">Expiry To:</label>
+            <input type="date" name="expiry_end_date" id="expiry_end_date" value="{{ expiry_end_date or '' }}">
+        </div>
+        <div class="form-group">
+            <label for="filter_is_below_par">Below Par Level:</label>
+            <select name="filter_is_below_par" id="filter_is_below_par">
+                <option value="" {% if filter_is_below_par is none or filter_is_below_par == '' %}selected{% endif %}>Any</option>
+                <option value="true" {% if filter_is_below_par is true %}selected{% endif %}>Yes</option>
+                <option value="false" {% if filter_is_below_par is sameas false %}selected{% endif %}>No</option> {# Using sameas false because (None is false) is false #}
+            </select>
+        </div>
+    </div>
+    {# Hidden fields to retain current sort order and pagination when filtering #}
+    <input type="hidden" name="sort_by" value="{{ sort_by or 'expiry_date' }}">
+    <input type="hidden" name="sort_order" value="{{ sort_order or 'ASC' }}">
+    <input type="hidden" name="page" value="{{ current_page or 1 }}">
+     {# We might not want to keep per_page in hidden field if we want it to reset with filters, or keep it if preferred #}
+    <input type="hidden" name="per_page" value="{{ per_page or 20 }}">
+
+
+    <div class="form-actions">
+        <button type="submit" class="button"><i class="fas fa-filter"></i> Filter</button>
+        <a href="{{ url_for('current_inventory_view') }}" class="button button-secondary"><i class="fas fa-times-circle"></i> Clear Filters</a>
+    </div>
+</form>
+
+
     {% if items %}
     <div class="table-responsive-wrapper">
         <table>
             <thead>
                 <tr>
-                    <th class="current-inventory-header">Product Name</th>
-                    <th class="current-inventory-header">Stock Quantity</th>
-                    <th class="current-inventory-header">Unit</th>
-                    <th class="current-inventory-header">Category</th>
-                    <th class="current-inventory-header">Subcategory</th>
-                    <th class="current-inventory-header text-right">Par Level</th>
-                    {# Max Holding Amount might be less relevant for individual stock items, more for product definition #}
-                    {# <th class="current-inventory-header text-right">Max Holding</th> #}
-                    <th class="current-inventory-header">Purchase Location (Product Default)</th>
-                    <th class="current-inventory-header">Purchase Date (Stock)</th>
-                    <th class="current-inventory-header">Expiry Date (Stock)</th>
-                    <th class="current-inventory-header">Status</th>
+                    {# Helper macro for sortable headers #}
+                    {% macro sortable_header(column_key, display_name, current_sort_by, current_sort_order, current_filters) %}
+                        {% set new_sort_order = 'DESC' if current_sort_by == column_key and current_sort_order == 'ASC' else 'ASC' %}
+                        <th class="current-inventory-header">
+                            <a href="{{ url_for('current_inventory_view', **current_filters, sort_by=column_key, sort_order=new_sort_order) }}">
+                                {{ display_name }}
+                                {% if current_sort_by == column_key %}
+                                    <i class="fas fa-sort-{{ 'up' if current_sort_order == 'ASC' else 'down' }}"></i>
+                                {% else %}
+                                    <i class="fas fa-sort"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                    {% endmacro %}
+
+                    {% set current_filters = {
+                        'search_term': search_term,
+                        'category': selected_category,
+                        'purchase_location': selected_purchase_location,
+                        'expiry_start_date': expiry_start_date,
+                        'expiry_end_date': expiry_end_date,
+                        'filter_is_below_par': request.args.get('filter_is_below_par', ''),  {# Ensure we pass the string version for link consistency #}
+                        'page': current_page,
+                        'per_page': per_page
+                    } %}
+
+                    {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('quantity', 'Stock Quantity', sort_by, sort_order, current_filters) }}
+                    <th class="current-inventory-header">Unit</th> {# Not sortable by default, could be p.unit_of_measure #}
+                    {{ sortable_header('category', 'Category', sort_by, sort_order, current_filters) }}
+                    <th class="current-inventory-header">Subcategory</th> {# Not sortable by default, could be p.subcategory #}
+                    <th class="current-inventory-header text-right">Par Level</th> {# Not sortable #}
+                    {{ sortable_header('purchase_location', 'Purchase Location (Product Default)', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('purchase_date', 'Purchase Date (Stock)', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('expiry_date', 'Expiry Date (Stock)', sort_by, sort_order, current_filters) }}
+                    <th class="current-inventory-header">Status</th> {# Not sortable #}
                 </tr>
             </thead>
             <tbody>
-                {% for item in items %} {# Each item is from inventory_items JOIN products #}
+                {% for item in items %}
                 <tr class="{{ 'below-par-level' if item.is_below_par else '' }}">
-                    <td>{{ item.product_name }}</td> {# From products table #}
-                    <td>{{ item.quantity }}</td> {# From inventory_items table #}
-                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td> {# From products table #}
-                    <td>{{ item.category if item.category else '-' }}</td> {# From products table #}
-                    <td>{{ item.subcategory if item.subcategory else '-' }}</td> {# From products table #}
-                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else (item.par_level if item.par_level is not none else '-') }}</td> {# From products table #}
-                    {# <td>{{ "%.2f"|format(item.max_holding_amount) if item.max_holding_amount is number else item.max_holding_amount }}</td> #}
-                    <td>{{ item.purchase_location if item.purchase_location else '-' }}</td> {# From products table #}
-                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td> {# From inventory_items table #}
-                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td> {# From inventory_items table #}
+                    <td>{{ item.product_name }}</td>
+                    <td>{{ item.quantity }}</td>
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td>
+                    <td>{{ item.category if item.category else '-' }}</td>
+                    <td>{{ item.subcategory if item.subcategory else '-' }}</td>
+                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else (item.par_level if item.par_level is not none else '-') }}</td>
+                    <td>{{ item.purchase_location if item.purchase_location else '-' }}</td>
+                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
+                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
                     <td>
                         {% if item.is_below_par %}
                             <span class="status-pill status-below-par">Below Par</span>
@@ -54,8 +140,50 @@
             </tbody>
         </table>
     </div>
+
+    {# Pagination Controls #}
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        <span>Page {{ current_page }} of {{ total_pages }}</span>
+        <div class="page-navigation">
+            {% set pagination_filters = {
+                'search_term': search_term,
+                'category': selected_category,
+                'purchase_location': selected_purchase_location,
+                'expiry_start_date': expiry_start_date,
+                'expiry_end_date': expiry_end_date,
+                'filter_is_below_par': request.args.get('filter_is_below_par', ''),
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'per_page': per_page
+            } %}
+            {% if current_page > 1 %}
+            <a href="{{ url_for('current_inventory_view', **pagination_filters, page=current_page - 1) }}" class="button button-small">
+                <i class="fas fa-chevron-left"></i> Previous
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled"><i class="fas fa-chevron-left"></i> Previous</span>
+            {% endif %}
+
+            {% if current_page < total_pages %}
+            <a href="{{ url_for('current_inventory_view', **pagination_filters, page=current_page + 1) }}" class="button button-small">
+                Next <i class="fas fa-chevron-right"></i>
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled">Next <i class="fas fa-chevron-right"></i></span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
     {% else %}
-        <p class="empty-message">Current inventory is empty. <a href="{{ url_for('add_inventory_stock_view') }}" class="button"><i class="fas fa-plus-circle"></i> Add some stock!</a></p>
+        <p class="empty-message">
+            {% if search_term or selected_category or selected_purchase_location or expiry_start_date or expiry_end_date or request.args.get('filter_is_below_par') %}
+                No inventory items match your current filters. <a href="{{ url_for('current_inventory_view') }}">Clear filters</a> to see all items.
+            {% else %}
+                Current inventory is empty. <a href="{{ url_for('add_inventory_stock_view') }}" class="button"><i class="fas fa-plus-circle"></i> Add some stock!</a>
+            {% endif %}
+        </p>
     {% endif %}
 
     <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;"><i class="fas fa-arrow-left"></i> Back to Home</a></p>

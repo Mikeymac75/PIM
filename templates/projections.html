@@ -7,26 +7,88 @@
 {% endblock %}
 
 {% block content %}
+
+{# Filter Bar for Product Attributes #}
+<form method="GET" action="{{ url_for('projections_view') }}" class="filter-form">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="search_term">Search Product:</label>
+            <input type="text" name="search_term" id="search_term" value="{{ search_term or '' }}" placeholder="Product name...">
+        </div>
+        <div class="form-group">
+            <label for="category">Category:</label>
+            <select name="category" id="category">
+                <option value="" {% if not selected_category %}selected{% endif %}>All Categories</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="purchase_location">Purchase Location:</label>
+            <select name="purchase_location" id="purchase_location">
+                <option value="" {% if not selected_purchase_location %}selected{% endif %}>All Locations</option>
+                {% for loc in purchase_locations %}
+                <option value="{{ loc }}" {% if loc == selected_purchase_location %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    {# Hidden fields to retain current sort order and pagination when filtering products #}
+    <input type="hidden" name="sort_by" value="{{ sort_by or 'name' }}">
+    <input type="hidden" name="sort_order" value="{{ sort_order or 'ASC' }}">
+    <input type="hidden" name="page" value="{{ current_page or 1 }}">
+    <input type="hidden" name="per_page" value="{{ per_page or 10 }}">
+
+    <div class="form-actions">
+        <button type="submit" class="button"><i class="fas fa-filter"></i> Filter Products</button>
+        <a href="{{ url_for('projections_view') }}" class="button button-secondary"><i class="fas fa-times-circle"></i> Clear Product Filters</a>
+    </div>
+</form>
+
     {% if projections %}
     <div class="table-responsive-wrapper">
         <table>
             <thead>
                 <tr>
-                    <th class="projections-header">Item Name</th>
+                    {# Helper macro for sortable headers #}
+                    {% macro sortable_header(column_key, display_name, current_sort_by_products, current_sort_order_products, current_product_filters) %}
+                        {% set new_sort_order_products = 'DESC' if current_sort_by_products == column_key and current_sort_order_products == 'ASC' else 'ASC' %}
+                        <th class="projections-header">
+                            <a href="{{ url_for('projections_view', **current_product_filters, sort_by=column_key, sort_order=new_sort_order_products) }}">
+                                {{ display_name }}
+                                {% if current_sort_by_products == column_key %}
+                                    <i class="fas fa-sort-{{ 'up' if current_sort_order_products == 'ASC' else 'down' }}"></i>
+                                {% else %}
+                                    <i class="fas fa-sort"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                    {% endmacro %}
+
+                    {% set current_product_filters = {
+                        'search_term': search_term,
+                        'category': selected_category,
+                        'purchase_location': selected_purchase_location,
+                        'page': current_page,  {# This should be page for product list pagination #}
+                        'per_page': per_page
+                    } %}
+
+                    {{ sortable_header('name', 'Item Name', sort_by, sort_order, current_product_filters) }}
                     <th class="projections-header text-right">Current Stock</th>
-                    <th class="projections-header text-right">Avg. Daily Consumption (Last {{ projections[0].lookback_days if projections else 'N/A' }} days)</th>
+                    <th class="projections-header text-right">Avg. Daily Consumption (Last {{ projections[0].lookback_days if projections and projections[0] else 'N/A' }} days)</th>
                     <th class="projections-header text-center">Days to Depletion</th>
-                    <th class="projections-header text-right">Projected Need (Next {{ projections[0].projection_days if projections else 'N/A' }} days)</th>
+                    <th class="projections-header text-right">Projected Need (Next {{ projections[0].projection_days if projections and projections[0] else 'N/A' }} days)</th>
                 </tr>
             </thead>
             <tbody>
                 {% for proj in projections %}
                 <tr>
-                    <td>{{ proj.item_name }}</td>
-                    <td class="text-right">{{ "%.2f"|format(proj.current_stock) if proj.current_stock is number else proj.current_stock }}</td>
-                    <td class="text-right">{{ "%.2f"|format(proj.avg_daily_consumption) }}</td>
+                    <td>{{ proj.item_name }}</td> {# This is product_name or historical_item_name #}
+                    <td class="text-right">{{ "%.2f"|format(proj.current_stock) if proj.current_stock is number else proj.current_stock }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
+                    <td class="text-right">{{ "%.2f"|format(proj.avg_daily_consumption) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}/day</td>
                     <td class="text-center">{{ proj.days_to_depletion }}</td>
-                    <td class="text-right">{{ "%.2f"|format(proj.projected_need) }}</td>
+                    <td class="text-right">{{ "%.2f"|format(proj.projected_need) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -35,12 +97,50 @@
         {% if projections and projections[0] %}
         <p style="font-size: 0.9em; color: #555; margin-top: 10px;">
             Projections are based on a lookback period of {{ projections[0].lookback_days }} days and project for the next {{ projections[0].projection_days }} days.
-            These are default values used by the projection page; the underlying `project_demand` function can accept different parameters.
         </p>
         {% endif %}
-    {% else %}
-        <p class="empty-message">No items found in current or historical inventory to generate projections.</p>
+
+    {# Pagination Controls for Product List #}
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        <span>Page {{ current_page }} of {{ total_pages }} (Product List)</span>
+        <div class="page-navigation">
+            {% set pagination_filters = {
+                'search_term': search_term,
+                'category': selected_category,
+                'purchase_location': selected_purchase_location,
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'per_page': per_page
+            } %}
+            {% if current_page > 1 %}
+            <a href="{{ url_for('projections_view', **pagination_filters, page=current_page - 1) }}" class="button button-small">
+                <i class="fas fa-chevron-left"></i> Previous
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled"><i class="fas fa-chevron-left"></i> Previous</span>
+            {% endif %}
+
+            {% if current_page < total_pages %}
+            <a href="{{ url_for('projections_view', **pagination_filters, page=current_page + 1) }}" class="button button-small">
+                Next <i class="fas fa-chevron-right"></i>
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled">Next <i class="fas fa-chevron-right"></i></span>
+            {% endif %}
+        </div>
+    </div>
     {% endif %}
 
-    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;">Back to Home</a></p>
+    {% else %}
+        <p class="empty-message">
+            {% if search_term or selected_category or selected_purchase_location %}
+                No products match your current filters to generate projections. <a href="{{ url_for('projections_view') }}">Clear filters</a>.
+            {% else %}
+                No products found to generate projections. Add some products or check your inventory.
+            {% endif %}
+        </p>
+    {% endif %}
+
+    <p><a href="{{ url_for('home') }}" class="nav-link-button" style="margin-top: 20px;"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
 {% endblock %}

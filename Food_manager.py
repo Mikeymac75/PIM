@@ -260,6 +260,38 @@ class InventoryManager:
             print(f"Database error fetching all purchase locations: {e}")
         return locations
 
+    def get_products_for_projection_list(self, search_term=None, category=None, purchase_location=None,
+                                         sort_by='name', sort_order='ASC', page=1, per_page=10):
+        """
+        Retrieves a paginated and filtered list of products for the demand projection page.
+        This is similar to get_all_products but specifically for listing products
+        for which projections will be calculated.
+        """
+        # This method is essentially a wrapper or identical to get_all_products.
+        # Re-using get_all_products logic directly.
+        return self.get_all_products(
+            search_term=search_term,
+            category=category,
+            purchase_location=purchase_location,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            per_page=per_page
+        )
+
+    def get_products_for_projection_list_count(self, search_term=None, category=None, purchase_location=None):
+        """
+        Gets the total number of products for the projection list, filtered by product attributes.
+        This is similar to get_product_count.
+        """
+        # This method is essentially a wrapper or identical to get_product_count.
+        # Re-using get_product_count logic directly.
+        return self.get_product_count(
+            search_term=search_term,
+            category=category,
+            purchase_location=purchase_location
+        )
+
     def update_product(self, product_id, name, category, subcategory, unit_of_measure,
                        default_expiry_days, par_level, max_holding_amount, purchase_location):
         """Updates an existing product in the products table."""
@@ -446,6 +478,186 @@ class InventoryManager:
             print(f"Database error fetching current inventory: {e}")
         return items
 
+    def get_current_inventory(self, search_term=None, category=None, purchase_location=None,
+                              expiry_start_date=None, expiry_end_date=None,
+                              sort_by='expiry_date', sort_order='ASC',
+                              page=1, per_page=10):
+        """
+        Retrieves items from the current inventory, joined with product details,
+        with filtering, sorting, and pagination.
+        - search_term: Filters by product name (p.name).
+        - category: Filters by product category (p.category).
+        - purchase_location: Filters by product purchase location (p.purchase_location).
+        - expiry_start_date: Filters for expiry_date >= this date.
+        - expiry_end_date: Filters for expiry_date <= this date.
+        - sort_by: Column to sort by ('product_name', 'category', 'purchase_location',
+                   'expiry_date', 'purchase_date', 'quantity'). Defaults to 'expiry_date'.
+        - sort_order: 'ASC' or 'DESC'. Defaults to 'ASC'.
+        - page: For pagination.
+        - per_page: For pagination.
+        """
+        items = []
+        params = []
+
+        base_query = """
+            SELECT
+                ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
+                ii.original_quantity_string,
+                p.name AS product_name, p.category, p.subcategory, p.unit_of_measure,
+                p.par_level, p.max_holding_amount, p.purchase_location
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+        """
+
+        where_clauses = []
+        if search_term:
+            where_clauses.append("LOWER(p.name) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("LOWER(p.category) = ?")
+            params.append(category.lower())
+        if purchase_location:
+            where_clauses.append("LOWER(p.purchase_location) = ?")
+            params.append(purchase_location.lower())
+        if expiry_start_date:
+            where_clauses.append("ii.expiry_date >= ?")
+            params.append(expiry_start_date)
+        if expiry_end_date:
+            where_clauses.append("ii.expiry_date <= ?")
+            params.append(expiry_end_date)
+
+        if where_clauses:
+            base_query += " WHERE " + " AND ".join(where_clauses)
+
+        # Sorting
+        valid_sort_columns = {
+            'product_name': 'p.name',
+            'category': 'p.category',
+            'purchase_location': 'p.purchase_location',
+            'expiry_date': 'ii.expiry_date',
+            'purchase_date': 'ii.purchase_date',
+            # Sorting by quantity can be tricky due to its string nature.
+            # CAST to REAL might work for purely numeric strings.
+            'quantity': 'CAST(ii.quantity AS REAL)'
+        }
+        sort_column = valid_sort_columns.get(sort_by.lower(), 'ii.expiry_date')
+
+        sort_order_upper = sort_order.upper()
+        if sort_order_upper not in ['ASC', 'DESC']:
+            sort_order_upper = 'ASC'
+
+        base_query += f" ORDER BY {sort_column} {sort_order_upper}, ii.id {sort_order_upper}" # Secondary sort for stability
+
+        # Pagination
+        if page is not None and per_page is not None and page > 0 and per_page > 0:
+            offset = (page - 1) * per_page
+            base_query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
+        elif per_page is not None and per_page > 0:
+            base_query += " LIMIT ?"
+            params.append(per_page)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(base_query, tuple(params))
+                rows = cursor.fetchall()
+                for row in rows:
+                    item = dict(row)
+                    # Convert date strings to date objects
+                    if item.get('purchase_date'):
+                        item['purchase_date'] = date.fromisoformat(item['purchase_date'])
+                    if item.get('expiry_date'):
+                        item['expiry_date'] = date.fromisoformat(item['expiry_date'])
+                    items.append(item)
+        except sqlite3.Error as e:
+            print(f"Database error fetching current inventory with filters: {e}")
+        return items
+
+    def get_current_inventory_count(self, search_term=None, category=None, purchase_location=None,
+                                    expiry_start_date=None, expiry_end_date=None):
+        """
+        Gets the total count of current inventory items based on filters.
+        """
+        params = []
+        query = """
+            SELECT COUNT(ii.id) as count
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+        """
+
+        where_clauses = []
+        if search_term:
+            where_clauses.append("LOWER(p.name) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("LOWER(p.category) = ?")
+            params.append(category.lower())
+        if purchase_location:
+            where_clauses.append("LOWER(p.purchase_location) = ?")
+            params.append(purchase_location.lower())
+        if expiry_start_date:
+            where_clauses.append("ii.expiry_date >= ?")
+            params.append(expiry_start_date)
+        if expiry_end_date:
+            where_clauses.append("ii.expiry_date <= ?")
+            params.append(expiry_end_date)
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                result = cursor.fetchone()
+                return result['count'] if result else 0
+        except sqlite3.Error as e:
+            print(f"Database error getting current inventory count: {e}")
+            return 0
+
+    def get_current_inventory_categories(self):
+        """Retrieves unique categories from products currently in inventory."""
+        categories = []
+        query = """
+            SELECT DISTINCT p.category
+            FROM products p
+            JOIN inventory_items ii ON p.id = ii.product_id
+            WHERE p.category IS NOT NULL
+            ORDER BY p.category ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    categories.append(row['category'])
+        except sqlite3.Error as e:
+            print(f"Database error fetching current inventory categories: {e}")
+        return categories
+
+    def get_current_inventory_purchase_locations(self):
+        """Retrieves unique purchase locations from products currently in inventory."""
+        locations = []
+        query = """
+            SELECT DISTINCT p.purchase_location
+            FROM products p
+            JOIN inventory_items ii ON p.id = ii.product_id
+            WHERE p.purchase_location IS NOT NULL
+            ORDER BY p.purchase_location ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    locations.append(row['purchase_location'])
+        except sqlite3.Error as e:
+            print(f"Database error fetching current inventory purchase locations: {e}")
+        return locations
+
     def get_inventory_batches_for_product(self, product_id, limit=None, order_by_purchase_desc=False, order_by_id_desc=False):
         """
         Retrieves specific inventory batches for a given product_id.
@@ -631,6 +843,163 @@ class InventoryManager:
         except sqlite3.Error as e:
             print(f"Database error fetching historical inventory: {e}")
         return items
+
+    def get_historical_inventory(self, search_term=None, category=None,
+                                 consumed_start_date=None, consumed_end_date=None,
+                                 sort_by='consumed_date', sort_order='DESC',
+                                 page=1, per_page=10):
+        """
+        Retrieves items from historical inventory, joined with product details,
+        with filtering, sorting, and pagination.
+        - search_term: Filters by product name (p.name or hi.name).
+        - category: Filters by product category (p.category).
+        - consumed_start_date: Filters for hi.consumed_date >= this date.
+        - consumed_end_date: Filters for hi.consumed_date <= this date.
+        - sort_by: ('product_name', 'category', 'quantity_consumed', 'consumed_date').
+        - sort_order: 'ASC' or 'DESC'.
+        - page: For pagination.
+        - per_page: For pagination.
+        """
+        items = []
+        params = []
+
+        base_query = """
+            SELECT
+                hi.id, hi.product_id,
+                COALESCE(p.name, hi.name) AS product_display_name,
+                hi.quantity_consumed_this_time, hi.original_quantity_string,
+                hi.purchase_date, hi.expiry_date, hi.consumed_date,
+                p.category, p.subcategory, p.unit_of_measure
+            FROM historical_items hi
+            LEFT JOIN products p ON hi.product_id = p.id
+        """
+
+        where_clauses = []
+        if search_term:
+            where_clauses.append("LOWER(COALESCE(p.name, hi.name)) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            # This will only include items that have a linked product and category
+            where_clauses.append("p.category IS NOT NULL AND LOWER(p.category) = ?")
+            params.append(category.lower())
+        if consumed_start_date:
+            where_clauses.append("hi.consumed_date >= ?")
+            params.append(consumed_start_date)
+        if consumed_end_date:
+            where_clauses.append("hi.consumed_date <= ?")
+            params.append(consumed_end_date)
+
+        if where_clauses:
+            base_query += " WHERE " + " AND ".join(where_clauses)
+
+        # Sorting
+        valid_sort_columns = {
+            'product_name': 'product_display_name', # Use alias from COALESCE
+            'category': 'p.category',
+            'quantity_consumed': 'hi.quantity_consumed_this_time',
+            'consumed_date': 'hi.consumed_date',
+            'purchase_date': 'hi.purchase_date', # Added for completeness
+            'expiry_date': 'hi.expiry_date'    # Added for completeness
+        }
+        sort_column = valid_sort_columns.get(sort_by.lower(), 'hi.consumed_date')
+
+        sort_order_upper = sort_order.upper()
+        if sort_order_upper not in ['ASC', 'DESC']:
+            sort_order_upper = 'DESC' # Default for historical
+
+        base_query += f" ORDER BY {sort_column} {sort_order_upper}, hi.id {sort_order_upper}"
+
+        # Pagination
+        if page is not None and per_page is not None and page > 0 and per_page > 0:
+            offset = (page - 1) * per_page
+            base_query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
+        elif per_page is not None and per_page > 0:
+            base_query += " LIMIT ?"
+            params.append(per_page)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(base_query, tuple(params))
+                rows = cursor.fetchall()
+                for row_data in rows:
+                    item = dict(row_data)
+                    item['name'] = item['product_display_name'] # Ensure 'name' key is present for consistency
+                    if item.get('purchase_date'):
+                        item['purchase_date'] = date.fromisoformat(item['purchase_date'])
+                    if item.get('expiry_date'):
+                        item['expiry_date'] = date.fromisoformat(item['expiry_date'])
+                    if item.get('consumed_date'): # Should always be present for historical
+                        item['consumed_date'] = date.fromisoformat(item['consumed_date'])
+                    items.append(item)
+        except sqlite3.Error as e:
+            print(f"Database error fetching historical inventory with filters: {e}")
+        return items
+
+    def get_historical_inventory_count(self, search_term=None, category=None,
+                                       consumed_start_date=None, consumed_end_date=None):
+        """
+        Gets the total count of historical inventory items based on filters.
+        """
+        params = []
+        query = """
+            SELECT COUNT(hi.id) as count
+            FROM historical_items hi
+            LEFT JOIN products p ON hi.product_id = p.id
+        """
+
+        where_clauses = []
+        if search_term:
+            where_clauses.append("LOWER(COALESCE(p.name, hi.name)) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("p.category IS NOT NULL AND LOWER(p.category) = ?")
+            params.append(category.lower())
+        if consumed_start_date:
+            where_clauses.append("hi.consumed_date >= ?")
+            params.append(consumed_start_date)
+        if consumed_end_date:
+            where_clauses.append("hi.consumed_date <= ?")
+            params.append(consumed_end_date)
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                result = cursor.fetchone()
+                return result['count'] if result else 0
+        except sqlite3.Error as e:
+            print(f"Database error getting historical inventory count: {e}")
+            return 0
+
+    def get_historical_inventory_categories(self):
+        """Retrieves unique categories from products recorded in historical inventory."""
+        categories = []
+        query = """
+            SELECT DISTINCT p.category
+            FROM products p
+            JOIN historical_items hi ON p.id = hi.product_id
+            WHERE p.category IS NOT NULL
+            ORDER BY p.category ASC
+        """
+        # Using JOIN (INNER JOIN) implicitly means we only get categories for historical items
+        # that have a valid product_id and that product still exists in the products table.
+        # If we wanted categories even for items where product might have been deleted later,
+        # but category was stored historically (not current design), this query would change.
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    categories.append(row['category'])
+        except sqlite3.Error as e:
+            print(f"Database error fetching historical inventory categories: {e}")
+        return categories
 
     def get_total_item_quantity(self, product_name_or_id):
         """Calculates total quantity of a specific item in current inventory, using product_id or name."""
