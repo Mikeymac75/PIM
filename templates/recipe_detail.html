@@ -53,10 +53,10 @@
             <div class="actions-section" style="margin-top: 20px;">
                 {% if recipe_makeable %}
                     <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" style="display: inline;">
-                        <button type="submit" class="button">Make This Recipe</button>
+                        <button type="submit" class="button"><i class="fas fa-blender"></i> Make This Recipe</button>
                     </form>
                 {% else %}
-                    <button type="button" class="button" disabled title="Not enough ingredients to make this recipe.">Make This Recipe (Insufficient Ingredients)</button>
+                    <button type="button" class="button" disabled title="Not enough ingredients to make this recipe."><i class="fas fa-blender"></i> Make This Recipe (Insufficient Ingredients)</button>
                 {% endif %}
             </div>
 
@@ -69,7 +69,8 @@
     {% endif %}
 
     <p style="margin-top: 30px;">
-        <a href="{{ url_for('recipes_list_view') }}" class="nav-link-button">Back to All Recipes</a>
-        <a href="{{ url_for('home') }}" class="nav-link-button">Back to Home</a>
+        <a href="{{ url_for('recipes_list_view') }}" class="nav-link-button"><i class="fas fa-list-ul"></i> Back to All Recipes</a>
+        <a href="{{ url_for('edit_recipe_view', recipe_id=recipe.id) }}" class="nav-link-button"><i class="fas fa-edit"></i> Edit This Recipe</a>
+        <a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Home</a>
     </p>
 {% endblock %}

@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <title>{% block title %}Food Inventory Manager{% endblock %}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
 <body>
     <header>
@@ -14,17 +16,17 @@
             </div>
             <nav>
                 <ul>
-                    <li class="{% if request.endpoint == 'home' %}current{% endif %}"><a href="{{ url_for('home') }}">Home</a></li>
-                    <li class="{% if request.endpoint == 'current_inventory_view' %}current{% endif %}"><a href="{{ url_for('current_inventory_view') }}">Current Inventory</a></li>
-                    <li class="{% if request.endpoint == 'add_inventory_stock_view' %}current{% endif %}"><a href="{{ url_for('add_inventory_stock_view') }}">Add Stock</a></li>
-                    <li class="{% if request.endpoint == 'historical_inventory_view' %}current{% endif %}"><a href="{{ url_for('historical_inventory_view') }}">Historical Inventory</a></li>
-                    <li class="{% if request.endpoint == 'projections_view' %}current{% endif %}"><a href="{{ url_for('projections_view') }}">Demand Projections</a></li>
-                    <li class="{% if request.endpoint == 'list_products_view' %}current{% endif %}"><a href="{{ url_for('list_products_view') }}">Manage Products</a></li>
-                    <li class="{% if request.endpoint == 'create_product_view' %}current{% endif %}"><a href="{{ url_for('create_product_view') }}">Create Product</a></li>
-                    <li class="{% if request.endpoint == 'consume_item_view' %}current{% endif %}"><a href="{{ url_for('consume_item_view') }}">Consume Item</a></li>
-                    <li class="{% if request.endpoint == 'upload_excel_view' %}current{% endif %}"><a href="{{ url_for('upload_excel_view') }}">Upload Excel</a></li>
-                    <li class="{% if request.endpoint == 'add_recipe_view' %}current{% endif %}"><a href="{{ url_for('add_recipe_view') }}">Add Recipe</a></li>
-                    <li class="{% if request.endpoint == 'recipes_list_view' %}current{% endif %}"><a href="{{ url_for('recipes_list_view') }}">View Recipes</a></li>
+                    <li class="{% if request.endpoint == 'home' %}current{% endif %}"><a href="{{ url_for('home') }}"><i class="fas fa-home"></i> Home</a></li>
+                    <li class="{% if request.endpoint == 'current_inventory_view' %}current{% endif %}"><a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a></li>
+                    <li class="{% if request.endpoint == 'add_inventory_stock_view' %}current{% endif %}"><a href="{{ url_for('add_inventory_stock_view') }}"><i class="fas fa-plus-circle"></i> Add Stock</a></li>
+                    <li class="{% if request.endpoint == 'historical_inventory_view' %}current{% endif %}"><a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a></li>
+                    <li class="{% if request.endpoint == 'projections_view' %}current{% endif %}"><a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a></li>
+                    <li class="{% if request.endpoint == 'list_products_view' %}current{% endif %}"><a href="{{ url_for('list_products_view') }}"><i class="fas fa-tasks"></i> Manage Products</a></li>
+                    <li class="{% if request.endpoint == 'create_product_view' %}current{% endif %}"><a href="{{ url_for('create_product_view') }}"><i class="fas fa-plus-square"></i> Create Product</a></li>
+                    <li class="{% if request.endpoint == 'consume_item_view' %}current{% endif %}"><a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a></li>
+                    <li class="{% if request.endpoint == 'upload_excel_view' %}current{% endif %}"><a href="{{ url_for('upload_excel_view') }}"><i class="fas fa-file-excel"></i> Upload Excel</a></li>
+                    <li class="{% if request.endpoint == 'add_recipe_view' %}current{% endif %}"><a href="{{ url_for('add_recipe_view') }}"><i class="fas fa-book-medical"></i> Add Recipe</a></li>
+                    <li class="{% if request.endpoint == 'recipes_list_view' %}current{% endif %}"><a href="{{ url_for('recipes_list_view') }}"><i class="fas fa-book-open"></i> View Recipes</a></li>
                 </ul>
             </nav>
         </div>
