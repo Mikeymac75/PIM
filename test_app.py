@@ -759,6 +759,98 @@ class TestAppRecipeRoutes(BaseAppTest): # Inherits from BaseAppTest
         hist_flakes = [h for h in app.manager.get_historical_inventory() if h['product_id'] == p_flakes_id]
         self.assertEqual(len(hist_flakes), 0)
 
+    def test_edit_recipe_get_request(self):
+        # Add a recipe to ensure one exists for editing
+        recipe_data = {"name": "Test Recipe for Edit", "description": "A test desc", "ingredients": []}
+        result = self.recipe_manager.add_recipe(recipe_data)
+        self.assertTrue(result.get("success"), f"Failed to create test recipe for edit test: {result.get('message')}")
+
+        # Retrieve the created recipe's ID
+        # Note: get_recipe_by_name returns a dict which includes 'id'
+        created_recipe = self.recipe_manager.get_recipe_by_name("Test Recipe for Edit")
+        self.assertIsNotNone(created_recipe, "Test recipe 'Test Recipe for Edit' not found after adding.")
+        test_recipe_id = created_recipe['id']
+
+        # Ensure some products exist for the ingredients dropdown (though recipe has no ingredients, form might still load them)
+        self._create_app_product(name="Product A")
+        self._create_app_product(name="Product B")
+
+        response = self.client.get(f'/recipes/{test_recipe_id}/edit')
+        self.assertEqual(response.status_code, 200)
+        response_data = response.data.decode()
+
+        self.assertIn('<h1 class="page-title">Edit Recipe: Test Recipe for Edit</h1>', response_data)
+        self.assertIn('<label for="recipe_name">Recipe Name:</label>', response_data)
+        self.assertIn('value="Test Recipe for Edit"', response_data) # Check if name is pre-filled
+        self.assertIn('<textarea id="description" name="description" class="form-control" rows="3">A test desc</textarea>', response_data) # Check description
+        self.assertIn('<button type="submit" class="button" style="margin-top: 20px;">Update Recipe</button>', response_data)
+        # Check if product dropdowns are present (even if not used by this specific recipe)
+        self.assertIn("Product A", response_data)
+        self.assertIn("Product B", response_data)
+
+    def test_create_recipe_and_make_availability(self):
+        # a. Create Products for Ingredients
+        self._create_app_product(name="Test Apple", unit_of_measure="piece", default_expiry_days=7)
+        self._create_app_product(name="Test Sugar", unit_of_measure="gram", default_expiry_days=365)
+
+        recipe_name = "Apple Pie Test"
+        recipe_data_form = {
+            'recipe_name': recipe_name,
+            'description': 'A delicious test pie.',
+            'ingredient_1_name': 'Test Apple',
+            'ingredient_1_quantity': '2',
+            'ingredient_2_name': 'Test Sugar',
+            'ingredient_2_quantity': '100'
+        }
+
+        # b. Add a Recipe
+        # Assuming add_recipe_view redirects back to itself or list view, not detail view yet.
+        # The flash message is the key success indicator.
+        with self.client: # Use context manager to access session for flashed messages
+            response_add = self.client.post('/recipes/add', data=recipe_data_form, follow_redirects=False) # Test redirect explicitly
+            self.assertEqual(response_add.status_code, 302) # Should redirect on success
+
+            # Check flashed message after redirect
+            # This requires either following the redirect and checking the new page,
+            # or inspecting the session directly. For simplicity with redirects, let's follow.
+            response_add_followed = self.client.post('/recipes/add', data=recipe_data_form, follow_redirects=True)
+            self.assertEqual(response_add_followed.status_code, 200) # After redirect, lands on add_recipe_view (or list)
+
+            # More robust check for flash message using session if possible, or check key content.
+            # Let's assume the success message is flashed and visible on the re-rendered add_recipe.html (if it redirects there)
+            # or on the recipe list page. A direct check of the recipe_manager is more reliable here.
+            self.assertIn(f"Recipe '{recipe_name}' added successfully.".encode('utf-8'), response_add_followed.data)
+
+            # Verify directly with manager as well
+            recipe_exists_in_db = self.recipe_manager.get_recipe_by_name(recipe_name)
+            self.assertIsNotNone(recipe_exists_in_db, f"Recipe '{recipe_name}' not found in DB after add attempt.")
+
+
+        # c. Verify in Recipes List
+        response_list = self.client.get('/recipes')
+        self.assertEqual(response_list.status_code, 200)
+        self.assertIn(recipe_name, response_list.data.decode())
+
+        # d. Verify Recipe Detail Page
+        # Need to handle potential URL encoding if recipe_name could have special chars
+        # For "Apple Pie Test", %20 will be used for space.
+        encoded_recipe_name = recipe_name.replace(" ", "%20")
+        response_detail = self.client.get(f'/recipes/name/{encoded_recipe_name}')
+        self.assertEqual(response_detail.status_code, 200)
+        self.assertIn(recipe_name, response_detail.data.decode()) # Check for actual name
+        self.assertIn("Test Apple", response_detail.data.decode())
+        self.assertIn("Test Sugar", response_detail.data.decode())
+
+        # e. Verify "Make Recipe" Availability
+        # No inventory added, so expect "Cannot make..." message. This proves recipe is found.
+        response_make = self.client.post(f'/recipes/name/{encoded_recipe_name}/make', follow_redirects=True)
+        self.assertEqual(response_make.status_code, 200) # Redirects back to detail page
+
+        response_make_text = response_make.data.decode()
+        expected_flash_message = f"Cannot make '{recipe_name}'. Not enough ingredients currently available."
+        self.assertIn(expected_flash_message, response_make_text)
+        self.assertNotIn("Recipe not found", response_make_text) # Ensure it's not a "not found" error
+
 
 class TestProductRoutes(BaseAppTest):
     def test_list_products_view_empty(self):
