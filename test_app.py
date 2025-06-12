@@ -1174,3 +1174,361 @@ class TestAppEditInventoryRoute(BaseAppTest):
         batches_after_attempt = app.manager.get_inventory_batches_for_product(p_id)
         self.assertEqual(len(batches_after_attempt), 1)
         self.assertEqual(batches_after_attempt[0]['quantity'], "10 units")
+
+
+class TestAppConsumeRecipe(BaseAppTest):
+    def setUp(self):
+        super().setUp()
+        # 1. Create common products using helper and store their IDs
+        self.p_flour_id = self._create_app_product(name='Flour', unit_of_measure='grams', default_expiry_days=365, category='Baking')
+        self.p_sugar_id = self._create_app_product(name='Sugar', unit_of_measure='grams', default_expiry_days=730, category='Baking')
+        self.p_eggs_id = self._create_app_product(name='Eggs', unit_of_measure='units', default_expiry_days=21, category='Dairy/Fridge')
+        self.p_milk_id = self._create_app_product(name='Milk', unit_of_measure='ml', default_expiry_days=7, category='Dairy/Fridge')
+        self.p_butter_id = self._create_app_product(name='Butter', unit_of_measure='grams', default_expiry_days=60, category='Dairy/Fridge')
+
+        # Verify products were created (optional, _create_app_product has asserts)
+        self.assertIsNotNone(self.inventory_manager.get_product(self.p_flour_id))
+        self.assertIsNotNone(self.inventory_manager.get_product(self.p_sugar_id))
+        self.assertIsNotNone(self.inventory_manager.get_product(self.p_eggs_id))
+        self.assertIsNotNone(self.inventory_manager.get_product(self.p_milk_id))
+        self.assertIsNotNone(self.inventory_manager.get_product(self.p_butter_id))
+
+        # 2. Create a common recipe named "Test Cake" using direct manager call
+        self.recipe_name = "Test Cake"
+        recipe_ingredients_data = [
+            {"item_name": "Flour", "quantity_required": 200.0},
+            {"item_name": "Sugar", "quantity_required": 100.0},
+            {"item_name": "Eggs", "quantity_required": 2.0},
+            {"item_name": "Milk", "quantity_required": 50.0},
+            {"item_name": "Butter", "quantity_required": 75.0}
+        ]
+        recipe_create_result = self.recipe_manager.add_recipe({
+            "name": self.recipe_name,
+            "description": "A delicious test cake.",
+            "ingredients": recipe_ingredients_data
+        })
+        self.assertTrue(recipe_create_result.get("success"), f"Failed to create recipe '{self.recipe_name}': {recipe_create_result.get('message')}")
+
+        # Verify recipe in DB
+        recipe_in_db = self.recipe_manager.get_recipe_by_name(self.recipe_name)
+        self.assertIsNotNone(recipe_in_db, f"Recipe '{self.recipe_name}' not found in DB after creation.")
+        self.assertEqual(recipe_in_db['name'], self.recipe_name)
+        self.assertEqual(len(recipe_in_db['ingredients']), 5)
+
+    def test_consume_recipe_all_ingredients_available(self):
+        # Arrange: Add sufficient stock for all ingredients of "Test Cake"
+        # Product IDs are: self.p_flour_id, self.p_sugar_id, self.p_eggs_id, self.p_milk_id, self.p_butter_id
+        # Recipe "Test Cake" needs: Flour: 200g, Sugar: 100g, Eggs: 2 units, Milk: 50ml, Butter: 75g
+
+        initial_stock_quantities = {
+            "Flour": {"id": self.p_flour_id, "add_qty_str": "500", "initial_numeric": 500.0, "recipe_needs": 200.0},
+            "Sugar": {"id": self.p_sugar_id, "add_qty_str": "300", "initial_numeric": 300.0, "recipe_needs": 100.0},
+            "Eggs": {"id": self.p_eggs_id, "add_qty_str": "10", "initial_numeric": 10.0, "recipe_needs": 2.0},
+            "Milk": {"id": self.p_milk_id, "add_qty_str": "200", "initial_numeric": 200.0, "recipe_needs": 50.0},
+            "Butter": {"id": self.p_butter_id, "add_qty_str": "150", "initial_numeric": 150.0, "recipe_needs": 75.0},
+        }
+
+        for name, data in initial_stock_quantities.items():
+            add_result = self._add_app_inventory_stock(data["id"], data["add_qty_str"], self.today_str)
+            self.assertTrue(add_result.get("success"), f"Failed to add stock for {name}: {add_result.get('message')}")
+            # Verify initial quantity after adding (get_total_item_quantity returns float)
+            current_qty = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(current_qty, data["initial_numeric"], msg=f"Initial stock for {name} not set correctly.")
+
+        # Act: Make the recipe
+        response = self.client.post(f'/recipes/{self.recipe_name}/make', follow_redirects=True)
+
+        # Assert: Response and flash message
+        self.assertEqual(response.status_code, 200)
+        expected_flash_message = f"Recipe '{self.recipe_name}' made successfully! Ingredients have been consumed."
+        self.assertIn(bytes(expected_flash_message, 'utf-8'), response.data)
+
+        # Assert: Inventory quantities updated
+        for name, data in initial_stock_quantities.items():
+            expected_remaining = data["initial_numeric"] - data["recipe_needs"]
+            current_qty_after_consumption = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(current_qty_after_consumption, expected_remaining,
+                                 msg=f"Inventory quantity for {name} not updated correctly after consumption.")
+
+        # Assert: Historical entries created
+        all_historical_items = self.inventory_manager.get_historical_inventory()
+        for name, data in initial_stock_quantities.items():
+            product_id = data["id"]
+            recipe_quantity_needed = data["recipe_needs"]
+
+            # Filter historical items for the current product_id
+            product_historical_entries = [
+                item for item in all_historical_items if item['product_id'] == product_id
+            ]
+
+            self.assertEqual(len(product_historical_entries), 1,
+                             f"Expected 1 historical entry for {name} (ID: {product_id}), found {len(product_historical_entries)}.")
+
+            historical_entry = product_historical_entries[0]
+            self.assertAlmostEqual(historical_entry['quantity_consumed_this_time'], recipe_quantity_needed,
+                                 msg=f"Historical consumption quantity for {name} is incorrect.")
+            self.assertEqual(historical_entry['consumed_date'].isoformat(), self.today_str,
+                             msg=f"Historical consumption date for {name} is incorrect.")
+            self.assertEqual(historical_entry['name'], name, # Check product name consistency
+                             msg=f"Historical entry name for {name} is incorrect.")
+
+    def test_consume_recipe_ingredient_partially_unavailable(self):
+        # Arrange: Stock one ingredient (Flour) with less than required.
+        # Recipe "Test Cake" needs: Flour: 200g. We add 100g.
+        # Other ingredients are stocked sufficiently.
+
+        stock_levels = {
+            "Flour": {"id": self.p_flour_id, "add_qty_str": "100", "initial_numeric": 100.0}, # Insufficient
+            "Sugar": {"id": self.p_sugar_id, "add_qty_str": "300", "initial_numeric": 300.0}, # Sufficient
+            "Eggs": {"id": self.p_eggs_id, "add_qty_str": "10", "initial_numeric": 10.0},     # Sufficient
+            "Milk": {"id": self.p_milk_id, "add_qty_str": "200", "initial_numeric": 200.0},   # Sufficient
+            "Butter": {"id": self.p_butter_id, "add_qty_str": "150", "initial_numeric": 150.0} # Sufficient
+        }
+
+        initial_quantities_db = {}
+        for name, data in stock_levels.items():
+            add_result = self._add_app_inventory_stock(data["id"], data["add_qty_str"], self.today_str)
+            self.assertTrue(add_result.get("success"), f"Failed to add stock for {name}")
+            initial_quantities_db[name] = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(initial_quantities_db[name], data["initial_numeric"], msg=f"Initial stock for {name} not set correctly.")
+
+        # Get count of historical items before attempting to make recipe
+        # Since products are created fresh in setUp, there should be no historical items for them yet.
+        historical_items_before = self.inventory_manager.get_historical_inventory()
+        count_historical_for_ingredients_before = {
+            name: len([item for item in historical_items_before if item['product_id'] == data["id"]])
+            for name, data in stock_levels.items()
+        }
+        for name, count in count_historical_for_ingredients_before.items():
+            self.assertEqual(count, 0, f"Expected 0 historical entries for {name} before test action, found {count}.")
+
+
+        # Act: Attempt to make the recipe
+        response = self.client.post(f'/recipes/{self.recipe_name}/make', follow_redirects=True)
+
+        # Assert: Response and flash message
+        self.assertEqual(response.status_code, 200)
+        expected_flash_message = f"Cannot make '{self.recipe_name}'. Not enough ingredients currently available."
+        self.assertIn(bytes(expected_flash_message, 'utf-8'), response.data)
+
+        # Assert: Inventory quantities unchanged
+        for name, data in stock_levels.items():
+            current_qty_after_attempt = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(current_qty_after_attempt, initial_quantities_db[name],
+                                 msg=f"Inventory quantity for {name} should not have changed.")
+
+        # Assert: No new historical entries created for these ingredients
+        historical_items_after = self.inventory_manager.get_historical_inventory()
+        count_historical_for_ingredients_after = {
+            name: len([item for item in historical_items_after if item['product_id'] == data["id"]])
+            for name, data in stock_levels.items()
+        }
+        for name, data in stock_levels.items():
+            self.assertEqual(count_historical_for_ingredients_after[name],
+                             count_historical_for_ingredients_before[name],
+                             f"Historical item count for {name} should not have changed.")
+
+    def test_consume_recipe_multiple_batches_oldest_consumed_first(self):
+        # Arrange: "Test Cake" requires 200g of Flour.
+        # Add two batches of Flour, ensuring their purchase dates make one expire sooner.
+        # Flour product (self.p_flour_id) has default_expiry_days = 365.
+
+        older_purchase_date = (self.today - timedelta(days=10)).isoformat()
+        newer_purchase_date = (self.today - timedelta(days=5)).isoformat()
+
+        # Batch 1 (Older) - Expected to be consumed fully
+        add_flour_batch1_res = self._add_app_inventory_stock(self.p_flour_id, "150", older_purchase_date) # 150g
+        self.assertTrue(add_flour_batch1_res.get("success"))
+        flour_batch1_id = add_flour_batch1_res.get("stock_item_id")
+        self.assertIsNotNone(flour_batch1_id)
+
+        # Batch 2 (Newer) - Expected to be partially consumed
+        add_flour_batch2_res = self._add_app_inventory_stock(self.p_flour_id, "150", newer_purchase_date) # 150g
+        self.assertTrue(add_flour_batch2_res.get("success"))
+        flour_batch2_id = add_flour_batch2_res.get("stock_item_id")
+        self.assertIsNotNone(flour_batch2_id)
+
+        # Ensure total flour is 300g initially
+        self.assertAlmostEqual(self.inventory_manager.get_total_item_quantity(self.p_flour_id), 300.0)
+
+        # Stock other ingredients sufficiently with single batches
+        self._add_app_inventory_stock(self.p_sugar_id, "300", self.today_str)  # Needs 100g
+        self._add_app_inventory_stock(self.p_eggs_id, "10", self.today_str)    # Needs 2 units
+        self._add_app_inventory_stock(self.p_milk_id, "200", self.today_str)   # Needs 50ml
+        self._add_app_inventory_stock(self.p_butter_id, "150", self.today_str) # Needs 75g
+
+        # Act: Make the "Test Cake"
+        response = self.client.post(f'/recipes/{self.recipe_name}/make', follow_redirects=True)
+
+        # Assert: Response and flash message
+        self.assertEqual(response.status_code, 200)
+        expected_flash_message = f"Recipe '{self.recipe_name}' made successfully! Ingredients have been consumed."
+        self.assertIn(bytes(expected_flash_message, 'utf-8'), response.data)
+
+        # Assert: Total Flour quantity reduced by 200g (300g - 200g = 100g)
+        self.assertAlmostEqual(self.inventory_manager.get_total_item_quantity(self.p_flour_id), 100.0)
+
+        # Assert: Batch consumption for Flour
+        flour_batches_after = self.inventory_manager.get_inventory_batches_for_product(self.p_flour_id)
+
+        # Check older batch (flour_batch1_id) - should be fully consumed and thus gone
+        older_batch_found = any(b['id'] == flour_batch1_id for b in flour_batches_after)
+        self.assertFalse(older_batch_found, f"Older flour batch (ID: {flour_batch1_id}) should be fully consumed and deleted.")
+
+        # Check newer batch (flour_batch2_id) - should have 100g remaining (150g - 50g)
+        newer_batch_after = next((b for b in flour_batches_after if b['id'] == flour_batch2_id), None)
+        self.assertIsNotNone(newer_batch_after, f"Newer flour batch (ID: {flour_batch2_id}) not found after consumption.")
+        # The quantity in DB is stored as string, _parse_quantity_string is used by get_total_item_quantity
+        # For direct batch checking, we compare the string value or parse it.
+        # Manager's consume_item updates quantity to "0" or deletes, and for partial, it stores as string.
+        # Let's check against the string "100" or "100.0" if that's how it's stored.
+        # The `_parse_quantity_string` in FoodManager is used to get numeric,
+        # and new quantity is stored as str(float) or str(int).
+        # So, 100.0 will be stored as "100" if it's an integer after calculation.
+        self.assertEqual(str(newer_batch_after['quantity']), "100", "Newer flour batch quantity incorrect.")
+
+
+        # Assert: Historical entries for Flour
+        flour_historical_entries = [
+            item for item in self.inventory_manager.get_historical_inventory() if item['product_id'] == self.p_flour_id
+        ]
+        self.assertEqual(len(flour_historical_entries), 2, "Expected 2 historical entries for Flour consumption from two batches.")
+
+        consumed_amounts_flour = sorted([entry['quantity_consumed_this_time'] for entry in flour_historical_entries])
+        self.assertAlmostEqual(consumed_amounts_flour[0], 50.0)  # 50g from the newer batch
+        self.assertAlmostEqual(consumed_amounts_flour[1], 150.0) # 150g from the older batch
+
+        for entry in flour_historical_entries:
+            self.assertEqual(entry['consumed_date'].isoformat(), self.today_str)
+            self.assertEqual(entry['name'], "Flour") # Product name consistency
+
+        # Assert: Other ingredients consumed and historical entries created
+        other_ingredients_check = {
+            "Sugar": {"id": self.p_sugar_id, "needs": 100.0, "initial": 300.0},
+            "Eggs": {"id": self.p_eggs_id, "needs": 2.0, "initial": 10.0},
+            "Milk": {"id": self.p_milk_id, "needs": 50.0, "initial": 200.0},
+            "Butter": {"id": self.p_butter_id, "needs": 75.0, "initial": 150.0},
+        }
+        for name, data in other_ingredients_check.items():
+            expected_remaining = data["initial"] - data["needs"]
+            current_qty = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(current_qty, expected_remaining, f"Quantity for {name} incorrect.")
+
+            hist_entries = [item for item in self.inventory_manager.get_historical_inventory() if item['product_id'] == data["id"]]
+            self.assertEqual(len(hist_entries), 1, f"Expected 1 historical entry for {name}.")
+            self.assertAlmostEqual(hist_entries[0]['quantity_consumed_this_time'], data["needs"])
+            self.assertEqual(hist_entries[0]['consumed_date'].isoformat(), self.today_str)
+            self.assertEqual(hist_entries[0]['name'], name)
+
+    def test_consume_recipe_ingredient_product_does_not_exist(self):
+        # Arrange: Create a recipe with one non-existent product and one existing product.
+        mystery_recipe_name = "Mystery Shake"
+        non_existent_ingredient_name = "Cosmic Berry"
+        valid_ingredient_name = "Milk" # Exists from setUp (self.p_milk_id)
+
+        # Stock the valid ingredient
+        milk_stock_to_add = "200" # ml
+        milk_initial_numeric = 200.0
+        add_milk_stock_result = self._add_app_inventory_stock(self.p_milk_id, milk_stock_to_add, self.today_str)
+        self.assertTrue(add_milk_stock_result.get("success"), "Failed to stock Milk for test.")
+
+        initial_milk_quantity = self.inventory_manager.get_total_item_quantity(self.p_milk_id)
+        self.assertAlmostEqual(initial_milk_quantity, milk_initial_numeric, msg="Initial Milk quantity not set correctly.")
+
+        # Create the "Mystery Shake" recipe
+        mystery_recipe_ingredients = [
+            {"item_name": non_existent_ingredient_name, "quantity_required": 1.0},
+            {"item_name": valid_ingredient_name, "quantity_required": 100.0}
+        ]
+        recipe_create_result = self.recipe_manager.add_recipe({
+            "name": mystery_recipe_name,
+            "description": "A shake with a mysterious berry.",
+            "ingredients": mystery_recipe_ingredients
+        })
+        self.assertTrue(recipe_create_result.get("success"), f"Failed to create recipe '{mystery_recipe_name}'.")
+
+        # Record historical count for Milk
+        historical_items_before_action = self.inventory_manager.get_historical_inventory()
+        milk_historical_count_before = len([
+            item for item in historical_items_before_action if item['product_id'] == self.p_milk_id
+        ])
+
+        # Act: Attempt to make the "Mystery Shake"
+        response = self.client.post(f'/recipes/{mystery_recipe_name}/make', follow_redirects=True)
+
+        # Assert: Response and flash message
+        self.assertEqual(response.status_code, 200)
+        expected_flash_message = f"Cannot make '{mystery_recipe_name}'. Not enough ingredients currently available."
+        self.assertIn(bytes(expected_flash_message, 'utf-8'), response.data)
+
+        # Assert: Inventory of "Milk" (the valid ingredient) is unchanged
+        current_milk_quantity = self.inventory_manager.get_total_item_quantity(self.p_milk_id)
+        self.assertAlmostEqual(current_milk_quantity, initial_milk_quantity,
+                             msg="Inventory quantity for Milk should not have changed.")
+
+        # Assert: No new historical entry for "Milk"
+        historical_items_after_action = self.inventory_manager.get_historical_inventory()
+        milk_historical_count_after = len([
+            item for item in historical_items_after_action if item['product_id'] == self.p_milk_id
+        ])
+        self.assertEqual(milk_historical_count_after, milk_historical_count_before,
+                         "Historical item count for Milk should not have changed.")
+
+        # Additionally, ensure the non-existent product wasn't somehow created
+        cosmic_berry_product = self.inventory_manager.get_product_by_name(non_existent_ingredient_name)
+        self.assertIsNone(cosmic_berry_product, f"Product '{non_existent_ingredient_name}' should not exist.")
+
+    def test_consume_recipe_ingredient_completely_unavailable(self):
+        # Arrange: One ingredient (Eggs) is completely unavailable (0 stock).
+        # Other ingredients are stocked sufficiently.
+
+        stock_levels = {
+            "Flour": {"id": self.p_flour_id, "add_qty_str": "500", "initial_numeric": 500.0},  # Sufficient
+            "Sugar": {"id": self.p_sugar_id, "add_qty_str": "300", "initial_numeric": 300.0},  # Sufficient
+            "Eggs": {"id": self.p_eggs_id, "add_qty_str": None, "initial_numeric": 0.0},      # Unavailable (no stock added)
+            "Milk": {"id": self.p_milk_id, "add_qty_str": "200", "initial_numeric": 200.0},    # Sufficient
+            "Butter": {"id": self.p_butter_id, "add_qty_str": "150", "initial_numeric": 150.0} # Sufficient
+        }
+
+        initial_quantities_db = {}
+        for name, data in stock_levels.items():
+            if data["add_qty_str"] is not None: # Only add stock if specified
+                add_result = self._add_app_inventory_stock(data["id"], data["add_qty_str"], self.today_str)
+                self.assertTrue(add_result.get("success"), f"Failed to add stock for {name}")
+
+            initial_quantities_db[name] = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(initial_quantities_db[name], data["initial_numeric"], msg=f"Initial stock for {name} not set correctly. Expected {data['initial_numeric']}, got {initial_quantities_db[name]}")
+
+        # Get count of historical items before attempting to make recipe
+        historical_items_before = self.inventory_manager.get_historical_inventory()
+        count_historical_for_ingredients_before = {
+            name: len([item for item in historical_items_before if item['product_id'] == data["id"]])
+            for name, data in stock_levels.items()
+        }
+        for name, count in count_historical_for_ingredients_before.items():
+            self.assertEqual(count, 0, f"Expected 0 historical entries for {name} before test action, found {count}.")
+
+        # Act: Attempt to make the recipe
+        response = self.client.post(f'/recipes/{self.recipe_name}/make', follow_redirects=True)
+
+        # Assert: Response and flash message
+        self.assertEqual(response.status_code, 200)
+        expected_flash_message = f"Cannot make '{self.recipe_name}'. Not enough ingredients currently available."
+        self.assertIn(bytes(expected_flash_message, 'utf-8'), response.data)
+
+        # Assert: Inventory quantities unchanged
+        for name, data in stock_levels.items():
+            current_qty_after_attempt = self.inventory_manager.get_total_item_quantity(data["id"])
+            self.assertAlmostEqual(current_qty_after_attempt, initial_quantities_db[name],
+                                 msg=f"Inventory quantity for {name} should not have changed.")
+
+        # Assert: No new historical entries created for these ingredients
+        historical_items_after = self.inventory_manager.get_historical_inventory()
+        count_historical_for_ingredients_after = {
+            name: len([item for item in historical_items_after if item['product_id'] == data["id"]])
+            for name, data in stock_levels.items()
+        }
+        for name, data in stock_levels.items():
+            self.assertEqual(count_historical_for_ingredients_after[name],
+                             count_historical_for_ingredients_before[name],
+                             f"Historical item count for {name} should not have changed.")
