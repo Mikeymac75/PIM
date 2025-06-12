@@ -4,22 +4,22 @@
 
 {% block content %}
 <h1>Product List</h1>
-<p><a href="{{ url_for('create_product_view') }}">Create New Product</a></p>
+<a href="{{ url_for('create_product_view') }}" class="button">Create New Product</a>
 
 {% if products %}
 <table>
     <thead>
         <tr>
-            <th>Product ID</th> <!-- New Header -->
-            <th>Name</th>
-            <th>Category</th>
-            <th>Subcategory</th>
-            <th>Unit of Measure</th>
-            <th>Default Expiry (Days)</th>
-            <th>Par Level</th>
-            <th>Max Holding</th>
-            <th>Purchase Location</th>
-            <th>Actions</th>
+            <th class="product-list-header">Product ID</th> <!-- New Header -->
+            <th class="product-list-header">Name</th>
+            <th class="product-list-header">Category</th>
+            <th class="product-list-header">Subcategory</th>
+            <th class="product-list-header">Unit of Measure</th>
+            <th class="product-list-header">Default Expiry (Days)</th>
+            <th class="product-list-header">Par Level</th>
+            <th class="product-list-header">Max Holding</th>
+            <th class="product-list-header">Purchase Location</th>
+            <th class="product-list-header">Actions</th>
         </tr>
     </thead>
     <tbody>
