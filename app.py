@@ -661,8 +661,81 @@ def shopping_list_view():
 # --- Product Management Routes ---
 @app.route('/products', methods=['GET'])
 def list_products_view():
-    products = manager.get_all_products()
-    return render_template('list_products.html', products=products)
+    # Retrieve filter parameters
+    search_term = request.args.get('search_term', '').strip()
+    category = request.args.get('category', '').strip()
+    purchase_location = request.args.get('purchase_location', '').strip()
+
+    # Retrieve sorting parameters
+    sort_by = request.args.get('sort_by', 'name').strip()
+    sort_order = request.args.get('sort_order', 'ASC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
+
+    # Retrieve pagination parameters
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20))
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Get products with filtering, sorting, and pagination
+    products = manager.get_all_products(
+        search_term=search_term if search_term else None,
+        category=category if category else None,
+        purchase_location=purchase_location if purchase_location else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
+
+    # Get total product count for pagination
+    total_products = manager.get_product_count(
+        search_term=search_term if search_term else None,
+        category=category if category else None,
+        purchase_location=purchase_location if purchase_location else None
+    )
+
+    total_pages = (total_products + per_page - 1) // per_page if per_page > 0 else 1
+    if page > total_pages and total_pages > 0 : # If current page is beyond total pages (e.g. after filters change)
+        page = total_pages # Go to last valid page
+        # Re-fetch products for the new valid page
+        products = manager.get_all_products(
+            search_term=search_term if search_term else None,
+            category=category if category else None,
+            purchase_location=purchase_location if purchase_location else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            per_page=per_page
+        )
+
+
+    # Get filter options
+    all_categories = manager.get_all_categories()
+    all_purchase_locations = manager.get_all_purchase_locations()
+
+    return render_template(
+        'list_products.html',
+        products=products,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=category,
+        selected_purchase_location=purchase_location,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=all_categories,
+        purchase_locations=all_purchase_locations
+    )
 
 @app.route('/products/create', methods=['GET', 'POST'])
 def create_product_view():

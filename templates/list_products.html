@@ -6,26 +6,98 @@
 <h1>Product List</h1>
 <a href="{{ url_for('create_product_view') }}" class="button"><i class="fas fa-plus-square"></i> Create New Product</a>
 
+{# Filter Bar #}
+<form method="GET" action="{{ url_for('list_products_view') }}" class="filter-form">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="search_term">Search:</label>
+            <input type="text" name="search_term" id="search_term" value="{{ search_term or '' }}" placeholder="Product name...">
+        </div>
+        <div class="form-group">
+            <label for="category">Category:</label>
+            <select name="category" id="category">
+                <option value="" {% if not selected_category %}selected{% endif %}>All Categories</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="purchase_location">Purchase Location:</label>
+            <select name="purchase_location" id="purchase_location">
+                <option value="" {% if not selected_purchase_location %}selected{% endif %}>All Locations</option>
+                {% for loc in purchase_locations %}
+                <option value="{{ loc }}" {% if loc == selected_purchase_location %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    {# Hidden fields to retain current sort order when filtering #}
+    <input type="hidden" name="sort_by" value="{{ sort_by or 'name' }}">
+    <input type="hidden" name="sort_order" value="{{ sort_order or 'ASC' }}">
+
+    <div class="form-actions">
+        <button type="submit" class="button"><i class="fas fa-filter"></i> Filter</button>
+        <a href="{{ url_for('list_products_view') }}" class="button button-secondary"><i class="fas fa-times-circle"></i> Clear Filters</a>
+    </div>
+</form>
+
 {% if products %}
 <table>
     <thead>
         <tr>
-            <th class="product-list-header">Product ID</th> <!-- New Header -->
-            <th class="product-list-header">Name</th>
-            <th class="product-list-header">Category</th>
-            <th class="product-list-header">Subcategory</th>
-            <th class="product-list-header">Unit of Measure</th>
-            <th class="product-list-header">Default Expiry (Days)</th>
-            <th class="product-list-header">Par Level</th>
-            <th class="product-list-header">Max Holding</th>
-            <th class="product-list-header">Purchase Location</th>
+            <th class="product-list-header">ID</th>
+            <th class="product-list-header">
+                <a href="{{ url_for('list_products_view', search_term=search_term, category=selected_category, purchase_location=selected_purchase_location, sort_by='name', sort_order='DESC' if sort_by == 'name' and sort_order == 'ASC' else 'ASC', page=current_page, per_page=per_page) }}">
+                    Name
+                    {% if sort_by == 'name' %}
+                        <i class="fas fa-sort-{{ 'up' if sort_order == 'ASC' else 'down' }}"></i>
+                    {% else %}
+                        <i class="fas fa-sort"></i>
+                    {% endif %}
+                </a>
+            </th>
+            <th class="product-list-header">
+                <a href="{{ url_for('list_products_view', search_term=search_term, category=selected_category, purchase_location=selected_purchase_location, sort_by='category', sort_order='DESC' if sort_by == 'category' and sort_order == 'ASC' else 'ASC', page=current_page, per_page=per_page) }}">
+                    Category
+                    {% if sort_by == 'category' %}
+                        <i class="fas fa-sort-{{ 'up' if sort_order == 'ASC' else 'down' }}"></i>
+                    {% else %}
+                        <i class="fas fa-sort"></i>
+                    {% endif %}
+                </a>
+            </th>
+            <th class="product-list-header">
+                <a href="{{ url_for('list_products_view', search_term=search_term, category=selected_category, purchase_location=selected_purchase_location, sort_by='subcategory', sort_order='DESC' if sort_by == 'subcategory' and sort_order == 'ASC' else 'ASC', page=current_page, per_page=per_page) }}">
+                    Subcategory
+                    {% if sort_by == 'subcategory' %}
+                        <i class="fas fa-sort-{{ 'up' if sort_order == 'ASC' else 'down' }}"></i>
+                    {% else %}
+                        <i class="fas fa-sort"></i>
+                    {% endif %}
+                </a>
+            </th>
+            <th class="product-list-header">Unit</th>
+            <th class="product-list-header">Expiry Days</th>
+            <th class="product-list-header">Par</th>
+            <th class="product-list-header">Max Hold</th>
+            <th class="product-list-header">
+                <a href="{{ url_for('list_products_view', search_term=search_term, category=selected_category, purchase_location=selected_purchase_location, sort_by='purchase_location', sort_order='DESC' if sort_by == 'purchase_location' and sort_order == 'ASC' else 'ASC', page=current_page, per_page=per_page) }}">
+                    Location
+                    {% if sort_by == 'purchase_location' %}
+                        <i class="fas fa-sort-{{ 'up' if sort_order == 'ASC' else 'down' }}"></i>
+                    {% else %}
+                        <i class="fas fa-sort"></i>
+                    {% endif %}
+                </a>
+            </th>
             <th class="product-list-header">Actions</th>
         </tr>
     </thead>
     <tbody>
         {% for product in products %}
         <tr>
-            <td>{{ product.id }}</td> <!-- New Cell -->
+            <td>{{ product.id }}</td>
             <td>{{ product.name }}</td>
             <td>{{ product.category if product.category is not none else '' }}</td>
             <td>{{ product.subcategory if product.subcategory is not none else '' }}</td>
@@ -41,7 +113,38 @@
         {% endfor %}
     </tbody>
 </table>
+
+{# Pagination Controls #}
+{% if total_pages > 1 %}
+<div class="pagination">
+    <span>Page {{ current_page }} of {{ total_pages }}</span>
+    <div class="page-navigation">
+        {% if current_page > 1 %}
+        <a href="{{ url_for('list_products_view', search_term=search_term, category=selected_category, purchase_location=selected_purchase_location, sort_by=sort_by, sort_order=sort_order, page=current_page - 1, per_page=per_page) }}" class="button button-small">
+            <i class="fas fa-chevron-left"></i> Previous
+        </a>
+        {% else %}
+        <span class="button button-small button-disabled"><i class="fas fa-chevron-left"></i> Previous</span>
+        {% endif %}
+
+        {% if current_page < total_pages %}
+        <a href="{{ url_for('list_products_view', search_term=search_term, category=selected_category, purchase_location=selected_purchase_location, sort_by=sort_by, sort_order=sort_order, page=current_page + 1, per_page=per_page) }}" class="button button-small">
+            Next <i class="fas fa-chevron-right"></i>
+        </a>
+        {% else %}
+        <span class="button button-small button-disabled">Next <i class="fas fa-chevron-right"></i></span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
 {% else %}
-<p>No products found. <a href="{{ url_for('create_product_view') }}" class="button"><i class="fas fa-plus-square"></i> Create one now!</a></p>
+<p>No products found.
+    {% if search_term or selected_category or selected_purchase_location %}
+        Try adjusting your filters or <a href="{{ url_for('list_products_view') }}">clear filters</a>.
+    {% else %}
+        <a href="{{ url_for('create_product_view') }}" class="button"><i class="fas fa-plus-square"></i> Create one now!</a>
+    {% endif %}
+</p>
 {% endif %}
 {% endblock %}
