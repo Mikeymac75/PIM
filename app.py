@@ -550,11 +550,11 @@ def add_recipe_view():
                      form_data_to_repopulate[f'ingredient_{i}_quantity'] = request.form.get(f'ingredient_{i}_quantity', '')
             
             # When POST fails and re-renders, we also need the products list for the dropdowns
-            products = manager.get_all_products()
+            products = manager.get_all_products(page=None, per_page=None)
             return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
 
     # This is for GET request
-    products = manager.get_all_products()
+    products = manager.get_all_products(page=None, per_page=None)
     return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
 
 @app.route('/recipes/<int:recipe_id>/edit', methods=['GET', 'POST'])
@@ -567,7 +567,7 @@ def edit_recipe_view(recipe_id):
         return redirect(url_for('recipes_list_view'))
 
     # Fetch all products for ingredient dropdowns
-    products = manager.get_all_products() # Assuming 'manager' is the InventoryManager instance
+    products = manager.get_all_products(page=None, per_page=None) # Assuming 'manager' is the InventoryManager instance
 
     if request.method == 'POST':
         recipe_name = request.form.get('recipe_name', '').strip()
