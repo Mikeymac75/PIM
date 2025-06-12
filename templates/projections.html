@@ -47,6 +47,7 @@
 </form>
 
     {% if projections %}
+<form method="POST" action="{{ url_for('save_overrides_view') }}">
     <div class="table-responsive-wrapper">
         <table>
             <thead>
@@ -78,16 +79,25 @@
                     {{ sortable_header('name', 'Item Name', sort_by, sort_order, current_product_filters) }}
                     <th class="projections-header text-right">Current Stock</th>
                     <th class="projections-header text-right">Avg. Daily Consumption (Last {{ projections[0].lookback_days if projections and projections[0] else 'N/A' }} days)</th>
+                    <th class="projections-header">Consumption Override</th> {# New Column #}
                     <th class="projections-header text-center">Days to Depletion</th>
                     <th class="projections-header text-right">Projected Need (Next {{ projections[0].projection_days if projections and projections[0] else 'N/A' }} days)</th>
                 </tr>
             </thead>
             <tbody>
                 {% for proj in projections %}
-                <tr>
+                <tr {% if proj.consumption_override_rate is not none and proj.consumption_override_rate != "" %}class="override-active"{% endif %}> {# Row Styling #}
                     <td>{{ proj.item_name }}</td> {# This is product_name or historical_item_name #}
                     <td class="text-right">{{ "%.2f"|format(proj.current_stock) if proj.current_stock is number else proj.current_stock }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
-                    <td class="text-right">{{ "%.2f"|format(proj.avg_daily_consumption) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}/day</td>
+                    <td class="text-right"> {# Avg Daily Consumption with Override Indicator #}
+                        {{ "%.2f"|format(proj.avg_daily_consumption) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}/day
+                        {% if proj.consumption_override_rate is not none and proj.consumption_override_rate != "" %}
+                            <span class="override-indicator" title="Using override rate">(Override)</span>
+                        {% endif %}
+                    </td>
+                    <td> {# Input Box for Override #}
+                        <input type="number" step="0.01" min="0" name="overrides[{{ proj.product_id }}]" value="{{ proj.consumption_override_rate | default('', true) }}" class="override-input" placeholder="e.g., 0.5">
+                    </td>
                     <td class="text-center">{{ proj.days_to_depletion }}</td>
                     <td class="text-right">{{ "%.2f"|format(proj.projected_need) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
                 </tr>
@@ -95,9 +105,12 @@
             </tbody>
         </table>
     </div>
+    <button type="submit" class="button button-primary" style="margin-top: 15px;"><i class="fas fa-save"></i> Save All Overrides</button> {# Save Button #}
+</form>
         {% if projections and projections[0] %}
         <p style="font-size: 0.9em; color: #555; margin-top: 10px;">
             Projections are based on a lookback period of {{ projections[0].lookback_days }} days and project for the next {{ projections[0].projection_days }} days.
+            Rows highlighted have an active consumption override rate.
         </p>
         {% endif %}
 
