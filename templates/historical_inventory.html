@@ -118,7 +118,7 @@
                 'per_page': per_page
             } %}
             {% if current_page > 1 %}
-            <a href="{{ url_for('historical_inventory_view', **pagination_filters, page=current_page - 1) }}" class="button button-small">
+            <a href="{{ url_for('historical_inventory_view', **dict(pagination_filters, page=current_page - 1)) }}" class="button button-small">
                 <i class="fas fa-chevron-left"></i> Previous
             </a>
             {% else %}
@@ -126,7 +126,7 @@
             {% endif %}
 
             {% if current_page < total_pages %}
-            <a href="{{ url_for('historical_inventory_view', **pagination_filters, page=current_page + 1) }}" class="button button-small">
+            <a href="{{ url_for('historical_inventory_view', **dict(pagination_filters, page=current_page + 1)) }}" class="button button-small">
                 Next <i class="fas fa-chevron-right"></i>
             </a>
             {% else %}
