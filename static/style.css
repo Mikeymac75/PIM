@@ -413,3 +413,6 @@ tr.below-par-level:hover td {
 }
 .ingredient-name { flex-basis: 60%; } /* Item name takes more space */
 .ingredient-quantity { flex-basis: 35%; }
+
+/* Product List Table Header Color */
+th.product-list-header { background-color: #6c757d; }
