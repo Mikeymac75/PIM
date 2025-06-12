@@ -558,7 +558,7 @@ def recipe_detail_view(recipe_name):
                            recipe_makeable=recipe_makeable)
 
 # Placeholder for Make Recipe POST route - to be implemented in a later subtask
-@app.route('/recipes/<path:recipe_name>/make', methods=['POST'])
+@app.route('/recipes/<path:recipe_name>/make', methods=['GET', 'POST'])
 def make_recipe_view(recipe_name):
     # This is where the logic to "make" the recipe would go.
     # For now, just flash a message and redirect.
