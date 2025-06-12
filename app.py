@@ -978,4 +978,4 @@ def edit_inventory_view():
 if __name__ == '__main__':
     # Debug mode should be False in a production environment
     # Host '0.0.0.0' makes it accessible from network, useful for some environments
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
