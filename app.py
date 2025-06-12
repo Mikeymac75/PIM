@@ -75,55 +75,65 @@ def historical_inventory_view():
 @app.route('/inventory/consume', methods=['GET', 'POST'])
 def consume_item_view():
     item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
+    all_recipes = recipe_mngr.get_all_recipes() # Fetch recipes once for the view
 
     if request.method == 'POST':
-        item_name = request.form.get('item_name')
-        quantity_consumed_str = request.form.get('quantity_consumed')
+        consumption_type = request.form.get('consumption_type', 'item') # Default to 'item'
 
-        errors = []
-        if not item_name:
-            errors.append("Item name is required.")
-        
-        numeric_quantity_consumed = None # Initialize to None
-        if not quantity_consumed_str:
-            errors.append("Quantity to consume is required.")
-        else:
-            try:
-                numeric_quantity_consumed = float(quantity_consumed_str) # Allow for float quantities
-                if numeric_quantity_consumed <= 0:
-                    errors.append("Quantity to consume must be a positive number (greater than zero).")
-            except ValueError:
-                errors.append("Quantity to consume must be a valid number.")
-
-        if errors:
-            for error in errors:
-                flash(error, 'error')
-            return render_template('consume_item.html', item_names=item_names, form_data=request.form)
-
-        # If validation passes
-        try:
-            # consume_item in InventoryManager returns a dict like:
-            # {"success": True/False, "message": "details..."}
-            result = manager.consume_item(item_name, numeric_quantity_consumed)
-            
-            if result.get("success"):
-                flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
-                # Optionally, show details if any:
-                # for detail_msg in result.get("details", []):
-                # flash(detail_msg, 'info')
+        if consumption_type == 'recipe':
+            recipe_name_to_consume = request.form.get('recipe_name_to_consume')
+            if not recipe_name_to_consume:
+                flash("Please select a recipe to consume.", 'error')
+                # item_names and all_recipes are already fetched
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
             else:
-                flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
-            
-            # Redirect to current inventory to see changes, or back to consume page
-            return redirect(url_for('current_inventory_view')) 
-            # Or: return redirect(url_for('consume_item_view'))
-            
-        except Exception as e:
-            flash(f"An unexpected error occurred while consuming item: {e}", 'error')
-            return render_template('consume_item.html', item_names=item_names, form_data=request.form)
+                # Redirect to the make_recipe_view, which handles the actual consumption
+                return redirect(url_for('make_recipe_view', recipe_name=recipe_name_to_consume))
+        
+        # Else, it's an 'item' consumption (existing logic)
+        else: # consumption_type == 'item'
+            item_name = request.form.get('item_name')
+            quantity_consumed_str = request.form.get('quantity_consumed')
 
-    # For GET request
-    return render_template('consume_item.html', item_names=item_names, form_data={})
+            errors = []
+            if not item_name:
+                errors.append("Item name is required.")
+
+            numeric_quantity_consumed = None # Initialize to None
+            if not quantity_consumed_str:
+                errors.append("Quantity to consume is required.")
+            else:
+                try:
+                    numeric_quantity_consumed = float(quantity_consumed_str) # Allow for float quantities
+                    if numeric_quantity_consumed <= 0: # This check is now in FoodManager, but good to have here too for early feedback
+                        errors.append("Quantity to consume must be a positive number (greater than zero).")
+                except ValueError:
+                    errors.append("Quantity to consume must be a valid number.")
+
+            if errors:
+                for error in errors:
+                    flash(error, 'error')
+                # item_names and all_recipes are already fetched
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+
+            # If validation passes for item consumption
+            try:
+                result = manager.consume_item(item_name, numeric_quantity_consumed)
+
+                if result.get("success"):
+                    flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
+                else:
+                    flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
+
+                return redirect(url_for('current_inventory_view'))
+
+            except Exception as e:
+                flash(f"An unexpected error occurred while consuming item: {e}", 'error')
+                # item_names and all_recipes are already fetched
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+
+    # For GET request (all_recipes already fetched)
+    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data={})
 
 @app.route('/inventory/upload_excel', methods=['GET', 'POST'])
 def upload_excel_view():
