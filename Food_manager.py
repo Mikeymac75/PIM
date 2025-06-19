@@ -596,8 +596,21 @@ class InventoryManager:
             product_id_to_use = product_info['id']
             print(f"Product '{name}' found with ID {product_id_to_use}. Using existing product.")
             # If product exists, unit_of_measure from Excel is ignored as per plan.
+            # However, we need to detect and report a mismatch.
+            uom_mismatch_details = None
+            if unit_of_measure and unit_of_measure.strip() and product_info.get('unit_of_measure') != unit_of_measure.strip():
+                excel_uom_stripped = unit_of_measure.strip()
+                db_uom = product_info.get('unit_of_measure')
+                print(f"UoM mismatch detected for product '{product_info['name']}'. Excel UoM: '{excel_uom_stripped}', DB UoM: '{db_uom}'. Product UoM not updated.")
+                uom_mismatch_details = {
+                    'uom_mismatch': True,
+                    'original_product_name': product_info['name'], # Name here is from excel, product_info has DB name
+                    'excel_uom': excel_uom_stripped,
+                    'db_uom': db_uom
+                }
+            # Continue using product_info as is, without updating its UoM in the DB.
 
-        if product_id_to_use is None:
+        if product_id_to_use is None: # Should ideally not be hit if create_product raises error on fail
             final_error_msg = f"Could not find or create product '{name}'. Inventory item not added."
             print(final_error_msg)
             raise ValueError(final_error_msg)
@@ -624,38 +637,18 @@ class InventoryManager:
                 conn.commit()
                 item_id = cursor.lastrowid
                 print(f"Successfully added item '{name}' (Batch ID: {item_id}) to inventory. Expires: {batch_expiry_dt.isoformat()}")
-                return {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use}
+
+                return_data = {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use}
+                if uom_mismatch_details:
+                    return_data.update(uom_mismatch_details)
+                else:
+                    # Ensure uom_mismatch is explicitly False if no mismatch, for consistent return structure if needed by caller
+                    return_data['uom_mismatch'] = False
+                return return_data
         except sqlite3.Error as e:
             db_error_msg = f"Database error adding item '{name}' to inventory: {e}"
             print(db_error_msg)
             raise sqlite3.Error(db_error_msg)
-
-    def get_current_inventory(self):
-        """Retrieves all items from the current inventory, joined with product details, ordered by expiry date."""
-        items = []
-        try:
-            with self._get_db_connection() as conn:
-                cursor = conn.cursor()
-                # Joined query to include product details
-                cursor.execute('''
-                    SELECT
-                        ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
-                        ii.original_quantity_string,
-                        p.name AS product_name, p.category, p.subcategory, p.unit_of_measure,
-                        p.par_level, p.max_holding_amount, p.purchase_location
-                    FROM inventory_items ii
-                    JOIN products p ON ii.product_id = p.id
-                    ORDER BY ii.expiry_date ASC
-                ''')
-                rows = cursor.fetchall()
-                for row in rows:
-                    item = dict(row)
-                    item['purchase_date'] = date.fromisoformat(item['purchase_date'])
-                    item['expiry_date'] = date.fromisoformat(item['expiry_date'])
-                    items.append(item)
-        except sqlite3.Error as e:
-            print(f"Database error fetching current inventory: {e}")
-        return items
 
     def get_current_inventory(self, search_term=None, category=None, purchase_location=None,
                               expiry_start_date=None, expiry_end_date=None,
@@ -990,38 +983,6 @@ class InventoryManager:
             ]
 
         return shopping_list
-
-    def get_historical_inventory(self):
-        """Retrieves all items from the historical inventory, ordered by consumed date."""
-        items = []
-        try:
-            with self._get_db_connection() as conn:
-                cursor = conn.cursor()
-                # Joined query to include product details, if product_id is not null
-                # Using LEFT JOIN in case some historical items don't have a product_id (legacy data)
-                # or if a product was deleted.
-                cursor.execute('''
-                    SELECT
-                        hi.id, hi.product_id, hi.name AS historical_item_name,
-                        hi.quantity_consumed_this_time, hi.original_quantity_string,
-                        hi.purchase_date, hi.expiry_date, hi.consumed_date,
-                        p.name AS product_name, p.category, p.subcategory, p.unit_of_measure
-                    FROM historical_items hi
-                    LEFT JOIN products p ON hi.product_id = p.id
-                    ORDER BY hi.consumed_date DESC
-                ''')
-                rows = cursor.fetchall()
-                for row in rows:
-                    item = dict(row)
-                    # Use product_name from products table if available, otherwise use historical_item_name
-                    item['name'] = item['product_name'] if item['product_name'] else item['historical_item_name']
-                    if item['purchase_date']: item['purchase_date'] = date.fromisoformat(item['purchase_date'])
-                    if item['expiry_date']: item['expiry_date'] = date.fromisoformat(item['expiry_date'])
-                    item['consumed_date'] = date.fromisoformat(item['consumed_date'])
-                    items.append(item)
-        except sqlite3.Error as e:
-            print(f"Database error fetching historical inventory: {e}")
-        return items
 
     def get_historical_inventory(self, search_term=None, category=None,
                                  consumed_start_date=None, consumed_end_date=None,

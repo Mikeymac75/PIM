@@ -329,6 +329,7 @@ def upload_excel_view():
                 
                 items_added_count = 0
                 error_messages = []
+                uom_mismatch_warnings = [] # Initialize list for UoM warnings
 
                 for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
                     # Stop if first cell of row is empty (common way to detect end of data)
@@ -443,7 +444,7 @@ def upload_excel_view():
 
                     # If all validations pass for this row, attempt to add to inventory
                     try:
-                        manager.add_item_to_list(
+                        result = manager.add_item_to_list( # Capture the result
                             name=str(name), 
                             quantity_str=str(quantity), 
                             purchase_date_str=purchase_date_str, 
@@ -456,17 +457,35 @@ def upload_excel_view():
                             unit_of_measure=unit_of_measure_val # New
                         )
                         items_added_count += 1
+
+                        # Check for UoM mismatch
+                        if result.get('uom_mismatch'):
+                            warning_msg = (f"Warning: UoM for '{result.get('original_product_name')}' "
+                                           f"in Excel ('{result.get('excel_uom')}') differs from "
+                                           f"database ('{result.get('db_uom')}'). "
+                                           "Product's UoM was not updated.")
+                            uom_mismatch_warnings.append(warning_msg)
+
                     except Exception as e: # Catch errors from manager.add_item_to_list
                         error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {str(e)}")
                 
-                # Flash summary
+                # Flash summary for items added
                 if items_added_count > 0:
                     flash(f"Successfully added {items_added_count} items from the Excel file.", 'success')
+
+                # Flash UoM mismatch warnings
+                if uom_mismatch_warnings:
+                    flash("Some products had Unit of Measure mismatches (UoM in Excel differs from DB; DB UoM was kept):", 'warning')
+                    for warning in uom_mismatch_warnings:
+                        flash(warning, 'warning_detail') # Use a distinct category for individual warnings if needed
+
+                # Flash errors for rows that failed
                 if error_messages:
-                    flash(f"{len(error_messages)} rows had errors. See details below:", 'error')
+                    flash(f"{len(error_messages)} rows had errors and were not processed. See details below:", 'error')
                     for err_msg in error_messages[:5]: # Show first 5 errors
-                        flash(err_msg, 'detail_error') # Use a different category if you want specific styling
-                if items_added_count == 0 and not error_messages:
+                        flash(err_msg, 'error_detail') # Use a distinct category for individual errors
+
+                if items_added_count == 0 and not error_messages and not uom_mismatch_warnings:
                      flash("No items were found or added from the file. The file might be empty or data starts after row 2.", 'info')
 
                 return redirect(url_for('current_inventory_view'))

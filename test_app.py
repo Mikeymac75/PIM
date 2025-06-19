@@ -193,5 +193,130 @@ class TestAppProductList(unittest.TestCase):
         self.assertRegex(html_cleared, r'<select name="category"[^>]*>\s*<option value="" selected>\s*All Categories\s*</option>')
         self.assertRegex(html_cleared, r'<select name="purchase_location"[^>]*>\s*<option value="" selected>\s*All Locations\s*</option>')
 
+# --- Tests for Excel Upload UoM Mismatch Flash Messages ---
+# We need io, openpyxl for creating dummy excel files, and patch from unittest.mock
+import io
+import openpyxl
+from unittest.mock import patch
+
+class TestExcelUploadUoMMismatch(unittest.TestCase): # Create a new class for clarity
+
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False # Disable CSRF for simpler test forms
+        app.config['SECRET_KEY'] = 'test_secret_key_excel' # Ensure a secret key for flash messages
+        app.config['SERVER_NAME'] = 'localhost.test.excel' # If SERVER_NAME is used by url_for
+
+        # It's important to push an app context if your app uses it,
+        # especially for things like url_for or accessing current_app.
+        self.app_context = app.app_context()
+        self.app_context.push()
+
+        self.client = app.test_client()
+
+        # Mock the manager instance used by the app for these tests
+        # This avoids actual DB operations and lets us control `add_item_to_list` return values
+        self.mock_manager = unittest.mock.MagicMock(spec=InventoryManager)
+
+        # It's crucial that the app uses this mocked manager.
+        # We'll patch 'app.manager' which is the global instance.
+        # Store original and patch it
+        self.original_app_manager = app.manager
+        app.manager = self.mock_manager
+
+    def tearDown(self):
+        app.manager = self.original_app_manager # Restore original manager
+        self.app_context.pop()
+
+    def _create_dummy_excel_file(self, data_rows):
+        """Helper to create an in-memory Excel file with given data."""
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        # Add header
+        sheet.append(['Name', 'Quantity', 'Purchase Date', 'Expiry Days', 'Category', 'Unit of Measure'])
+        for row in data_rows:
+            sheet.append(row)
+
+        excel_file_io = io.BytesIO()
+        workbook.save(excel_file_io)
+        excel_file_io.seek(0)
+        return excel_file_io
+
+    def test_upload_excel_uom_mismatch_triggers_flash(self):
+        # Simulate one row with mismatch, one without
+        dummy_excel_rows = [
+            ['Apples', '5', '2023-01-01', 10, 'Produce', 'bags'], # Mismatch
+            ['Bananas', '12', '2023-01-01', 5, 'Produce', 'kg']   # No mismatch (assume DB is kg)
+        ]
+        excel_file = self._create_dummy_excel_file(dummy_excel_rows)
+
+        # Mock return values for add_item_to_list
+        self.mock_manager.add_item_to_list.side_effect = [
+            {'success': True, 'item_id': 1, 'product_id': 1, 'uom_mismatch': True,
+             'original_product_name': 'Apples', 'excel_uom': 'bags', 'db_uom': 'kg'},
+            {'success': True, 'item_id': 2, 'product_id': 2, 'uom_mismatch': False}
+        ]
+        # Mock get_product_by_name for the UoM check in app.py (needed for new product check)
+        self.mock_manager.get_product_by_name.side_effect = [
+            unittest.mock.MagicMock(return_value={'id': 1, 'unit_of_measure': 'kg'}), # For 'Apples'
+            unittest.mock.MagicMock(return_value={'id': 2, 'unit_of_measure': 'kg'})  # For 'Bananas'
+        ]
+
+
+        with self.client: # Use client in a 'with' block to handle session_transaction context
+            response = self.client.post('/inventory/upload_excel',
+                                        data={'excel_file': (excel_file, 'test.xlsx')},
+                                        content_type='multipart/form-data',
+                                        follow_redirects=True) # Follow redirect to see flashes on target page
+
+        self.assertEqual(response.status_code, 200) # Should redirect to current_inventory_view
+
+        # Check flashed messages (need to access session directly, or use a helper if available)
+        # For Flask < 2.3, direct session access is common in tests.
+        # For Flask >= 2.3, response.flashes might be available if configured.
+        # Assuming direct session access for now.
+        flashed_messages = []
+        with self.client.session_transaction() as session:
+            flashed_messages = dict(session.get('_flashes', []))
+
+        self.assertIn('warning', flashed_messages, "General UoM warning message category not found")
+        self.assertIn("Some products had Unit of Measure mismatches", flashed_messages['warning'])
+
+        self.assertIn('warning_detail', flashed_messages, "Detailed UoM warning message category not found")
+        expected_detail_warning = "Warning: UoM for 'Apples' in Excel ('bags') differs from database ('kg'). Product's UoM was not updated."
+        self.assertIn(expected_detail_warning, flashed_messages['warning_detail'])
+
+    def test_upload_excel_no_uom_mismatch_no_flash(self):
+        dummy_excel_rows = [
+            ['Pears', '10', '2023-01-01', 7, 'Produce', 'kg']
+        ]
+        excel_file = self._create_dummy_excel_file(dummy_excel_rows)
+
+        self.mock_manager.add_item_to_list.return_value = {
+            'success': True, 'item_id': 3, 'product_id': 3, 'uom_mismatch': False
+        }
+        self.mock_manager.get_product_by_name.return_value = None # Simulate new product
+
+
+        with self.client:
+            response = self.client.post('/inventory/upload_excel',
+                                 data={'excel_file': (excel_file, 'test.xlsx')},
+                                 content_type='multipart/form-data',
+                                 follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+        flashed_messages = []
+        with self.client.session_transaction() as session:
+            flashed_messages = dict(session.get('_flashes', []))
+
+        # Ensure UoM specific warning categories are NOT present
+        self.assertNotIn('warning', flashed_messages.keys()) # Check if 'warning' category related to UoM is absent
+        self.assertNotIn('warning_detail', flashed_messages.keys())
+
+        # General success message for item addition should be there
+        self.assertIn('success', flashed_messages)
+        self.assertIn("Successfully added 1 items from the Excel file.", flashed_messages['success'])
+
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
