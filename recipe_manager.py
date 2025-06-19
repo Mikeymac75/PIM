@@ -214,6 +214,41 @@ class RecipeManager:
             print(f"Database error fetching recipe by ID '{recipe_id}': {e}")
             return None
 
+    def get_recipes_for_product(self, product_name_to_find):
+        """
+        Retrieves a list of recipes that contain the given product name.
+        - product_name_to_find: The name of the product (string) to search for in recipe ingredients.
+        Returns a list of recipe dictionaries (e.g., [{'id': 1, 'name': 'Recipe Name'}]),
+        or an empty list if no recipes contain the product or an error occurs.
+        """
+        if not product_name_to_find or not isinstance(product_name_to_find, str):
+            print("Invalid product name provided to get_recipes_for_product.")
+            return []
+
+        recipes_found = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                # Find recipe_ids that contain the product_name (case-insensitive)
+                # Ensure item_name in recipe_ingredients is compared case-insensitively
+                cursor.execute("""
+                    SELECT DISTINCT ri.recipe_id, r.name
+                    FROM recipe_ingredients ri
+                    JOIN recipes r ON ri.recipe_id = r.id
+                    WHERE LOWER(ri.item_name) = LOWER(?)
+                """, (product_name_to_find,))
+
+                rows = cursor.fetchall()
+                for row in rows:
+                    recipes_found.append({"id": row['recipe_id'], "name": row['name']})
+            return recipes_found
+        except sqlite3.Error as e:
+            print(f"Database error in get_recipes_for_product for '{product_name_to_find}': {e}")
+            return []
+        except Exception as e:
+            print(f"An unexpected error occurred in get_recipes_for_product for '{product_name_to_find}': {e}")
+            return []
+
     def update_recipe(self, recipe_id, updated_recipe_data):
         """
         Updates an existing recipe identified by its ID.
