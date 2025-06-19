@@ -160,7 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
             monthlyChartInstance.destroy();
         }
         monthlyChartInstance = new Chart(ctx, {
-            type: 'bar', // Changed to bar for variety, can be line too
+            type: 'line', // Changed to line graph
             data: {
                 labels: labels,
                 datasets: [{
@@ -168,6 +168,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     data: dataValues,
                     borderColor: 'rgb(153, 102, 255)',
                     backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                    tension: 0.1, // Added for line chart
+                    fill: true,   // Added for line chart
                 }]
             },
             options: {
