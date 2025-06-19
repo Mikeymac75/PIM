@@ -122,10 +122,40 @@ class InventoryManager:
             return None # Or raise error
 
     def get_product_details(self, product_id):
-        """Retrieves a product by its ID, ensuring all necessary fields for the modal are present."""
-        # For now, this is a simple wrapper.
-        # Future enhancements could involve joining with other tables or specific field validation.
-        return self.get_product(product_id)
+        """
+        Retrieves a product by its ID, and enhances it with current on-hand inventory
+        and the nearest expiry date from inventory_items.
+        """
+        product = self.get_product(product_id)
+        if not product:
+            return None
+
+        # Calculate current_on_hand_inventory
+        # self.get_total_item_quantity already handles product_id or name
+        current_on_hand_inventory = self.get_total_item_quantity(product_id)
+        product['current_on_hand_inventory'] = current_on_hand_inventory
+
+        # Find nearest_expiry_date
+        nearest_expiry_date_str = "N/A"
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT expiry_date
+                    FROM inventory_items
+                    WHERE product_id = ?
+                    ORDER BY expiry_date ASC
+                    LIMIT 1
+                ''', (product_id,))
+                row = cursor.fetchone()
+                if row and row['expiry_date']:
+                    nearest_expiry_date_str = row['expiry_date']
+        except sqlite3.Error as e:
+            print(f"Database error getting nearest expiry date for product ID {product_id}: {e}")
+            # nearest_expiry_date_str remains "N/A" or could be set to an error indicator
+
+        product['nearest_expiry_date'] = nearest_expiry_date_str
+        return product
 
     def get_daily_consumption(self, product_id, days=30):
         """
@@ -1428,6 +1458,78 @@ class InventoryManager:
         
         print("---------------------------------------\n")
         return expiring_items_list
+
+    def get_inventory_concerns(self, product_id):
+        """
+        Analyzes a product's inventory and consumption to identify potential concerns.
+        - product_id: The ID of the product to check.
+        Returns a list of concern strings.
+        """
+        concerns = []
+        today = date.today()
+
+        product_details = self.get_product_details(product_id) # This now includes nearest_expiry_date
+        if not product_details:
+            concerns.append(f"Product with ID {product_id} not found.")
+            return concerns
+
+        current_stock = product_details.get('current_on_hand_inventory', 0)
+        nearest_expiry_date_str = product_details.get('nearest_expiry_date', "N/A")
+
+        # Get average daily consumption
+        # Using projection_days=1 as we only need avg_daily_consumption here.
+        # lookback_days can be standard e.g. 30 or configurable if needed.
+        demand_projection = self.project_demand(product_id, lookback_days=30, projection_days=1)
+        avg_daily_consumption = 0.0
+        if demand_projection.get("success"):
+            avg_daily_consumption = demand_projection.get('avg_daily_consumption', 0.0)
+        else:
+            # Add a concern if demand projection failed, as it's needed for some checks
+            concerns.append(f"Could not retrieve consumption data for {product_details.get('name', 'this product')}: {demand_projection.get('message', 'Unknown error')}")
+
+
+        # Concern 1: Low stock
+        if avg_daily_consumption > 0:
+            days_of_stock_left = current_stock / avg_daily_consumption
+            # Using a threshold of 3 days for "low stock"
+            if days_of_stock_left < 3:
+                concerns.append(f"Will run out in the next {days_of_stock_left:.1f} days based on current consumption.")
+        elif current_stock > 0: # Stock exists but no consumption
+            # Concern 2: No significant usage
+            concerns.append("No significant usage data available, but stock exists.")
+        # If avg_daily_consumption is 0 and current_stock is 0, it's less of an immediate "concern" unless par levels are set.
+
+        # Date parsing for expiry concerns
+        nearest_expiry_date_obj = None
+        if nearest_expiry_date_str != "N/A":
+            try:
+                nearest_expiry_date_obj = date.fromisoformat(nearest_expiry_date_str)
+            except ValueError:
+                concerns.append(f"Invalid nearest expiry date format found: {nearest_expiry_date_str}")
+
+
+        if nearest_expiry_date_obj:
+            days_until_expiry = (nearest_expiry_date_obj - today).days
+
+            # Concern 3: Nearing expiry (e.g., within 7 days)
+            # Let's use a threshold of 7 days for "expiring soon"
+            EXPIRY_SOON_THRESHOLD_DAYS = 7
+            if days_until_expiry <= EXPIRY_SOON_THRESHOLD_DAYS:
+                if days_until_expiry < 0:
+                     concerns.append(f"Item has batches already EXPIRED (Nearest expiry: {nearest_expiry_date_str}).")
+                else:
+                     concerns.append(f"Item has batches expiring soon (on {nearest_expiry_date_str}, in {days_until_expiry} days).")
+
+            # Concern 4: Stock may expire before being fully used
+            if avg_daily_consumption > 0 and current_stock > 0:
+                # days_of_stock_left was calculated earlier for low stock check
+                if days_of_stock_left > days_until_expiry and days_until_expiry >= 0: # only if not already expired
+                    concerns.append(f"Stock ({current_stock} units, lasting {days_of_stock_left:.1f} days) may expire before being fully used (expires in {days_until_expiry} days on {nearest_expiry_date_str}).")
+        elif current_stock > 0 and nearest_expiry_date_str == "N/A":
+            # This case implies stock exists but no expiry date could be found, which might be a data issue.
+            concerns.append("Stock exists but nearest expiry date is not available. Check inventory data.")
+
+        return concerns
 
     def project_demand(self, product_name_or_id, lookback_days=30, projection_days=7):
         """

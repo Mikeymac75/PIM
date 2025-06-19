@@ -1335,10 +1335,53 @@ def product_modal_details(product_id):
     # For product_details, this depends on its structure. Assuming it's a dict from DB Row.
     # For consumption data, the manager methods already format dates as strings.
 
+    # --- New data for modal ---
+    recipes_containing_product = []
+    if product_details.get('name'):
+        recipes_containing_product = recipe_mngr.get_recipes_for_product(product_details['name'])
+
+    inventory_concerns = manager.get_inventory_concerns(product_id)
+
+    # Calculate shopping_list_amount_today
+    shopping_list_amount_today = 0.0 # Default to 0
+    SOBEYS_FREQUENCY_WEEKS = 1
+    COSTCO_FREQUENCY_WEEKS = 3
+
+    par_level = product_details.get('par_level', 0.0)
+    if par_level is None: par_level = 0.0 # Ensure float if None
+    else: par_level = float(par_level)
+
+    purchase_location = product_details.get('purchase_location')
+    current_on_hand_inventory = product_details.get('current_on_hand_inventory', 0.0)
+
+    projection_days_for_item = 0
+    if purchase_location == 'Sobeys':
+        projection_days_for_item = SOBEYS_FREQUENCY_WEEKS * 7
+    elif purchase_location == 'Costco':
+        projection_days_for_item = COSTCO_FREQUENCY_WEEKS * 7
+
+    if par_level > 0 and projection_days_for_item > 0:
+        demand_projection = manager.project_demand(
+            product_id,
+            lookback_days=30, # Standard lookback
+            projection_days=projection_days_for_item
+        )
+        avg_daily_consumption = 0.0
+        if demand_projection.get("success"):
+            avg_daily_consumption = demand_projection.get('avg_daily_consumption', 0.0)
+
+        target_stock_after_shopping = par_level + (avg_daily_consumption * projection_days_for_item)
+        recommended_purchase_amount = target_stock_after_shopping - current_on_hand_inventory
+        shopping_list_amount_today = max(0, round(recommended_purchase_amount, 2))
+
     return jsonify({
-        "product_details": product_details, # Assuming product_details is already JSON serializable
+        "product_details": product_details,
         "daily_consumption": daily_consumption,
-        "monthly_consumption": monthly_consumption
+        "monthly_consumption": monthly_consumption,
+        "recipes_containing_product": recipes_containing_product,
+        "inventory_concerns": inventory_concerns,
+        "shopping_list_amount_today": shopping_list_amount_today,
+        # unit_of_measure, current_on_hand_inventory, nearest_expiry_date are already in product_details
     })
 
 if __name__ == '__main__':
