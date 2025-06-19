@@ -1,6 +1,9 @@
 import unittest
 import sqlite3
 from Food_manager import InventoryManager # Assuming Food_manager.py is in the same directory or accessible in PYTHONPATH
+from datetime import date # Added for date operations in tests
+import unittest.mock # Added for mocking date.today()
+
 
 class TestInventoryManager(unittest.TestCase):
     def setUp(self):
@@ -215,6 +218,186 @@ class TestInventoryManager(unittest.TestCase):
         locations = self.manager.get_all_purchase_locations()
         expected_locations = sorted(list(set(p['purchase_location'] for p in self.products_data if p.get('purchase_location'))))
         self.assertListEqual(locations, expected_locations)
+
+    # --- Test cases for get_current_inventory (default behavior) ---
+    def test_get_current_inventory_default_behavior(self):
+        # Add some inventory items
+        product_apples = self.manager.get_product_by_name("Apples")
+        product_bananas = self.manager.get_product_by_name("Bananas")
+
+        # Ensure products exist before trying to use their IDs
+        self.assertIsNotNone(product_apples, "Apples product not found in setup")
+        self.assertIsNotNone(product_bananas, "Bananas product not found in setup")
+
+        # Apples: default_expiry_days = 10
+        # Bananas: default_expiry_days = 5
+        self.manager.add_inventory_stock(product_id=product_apples['id'], quantity_str="5", purchase_date_str="2023-01-10") # Expires 2023-01-20
+        self.manager.add_inventory_stock(product_id=product_bananas['id'], quantity_str="10", purchase_date_str="2023-01-10") # Expires 2023-01-15
+
+        # Call with parameters that simulate the old no-parameter call's defaults
+        current_inventory = self.manager.get_current_inventory(
+            search_term=None, category=None, purchase_location=None,
+            expiry_start_date=None, expiry_end_date=None,
+            sort_by='expiry_date', sort_order='ASC',
+            page=None, per_page=None
+        )
+
+        self.assertEqual(len(current_inventory), 2)
+        # Default sort is expiry_date ASC
+        self.assertEqual(current_inventory[0]['product_name'], "Bananas") # Expires sooner (2023-01-15)
+        self.assertEqual(current_inventory[1]['product_name'], "Apples")  # Expires later (2023-01-20)
+
+    # --- Test cases for get_historical_inventory (default behavior) ---
+    def test_get_historical_inventory_default_behavior(self):
+        # Add and consume some items
+        product_apples = self.manager.get_product_by_name("Apples")
+        product_bananas = self.manager.get_product_by_name("Bananas")
+
+        self.assertIsNotNone(product_apples, "Apples product not found in setup")
+        self.assertIsNotNone(product_bananas, "Bananas product not found in setup")
+
+        # Add stock
+        self.manager.add_inventory_stock(product_id=product_apples['id'], quantity_str="5", purchase_date_str="2023-01-01")
+        self.manager.add_inventory_stock(product_id=product_bananas['id'], quantity_str="10", purchase_date_str="2023-01-01")
+
+        # Consume items on different dates
+        with unittest.mock.patch('Food_manager.date') as mock_date_fm: # Mock date within Food_manager module
+            mock_date_fm.today.return_value = date(2023, 1, 5)
+            self.manager.consume_item("Apples", 2.0) # Consumed on 2023-01-05
+
+            mock_date_fm.today.return_value = date(2023, 1, 7)
+            self.manager.consume_item("Bananas", 3.0) # Consumed on 2023-01-07
+
+        # Call with parameters that simulate the old no-parameter call's defaults
+        historical_inventory = self.manager.get_historical_inventory(
+            search_term=None, category=None,
+            consumed_start_date=None, consumed_end_date=None,
+            sort_by='consumed_date', sort_order='DESC',
+            page=None, per_page=None
+        )
+
+        self.assertEqual(len(historical_inventory), 2)
+        # Default sort is consumed_date DESC
+        self.assertEqual(historical_inventory[0]['name'], "Bananas") # Consumed more recently (2023-01-07)
+        self.assertEqual(historical_inventory[1]['name'], "Apples")  # Consumed earlier (2023-01-05)
+
+    # --- Test cases for UoM update in add_item_to_list ---
+    def test_add_item_to_list_uom_update_existing_product(self):
+        # Create product with initial UoM
+        self.manager.create_product(name="Test UoM Update", category="Test", unit_of_measure="kg", default_expiry_days=10, par_level=1, max_holding_amount=1)
+
+        # Call add_item_to_list with a new UoM
+        result = self.manager.add_item_to_list(
+            name="Test UoM Update",
+            quantity_str="1",
+            purchase_date_str="2023-01-01",
+            expiry_days=10,
+            unit_of_measure="grams" # New UoM
+        )
+
+        updated_product = self.manager.get_product_by_name("Test UoM Update")
+        self.assertIsNotNone(updated_product)
+        # After reversion, UoM should NOT be updated for existing products.
+        self.assertEqual(updated_product['unit_of_measure'], "kg")
+
+        # Check return value for mismatch details
+        self.assertTrue(result.get('uom_mismatch'))
+        self.assertEqual(result.get('original_product_name'), "Test UoM Update")
+        self.assertEqual(result.get('excel_uom'), "grams")
+        self.assertEqual(result.get('db_uom'), "kg")
+
+    def test_add_item_to_list_uom_no_update_same_uom(self):
+        self.manager.create_product(name="Test UoM Same", category="Test", unit_of_measure="pcs", default_expiry_days=10, par_level=1, max_holding_amount=1)
+
+        result = self.manager.add_item_to_list(
+            name="Test UoM Same",
+            quantity_str="1",
+            purchase_date_str="2023-01-01",
+            expiry_days=10,
+            unit_of_measure="pcs" # Same UoM
+        )
+
+        product = self.manager.get_product_by_name("Test UoM Same")
+        self.assertIsNotNone(product)
+        self.assertEqual(product['unit_of_measure'], "pcs")
+        self.assertFalse(result.get('uom_mismatch'))
+
+    def test_add_item_to_list_uom_no_update_no_uom_input(self):
+        self.manager.create_product(name="Test UoM No Input", category="Test", unit_of_measure="liter", default_expiry_days=10, par_level=1, max_holding_amount=1)
+
+        # Test with unit_of_measure=None
+        result_none = self.manager.add_item_to_list(
+            name="Test UoM No Input",
+            quantity_str="1",
+            purchase_date_str="2023-01-01",
+            expiry_days=10,
+            unit_of_measure=None
+        )
+        product_none = self.manager.get_product_by_name("Test UoM No Input")
+        self.assertIsNotNone(product_none)
+        self.assertEqual(product_none['unit_of_measure'], "liter")
+        self.assertFalse(result_none.get('uom_mismatch'))
+
+        # Test with unit_of_measure="" (empty string)
+        result_empty = self.manager.add_item_to_list(
+            name="Test UoM No Input",
+            quantity_str="1",
+            purchase_date_str="2023-01-01",
+            expiry_days=10,
+            unit_of_measure=""
+        )
+        product_empty = self.manager.get_product_by_name("Test UoM No Input")
+        self.assertIsNotNone(product_empty)
+        self.assertEqual(product_empty['unit_of_measure'], "liter")
+        self.assertFalse(result_empty.get('uom_mismatch'))
+
+    def test_add_item_to_list_new_product_no_uom_mismatch(self):
+        # Test adding a completely new product with a valid UoM
+        result = self.manager.add_item_to_list(
+            name="Brand New Test Product",
+            quantity_str="10 units",
+            purchase_date_str="2023-02-01",
+            expiry_days=30,
+            category="New Category",
+            unit_of_measure="units" # Valid UoM for new product
+        )
+        self.assertTrue(result.get('success'))
+        self.assertFalse(result.get('uom_mismatch'))
+
+        new_product = self.manager.get_product_by_name("Brand New Test Product")
+        self.assertIsNotNone(new_product)
+        self.assertEqual(new_product['unit_of_measure'], "units")
+
+    def test_add_item_to_list_uom_required_for_new_product(self):
+        # Expecting ValueError because create_product (called by add_item_to_list)
+        # requires unit_of_measure for new products.
+        with self.assertRaises(ValueError) as context:
+            self.manager.add_item_to_list(
+                name="Completely New Product UoM Test",
+                quantity_str="1",
+                purchase_date_str="2023-01-01",
+                expiry_days=10,
+                category="Test Category", # Provide other necessary fields for product creation
+                unit_of_measure=None # Missing UoM for new product
+            )
+        # Check if the error message from create_product is part of the raised ValueError
+        self.assertTrue("Missing required product fields" in str(context.exception) or \
+                        "unit_of_measure cannot be null" in str(context.exception).lower() or \
+                        "Failed to create product" in str(context.exception) )
+
+
+        with self.assertRaises(ValueError) as context_empty:
+            self.manager.add_item_to_list(
+                name="Another New Product UoM Test",
+                quantity_str="1",
+                purchase_date_str="2023-01-01",
+                expiry_days=10,
+                category="Test Category", # Provide other necessary fields
+                unit_of_measure="" # Missing UoM for new product
+            )
+        self.assertTrue("Missing required product fields" in str(context_empty.exception) or \
+                        "unit_of_measure cannot be null" in str(context_empty.exception).lower() or \
+                        "Failed to create product" in str(context_empty.exception) )
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
