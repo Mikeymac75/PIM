@@ -59,6 +59,56 @@ document.addEventListener('DOMContentLoaded', () => {
                     li.innerHTML = `<strong>${formatLabel(key)}:</strong> ${value !== null && value !== undefined ? value : 'N/A'}`;
                     modalProductInfo.appendChild(li);
                 });
+
+                // --- Display new information ---
+
+                // On-Hand Inventory
+                const inventoryLi = document.createElement('li');
+                inventoryLi.innerHTML = `<strong>Current On-Hand Inventory:</strong> ${data.product_details.current_on_hand_inventory !== null && data.product_details.current_on_hand_inventory !== undefined ? data.product_details.current_on_hand_inventory : 'N/A'} ${data.product_details.unit_of_measure || ''}`;
+                modalProductInfo.appendChild(inventoryLi);
+
+                // Nearest Expiry Date
+                const expiryLi = document.createElement('li');
+                expiryLi.innerHTML = `<strong>Nearest Expiry Date:</strong> ${data.product_details.nearest_expiry_date || 'N/A'}`;
+                modalProductInfo.appendChild(expiryLi);
+
+                // Recommended Purchase Today
+                const shoppingLi = document.createElement('li');
+                shoppingLi.innerHTML = `<strong>Recommended Purchase Today:</strong> ${data.shopping_list_amount_today !== null && data.shopping_list_amount_today !== undefined ? data.shopping_list_amount_today : 'N/A'} ${data.product_details.unit_of_measure || ''}`;
+                modalProductInfo.appendChild(shoppingLi);
+
+                // Inventory Concerns
+                if (data.inventory_concerns && data.inventory_concerns.length > 0) {
+                    const concernsOuterLi = document.createElement('li');
+                    concernsOuterLi.innerHTML = `<strong>Inventory Concerns:</strong>`;
+                    const concernsUl = document.createElement('ul');
+                    data.inventory_concerns.forEach(concern => {
+                        const concernLi = document.createElement('li');
+                        concernLi.textContent = concern;
+                        concernsUl.appendChild(concernLi);
+                    });
+                    concernsOuterLi.appendChild(concernsUl);
+                    modalProductInfo.appendChild(concernsOuterLi);
+                }
+
+                // Recipes Containing Product
+                if (data.recipes_containing_product && data.recipes_containing_product.length > 0) {
+                    const recipesOuterLi = document.createElement('li');
+                    recipesOuterLi.innerHTML = `<strong>Part of Recipes:</strong>`;
+                    const recipesUl = document.createElement('ul');
+                    data.recipes_containing_product.forEach(recipe => {
+                        const recipeLi = document.createElement('li');
+                        const recipeLink = document.createElement('a');
+                        recipeLink.textContent = recipe.name;
+                        recipeLink.href = `/recipes/name/${encodeURIComponent(recipe.name)}`;
+                        // Optional: Add target="_blank" if you want recipes to open in a new tab
+                        // recipeLink.target = "_blank";
+                        recipeLi.appendChild(recipeLink);
+                        recipesUl.appendChild(recipeLi);
+                    });
+                    recipesOuterLi.appendChild(recipesUl);
+                    modalProductInfo.appendChild(recipesOuterLi);
+                }
             }
 
             // Render Charts
