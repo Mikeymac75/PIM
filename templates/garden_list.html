@@ -160,41 +160,49 @@
 </script>
 <script>
     $(document).ready(function() {
-        // Initialize all harvest modals but ensure they are not shown by default.
-        $('.harvest-modal').each(function() {
-            $(this).modal({ show: false });
-        });
+        console.log("Garden_list.html: Document ready. Attempting to initialize harvest modals.");
+        if (typeof $ == 'undefined') {
+            console.error("Garden_list.html: jQuery is NOT defined!");
+            return;
+        }
+        console.log("Garden_list.html: jQuery is defined.");
 
-        // Optional: Re-check if any modal is accidentally visible and hide it.
-        // This is a more forceful approach if the above doesn't work.
-        // $('.harvest-modal.show').modal('hide');
-        // For now, let's rely on proper initialization with `show: false`.
+        var harvestModals = $('.harvest-modal');
+        console.log("Garden_list.html: Found " + harvestModals.length + " elements with class 'harvest-modal'.");
 
-        // The user's feedback: "it appears by default, then I click harvest (the modal stays on screen) THEN if i click close it closes."
-        // This implies the .modal('hide') might be needed if { show: false } isn't enough
-        // to counteract why it's initially visible.
-        // Let's try a slightly more robust initialization.
-        // Bootstrap's default behavior for a `data-toggle="modal"` element *should* be to initialize
-        // the modal if it hasn't been. The issue is the initial "visible" state.
-        // The `show: false` during programmatic initialization is key.
+        if (harvestModals.length === 0) {
+            console.warn("Garden_list.html: No elements with class 'harvest-modal' found to initialize.");
+        }
 
-        // Let's also ensure that if a modal was somehow opened by a hash in URL (unlikely here) or other means,
-        // and it's one of ours, it gets hidden if it's not supposed to be shown.
-        // However, the problem description points to them being visible *without* interaction.
+        harvestModals.each(function(index) {
+            var modalId = $(this).attr('id'); // Get id for logging
+            console.log("Garden_list.html: Initializing modal with ID: #" + modalId);
+            if (typeof $(this).modal == 'function') {
+                try {
+                    // Initialize but ensure it's not shown.
+                    $(this).modal({ show: false });
+                    console.log("Garden_list.html: Successfully called .modal({ show: false }) on #" + modalId);
 
-        // Final proposed script for robustness:
-        $('.harvest-modal').each(function() {
-            var modalInstance = $(this).data('bs.modal');
-            if (!modalInstance) {
-                // If not initialized, initialize it and ensure it's hidden.
-                $(this).modal({ show: false });
-            } else {
-                // If already initialized for some reason, but visible, hide it.
-                if ($(this).hasClass('show')) {
-                    $(this).modal('hide');
+                    // Check visibility immediately after initialization
+                    if ($(this).is(':visible')) {
+                        console.warn("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE immediately after .modal({ show: false }). Attempting .modal('hide').");
+                        $(this).modal('hide'); // More forceful hide
+                        if ($(this).is(':visible')) {
+                             console.error("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE even after .modal('hide')!");
+                        } else {
+                             console.log("Garden_list.html: Modal #" + modalId + " successfully hidden with .modal('hide').");
+                        }
+                    } else {
+                        console.log("Garden_list.html: Modal #" + modalId + " is hidden as expected after .modal({ show: false }).");
+                    }
+                } catch (e) {
+                    console.error("Garden_list.html: Error calling .modal() on #" + modalId + ": ", e);
                 }
+            } else {
+                console.error("Garden_list.html: $(this).modal is NOT a function for #" + modalId + ". Bootstrap JS might not be loaded correctly for modals or jQuery is conflicting.");
             }
         });
+        console.log("Garden_list.html: Finished attempting to initialize harvest modals.");
     });
 </script>
 {% endblock %}
