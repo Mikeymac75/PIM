@@ -152,61 +152,39 @@
         var harvestDateInputs = document.querySelectorAll('input[name="harvest_date"]');
         var today = new Date().toISOString().split('T')[0];
         harvestDateInputs.forEach(function(input) {
-            if (!input.value) { // Set default only if not already set (e.g. by server-side value)
+            if (!input.value) {
                 input.value = today;
             }
         });
+        console.log("Garden_list.html: Harvest date default script executed.");
     });
 </script>
 <script>
+    // New script to forcefully hide modals on load
     $(document).ready(function() {
-        console.log("Garden_list.html: Document ready. Attempting to initialize harvest modals.");
+        console.log("Garden_list.html: Document ready. Attempting to forcefully hide harvest modals.");
         if (typeof $ == 'undefined') {
-            console.error("Garden_list.html: jQuery is NOT defined!");
+            console.error("Garden_list.html: jQuery is NOT defined for forceful hide!");
             return;
         }
-        console.log("Garden_list.html: jQuery is defined.");
-
         var harvestModals = $('.harvest-modal');
-        console.log("Garden_list.html: Found " + harvestModals.length + " elements with class 'harvest-modal'.");
+        console.log("Garden_list.html: Found " + harvestModals.length + " harvest modals to forcefully hide.");
 
-        if (harvestModals.length === 0) {
-            console.warn("Garden_list.html: No elements with class 'harvest-modal' found to initialize.");
-        }
+        if (harvestModals.length > 0) {
+            harvestModals.hide(); // jQuery's direct hide method
+            console.log("Garden_list.html: Applied .hide() to harvest modals.");
 
-        harvestModals.each(function(index) {
-            var modalId = $(this).attr('id'); // Get id for logging
-            console.log("Garden_list.html: Initializing modal with ID: #" + modalId);
-            if (typeof $(this).modal == 'function') {
-                try {
-                    // Initialize but ensure it's not shown.
-                    $(this).modal({ show: false });
-                    console.log("Garden_list.html: Successfully called .modal({ show: false }) on #" + modalId);
-
-                    // Check visibility immediately after initialization
-                    if ($(this).is(':visible')) {
-                        console.warn("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE. Scheduling .modal('hide') with setTimeout.");
-                        var $modal = $(this); // Capture $(this) for use in setTimeout, to avoid context issues.
-                        setTimeout(function() {
-                            console.log("Garden_list.html: setTimeout triggered for #" + modalId + ". Attempting .modal('hide').");
-                            $modal.modal('hide'); // Use the captured $modal
-                            if ($modal.is(':visible')) {
-                                 console.error("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE even after .modal('hide') in setTimeout!");
-                            } else {
-                                 console.log("Garden_list.html: Modal #" + modalId + " successfully hidden with .modal('hide') in setTimeout.");
-                            }
-                        }, 10); // Using a 10ms delay
-                    } else {
-                        console.log("Garden_list.html: Modal #" + modalId + " is hidden as expected after .modal({ show: false }).");
-                    }
-                } catch (e) {
-                    console.error("Garden_list.html: Error calling .modal() on #" + modalId + ": ", e);
+            // Verification log
+            harvestModals.each(function(index) {
+                var modalId = $(this).attr('id');
+                if ($(this).is(':visible')) {
+                    console.error("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE after forceful .hide()!");
+                } else {
+                    console.log("Garden_list.html: Modal #" + modalId + " is hidden after forceful .hide().");
                 }
-            } else {
-                console.error("Garden_list.html: $(this).modal is NOT a function for #" + modalId + ". Bootstrap JS might not be loaded correctly for modals or jQuery is conflicting.");
-            }
-        });
-        console.log("Garden_list.html: Finished attempting to initialize harvest modals.");
+            });
+        }
+        console.log("Garden_list.html: Finished forceful hide attempt.");
     });
 </script>
 {% endblock %}
