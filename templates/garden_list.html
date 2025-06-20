@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Garden & Harvest List{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Garden & Production Items</h2>
+
+    <div class="mb-3 d-flex justify-content-between align-items-center">
+        <a href="{{ url_for('add_production_item_view') }}" class="btn btn-success">Add New Production Item</a>
+
+        <form method="GET" action="{{ url_for('garden_list_view') }}" class="form-inline">
+            <select name="status_filter" class="form-control mr-2" onchange="this.form.submit()">
+                <option value="">All Statuses</option>
+                {% for status in all_status_options %}
+                    <option value="{{ status }}" {% if status == status_filter %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary">Filter</button>
+        </form>
+    </div>
+
+    {% include '_flash_messages.html' %}
+
+    <table class="table table-striped table-hover">
+        <thead>
+            <tr>
+                <th>
+                    <a href="{{ url_for('garden_list_view', sort_by='name', sort_order='asc' if sort_by=='name' and sort_order=='desc' else 'desc', status_filter=status_filter) }}">
+                        Name {% if sort_by == 'name' %}{% if sort_order == 'asc' %}▲{% else %}▼{% endif %}{% endif %}
+                    </a>
+                </th>
+                <th>Associated Product</th>
+                <th>
+                    <a href="{{ url_for('garden_list_view', sort_by='plant_date', sort_order='asc' if sort_by=='plant_date' and sort_order=='desc' else 'desc', status_filter=status_filter) }}">
+                        Plant Date {% if sort_by == 'plant_date' %}{% if sort_order == 'asc' %}▲{% else %}▼{% endif %}{% endif %}
+                    </a>
+                </th>
+                <th>
+                     <a href="{{ url_for('garden_list_view', sort_by='status', sort_order='asc' if sort_by=='status' and sort_order=='desc' else 'desc', status_filter=status_filter) }}">
+                        Status (DB){% if sort_by == 'status' %}{% if sort_order == 'asc' %}▲{% else %}▼{% endif %}{% endif %}
+                    </a> / (Calculated)
+                </th>
+                <th>Time to Harvest (Days)</th>
+                <th>Harvest Period (Days)</th>
+                <th>Expected Total Yield</th>
+                <th>Est. Daily Yield</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if items %}
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>
+                        {% if item.associated_product_id %}
+                            {# Assuming product details are not directly joined in get_all_production_items yet. #}
+                            {# This would ideally show product name. For now, showing ID. #}
+                            Product ID: {{ item.associated_product_id }}
+                            {# In a more advanced setup, you'd fetch product name here or join in backend #}
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </td>
+                    <td>{{ item.plant_date }}</td>
+                    <td>{{ item.status }} / {{ item.calculated_status }}</td>
+                    <td>{{ item.time_to_harvest_days }}</td>
+                    <td>{{ item.expected_harvest_period_days }}</td>
+                    <td>{{ item.expected_yield_total }}</td>
+                    <td>{{ "%.2f"|format(item.estimated_daily_yield) if item.estimated_daily_yield != 'Error' and item.estimated_daily_yield is not none else item.estimated_daily_yield }}</td>
+                    <td>
+                        <a href="{{ url_for('edit_production_item_view', item_id=item.id) }}" class="btn btn-sm btn-outline-primary mr-1">Edit</a>
+                        {% if item.calculated_status == 'Growing' or item.calculated_status == 'Harvesting' %}
+                        <!-- Harvest Modal Trigger Button -->
+                        <button type.button class="btn btn-sm btn-outline-success" data-toggle="modal" data-target="#harvestModal-{{ item.id }}">
+                            Harvest
+                        </button>
+
+                        <!-- Harvest Modal -->
+                        <div class="modal fade" id="harvestModal-{{ item.id }}" tabindex="-1" role="dialog" aria-labelledby="harvestModalLabel-{{ item.id }}" aria-hidden="true">
+                            <div class="modal-dialog" role="document">
+                                <div class="modal-content">
+                                    <form method="POST" action="{{ url_for('record_harvest_view', item_id=item.id) }}">
+                                        <div class="modal-header">
+                                            <h5 class="modal-title" id="harvestModalLabel-{{ item.id }}">Record Harvest for {{ item.name }}</h5>
+                                            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                                <span aria-hidden="true">&times;</span>
+                                            </button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <div class="form-group">
+                                                <label for="actual_harvest_amount-{{ item.id }}">Actual Harvest Amount</label>
+                                                <input type="number" step="any" class="form-control" id="actual_harvest_amount-{{ item.id }}" name="actual_harvest_amount" required>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="harvest_date-{{ item.id }}">Harvest Date</label>
+                                                <input type="date" class="form-control" id="harvest_date-{{ item.id }}" name="harvest_date" value="{{ today_iso_date if today_iso_date else '' }}" required>
+                                                 {# Assuming today_iso_date is passed from app.py or use JS to set default #}
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                                            <button type="submit" class="btn btn-primary">Record Harvest</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {# Optional Delete Button - Implement with caution #}
+                        {# <a href="#" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to delete this item?');">Delete</a> #}
+                    </td>
+                </tr>
+                {% endfor %}
+            {% else %}
+            <tr>
+                <td colspan="9" class="text-center">No production items found.</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+
+    {% if total_pages and total_pages > 1 %}
+    <nav aria-label="Page navigation">
+        <ul class="pagination justify-content-center">
+            {% if current_page > 1 %}
+            <li class="page-item"><a class="page-link" href="{{ url_for('garden_list_view', page=current_page-1, sort_by=sort_by, sort_order=sort_order, status_filter=status_filter) }}">Previous</a></li>
+            {% endif %}
+
+            {% for page_num in range(1, total_pages + 1) %}
+            <li class="page-item {% if page_num == current_page %}active{% endif %}">
+                <a class="page-link" href="{{ url_for('garden_list_view', page=page_num, sort_by=sort_by, sort_order=sort_order, status_filter=status_filter) }}">{{ page_num }}</a>
+            </li>
+            {% endfor %}
+
+            {% if current_page < total_pages %}
+            <li class="page-item"><a class="page-link" href="{{ url_for('garden_list_view', page=current_page+1, sort_by=sort_by, sort_order=sort_order, status_filter=status_filter) }}">Next</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+    // Ensure jQuery and Bootstrap JS are loaded for modals
+    // If using Bootstrap 4, modals are typically initialized via data attributes.
+    // If any specific JS is needed for default dates in modals:
+    document.addEventListener('DOMContentLoaded', function() {
+        var harvestDateInputs = document.querySelectorAll('input[name="harvest_date"]');
+        var today = new Date().toISOString().split('T')[0];
+        harvestDateInputs.forEach(function(input) {
+            if (!input.value) { // Set default only if not already set (e.g. by server-side value)
+                input.value = today;
+            }
+        });
+    });
+</script>
+{% endblock %}

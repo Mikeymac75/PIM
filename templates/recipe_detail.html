@@ -17,6 +17,34 @@
             <p>{{ recipe.description if recipe.description else 'No description available.' }}</p>
         </div>
 
+        {% if recipe.instructions %}
+        <div class="recipe-instructions-section mt-3">
+            <h3>Instructions:</h3>
+            <p style="white-space: pre-wrap;">{{ recipe.instructions }}</p>
+        </div>
+        {% endif %}
+
+        {% if recipe.output_product_id and recipe.output_yield %}
+        <div class="recipe-output-section mt-3">
+            <h3>Production Output:</h3>
+            <p>
+                Produces: <strong>{{ recipe.output_yield }}
+                {% if recipe.output_product_details and recipe.output_product_details.unit_of_measure %}
+                    {{ recipe.output_product_details.unit_of_measure }}
+                {% else %}
+                    units
+                {% endif %}
+                of
+                {% if recipe.output_product_details and recipe.output_product_details.name %}
+                    <a href="#" class="product-name-link" data-product-id="{{ recipe.output_product_id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ recipe.output_product_details.name }}</a>
+                {% else %}
+                    Product ID: {{ recipe.output_product_id }}
+                {% endif %}
+                </strong>
+            </p>
+        </div>
+        {% endif %}
+
         <h3 style="margin-top: 30px;">Ingredients:</h3>
         {% if ingredients_status %}
         <div class="table-responsive-wrapper">
@@ -58,11 +86,22 @@
 
             <div class="actions-section" style="margin-top: 20px;">
                 {% if recipe_makeable %}
-                    <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" style="display: inline;">
-                        <button type="submit" class="button"><i class="fas fa-blender"></i> Make This Recipe</button>
+                    <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" class="form-inline">
+                        <div class="form-group mb-2 mr-sm-2">
+                            <label for="num_batches" class="sr-only">Number of Batches</label>
+                            <input type="number" class="form-control" id="num_batches" name="num_batches" value="1" min="1" style="width: 80px;" title="Number of batches to make">
+                        </div>
+                        <button type="submit" class="button btn btn-success mb-2"><i class="fas fa-blender"></i> Make Recipe</button>
                     </form>
                 {% else %}
-                    <button type="button" class="button" disabled title="Not enough ingredients to make this recipe."><i class="fas fa-blender"></i> Make This Recipe (Insufficient Ingredients)</button>
+                    {# Keep the form structure for consistency, but disable the button and input if not makeable #}
+                    <form class="form-inline">
+                         <div class="form-group mb-2 mr-sm-2">
+                            <label for="num_batches_disabled" class="sr-only">Number of Batches</label>
+                            <input type="number" class="form-control" id="num_batches_disabled" name="num_batches_disabled" value="1" min="1" style="width: 80px;" disabled>
+                        </div>
+                        <button type="button" class="button btn btn-secondary mb-2" disabled title="Not enough ingredients to make this recipe."><i class="fas fa-blender"></i> Make Recipe (Insufficient Ingredients)</button>
+                    </form>
                 {% endif %}
             </div>
 

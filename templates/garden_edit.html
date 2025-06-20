@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}{{ form_action_label }} Production Item{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>{{ form_action_label }} Production Item</h2>
+
+    {% include '_flash_messages.html' %}
+
+    <form method="POST" action="{{ request.url }}">
+        {# CSRF token if using Flask-WTF, not included for basic example #}
+
+        <div class="form-group">
+            <label for="name">Item Name</label>
+            <input type="text" class="form-control" id="name" name="name" value="{{ item.name if item else '' }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="associated_product_id">Associated Product (Optional)</label>
+            <select class="form-control" id="associated_product_id" name="associated_product_id">
+                <option value="">None</option>
+                {% for product in products %}
+                    <option value="{{ product.id }}" {% if item and item.associated_product_id == product.id %}selected{% endif %}>
+                        {{ product.name }} ({{ product.unit_of_measure }})
+                    </option>
+                {% endfor %}
+            </select>
+            <small class="form-text text-muted">Link this production item to an existing product if it directly yields that product (e.g., "Tomato Plant" yields "Tomatoes").</small>
+        </div>
+
+        <div class="form-group">
+            <label for="plant_date">Plant Date</label>
+            <input type="date" class="form-control" id="plant_date" name="plant_date" value="{{ item.plant_date if item else '' }}" required>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group col-md-6">
+                <label for="time_to_harvest_days">Time to Harvest (Days)</label>
+                <input type="number" class="form-control" id="time_to_harvest_days" name="time_to_harvest_days" value="{{ item.time_to_harvest_days if item else '' }}" min="0" required>
+            </div>
+            <div class="form-group col-md-6">
+                <label for="expected_harvest_period_days">Expected Harvest Period (Days)</label>
+                <input type="number" class="form-control" id="expected_harvest_period_days" name="expected_harvest_period_days" value="{{ item.expected_harvest_period_days if item else '' }}" min="1" required>
+                 <small class="form-text text-muted">Duration over which yield is expected (e.g., tomatoes might yield for 30 days).</small>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="expected_yield_total">Expected Total Yield (Numerical)</label>
+            <input type="number" step="any" class="form-control" id="expected_yield_total" name="expected_yield_total" value="{{ item.expected_yield_total if item else '' }}" min="0" required>
+            <small class="form-text text-muted">Total expected yield over the harvest period, in the unit of the associated product (if any) or a consistent unit you define.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="status">Status</label>
+            <select class="form-control" id="status" name="status">
+                <option value="Growing" {% if item and item.status == 'Growing' %}selected{% elif not item %}selected{% endif %}>Growing</option>
+                <option value="Harvesting" {% if item and item.status == 'Harvesting' %}selected{% endif %}>Harvesting</option>
+                <option value="Finished" {% if item and item.status == 'Finished' %}selected{% endif %}>Finished</option>
+            </select>
+            <small class="form-text text-muted">Initial status. The system will also calculate status dynamically based on dates.</small>
+        </div>
+
+        <button type="submit" class="btn btn-primary">{{ form_action_label }} Item</button>
+        <a href="{{ url_for('garden_list_view') }}" class="btn btn-secondary">Cancel</a>
+    </form>
+</div>
+{% endblock %}
