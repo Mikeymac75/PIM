@@ -24,6 +24,13 @@ header {
     padding-top: 30px;
     min-height: 70px;
     border-bottom: #007bff 3px solid; /* New blue accent */
+    position: relative; /* For stacking context */
+    z-index: 10; /* Ensure header is above main content for dropdown visibility */
+}
+
+/* Allow dropdowns to overflow the header's container */
+header .container {
+    overflow: visible;
 }
 
 header a {
@@ -85,7 +92,7 @@ header nav ul li a i {
     background-color: #343a40; /* Match header background */
     min-width: 200px; /* Adjust as needed */
     box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-    z-index: 999; /* Ensure dropdown is above other content, below modal */
+    z-index: 100; /* Above other header content within its new stacking context */
     border-top: 3px solid #007bff; /* Blue accent to match header bottom border */
 }
 
