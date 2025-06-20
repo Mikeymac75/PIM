@@ -1592,9 +1592,37 @@ def add_inventory_stock_view():
             return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
 
     # GET request
-    products_for_dropdown = manager.get_all_products()
-    # Default purchase date to today for GET request pre-fill
-    return render_template('add_inventory.html', products=products_for_dropdown, form_data={'purchase_date': date.today().isoformat()})
+    search_name = request.args.get('search_name', '').strip()
+    search_category = request.args.get('search_category', '').strip()
+
+    all_categories = manager.get_all_categories()
+
+    # Prepare arguments for get_all_products, only pass if values exist
+    filter_args = {}
+    if search_name:
+        filter_args['search_term'] = search_name
+    if search_category:
+        filter_args['category'] = search_category
+    # page and per_page are None by default in get_all_products to fetch all if not specified
+    # or if the new template for add_inventory doesn't need pagination for product list yet.
+    # If pagination is needed here, pass page=None, per_page=None to fetch all,
+    # or implement pagination controls for this product list.
+    # For now, assuming we want all (filtered) products in the dropdown.
+    filter_args['page'] = None
+    filter_args['per_page'] = None
+
+
+    products_for_dropdown = manager.get_all_products(**filter_args)
+
+    form_data_get = {'purchase_date': date.today().isoformat()}
+    # If there were validation errors on POST, form_data might be passed from POST.
+    # For a clean GET, it's just the purchase_date.
+    # The template will use request.args for search_name and search_category values.
+
+    return render_template('add_inventory.html',
+                           products=products_for_dropdown,
+                           all_categories=all_categories,
+                           form_data=form_data_get)
 
 @app.route('/inventory/edit', methods=['GET', 'POST'])
 def edit_inventory_view():
