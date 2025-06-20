@@ -168,10 +168,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const ctx = dailyConsumptionChartCanvas.getContext('2d');
 
         // Use inventory history labels as the primary source for chart labels
-        const chartLabels = dailyInventoryHistory.map(item => item.inventory_date);
+        // Format date labels as MM-DD
+        const chartLabels = dailyInventoryHistory.map(item => {
+            const parts = item.inventory_date.split('-'); // "YYYY-MM-DD"
+            return parts[1] + '-' + parts[2]; // "MM-DD"
+        });
 
-        const consumptionDataValues = chartLabels.map(labelDate => {
-            const consItem = dailyData.find(item => item.consumption_date === labelDate);
+        // Map consumption data to the new chartLabels format if necessary,
+        // or ensure dailyData also uses MM-DD if direct matching is needed.
+        // For now, we assume dailyData.consumption_date is still YYYY-MM-DD
+        // and we need to match it with the full date from dailyInventoryHistory
+        // before formatting for the label.
+        // So, consumptionDataValues mapping needs to use the *original* full date from dailyInventoryHistory
+        // for finding matches in dailyData, but the chart itself uses the formatted labels.
+
+        const consumptionDataValues = dailyInventoryHistory.map(historyItem => {
+            // historyItem.inventory_date is YYYY-MM-DD from the source
+            const consItem = dailyData.find(item => item.consumption_date === historyItem.inventory_date);
             return consItem ? consItem.total_quantity_consumed : 0;
         });
 
@@ -214,7 +227,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 scales: {
                     y: {
                         beginAtZero: true,
-                        suggestedMax: suggestedMaxY
+                        suggestedMax: suggestedMaxY,
+                        ticks: {
+                            maxTicksLimit: 8
+                        }
                     }
                 },
                 responsive: true,
