@@ -79,10 +79,244 @@ class InventoryManager:
                         FOREIGN KEY (product_id) REFERENCES products (id)
                     )
                 ''')
+
+                # Production Items Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS production_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        associated_product_id INTEGER,
+                        plant_date TEXT,
+                        time_to_harvest_days INTEGER,
+                        expected_harvest_period_days INTEGER,
+                        expected_yield_total REAL,
+                        status TEXT CHECK(status IN ('Growing', 'Harvesting', 'Finished')),
+                        FOREIGN KEY (associated_product_id) REFERENCES products (id)
+                    )
+                ''')
                 conn.commit()
         except sqlite3.Error as e:
             raise sqlite3.Error(f"Database initialization error: {e}")
             # Depending on app design, might want to raise this or handle more gracefully
+
+    # --- Production Item (Garden & Harvest) Methods ---
+    def add_production_item(self, name, associated_product_id, plant_date_str,
+                            time_to_harvest_days, expected_harvest_period_days,
+                            expected_yield_total, status='Growing'):
+        """Adds a new production item to the production_items table."""
+        if not all([name, plant_date_str, time_to_harvest_days is not None,
+                    expected_harvest_period_days is not None, expected_yield_total is not None]):
+            return {"success": False, "message": "Missing required production item fields."}
+
+        try:
+            # Validate plant_date_str format
+            date.fromisoformat(plant_date_str)
+        except ValueError:
+            return {"success": False, "message": "Invalid plant_date format. Use YYYY-MM-DD."}
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO production_items
+                    (name, associated_product_id, plant_date, time_to_harvest_days,
+                    expected_harvest_period_days, expected_yield_total, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (name, associated_product_id, plant_date_str, time_to_harvest_days,
+                      expected_harvest_period_days, expected_yield_total, status))
+                conn.commit()
+                item_id = cursor.lastrowid
+                return {"success": True, "message": f"Production item '{name}' added successfully.", "item_id": item_id}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error adding production item: {e}"}
+
+    def get_production_item(self, item_id):
+        """Retrieves a production item by its ID."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM production_items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                if row:
+                    item = dict(row)
+                    # Dynamically calculate status and yield for single item view as well
+                    # This ensures consistency with get_all_production_items
+                    # However, the core requirement was for get_all_production_items,
+                    # so this is an enhancement. If not desired, remove calculation here.
+                    try:
+                        plant_dt = date.fromisoformat(item['plant_date'])
+                        harvest_start_date = plant_dt + timedelta(days=item['time_to_harvest_days'])
+                        harvest_end_date = harvest_start_date + timedelta(days=item['expected_harvest_period_days'])
+                        current_dt = date.today()
+
+                        if current_dt < harvest_start_date:
+                            item['calculated_status'] = 'Growing'
+                        elif harvest_start_date <= current_dt <= harvest_end_date:
+                            item['calculated_status'] = 'Harvesting'
+                        else:
+                            item['calculated_status'] = 'Finished'
+
+                        if item['expected_harvest_period_days'] > 0:
+                            item['estimated_daily_yield'] = item['expected_yield_total'] / item['expected_harvest_period_days']
+                        else:
+                            item['estimated_daily_yield'] = 0
+                    except (ValueError, TypeError) as e:
+                        # Handle cases where date conversion or calculation might fail
+                        item['calculated_status'] = item.get('status', 'Error calculating status') # Fallback to stored status
+                        item['estimated_daily_yield'] = 'Error'
+                        print(f"Error calculating dynamic fields for production item {item_id}: {e}")
+                    return item
+                return None
+        except sqlite3.Error as e:
+            print(f"Database error getting production item by ID {item_id}: {e}")
+            return None
+
+    def get_all_production_items(self, filters=None, sort_by='plant_date', sort_order='ASC',
+                                 page=1, per_page=10):
+        """Retrieves production items with filtering, sorting, pagination, and calculated fields."""
+        items = []
+        params = []
+
+        query = "SELECT * FROM production_items"
+
+        # Basic filtering (e.g., by status)
+        where_clauses = []
+        if filters and 'status' in filters:
+            # Note: This filters by the *stored* status. Dynamic status is calculated later.
+            # If filtering by dynamic status is needed, the query or post-processing becomes more complex.
+            where_clauses.append("status = ?")
+            params.append(filters['status'])
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        # Sorting
+        valid_sort_columns = {
+            'name': 'name', 'plant_date': 'plant_date', 'status': 'status',
+            'expected_yield_total': 'expected_yield_total'
+            # Add more as needed
+        }
+        sort_column = valid_sort_columns.get(sort_by, 'plant_date')
+        sort_order_upper = 'DESC' if sort_order.upper() == 'DESC' else 'ASC'
+        query += f" ORDER BY {sort_column} {sort_order_upper}"
+
+        # Pagination
+        if page is not None and per_page is not None and page > 0 and per_page > 0:
+            offset = (page - 1) * per_page
+            query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
+        elif per_page is not None and per_page > 0: # If only per_page is specified, assume page 1
+            query += " LIMIT ?"
+            params.append(per_page)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                current_dt = date.today()
+                for row_data in rows:
+                    item = dict(row_data)
+                    try:
+                        plant_dt = date.fromisoformat(item['plant_date'])
+                        # Ensure time_to_harvest_days and expected_harvest_period_days are not None
+                        time_to_harvest = item['time_to_harvest_days'] if item['time_to_harvest_days'] is not None else 0
+                        expected_period = item['expected_harvest_period_days'] if item['expected_harvest_period_days'] is not None else 0
+
+                        harvest_start_date = plant_dt + timedelta(days=time_to_harvest)
+                        harvest_end_date = harvest_start_date + timedelta(days=expected_period)
+
+                        if current_dt < harvest_start_date:
+                            item['calculated_status'] = 'Growing'
+                        elif harvest_start_date <= current_dt <= harvest_end_date:
+                            item['calculated_status'] = 'Harvesting'
+                        else:
+                            item['calculated_status'] = 'Finished'
+
+                        if expected_period > 0 and item['expected_yield_total'] is not None:
+                            item['estimated_daily_yield'] = item['expected_yield_total'] / expected_period
+                        else:
+                            item['estimated_daily_yield'] = 0
+
+                    except (ValueError, TypeError, KeyError) as e:
+                        item['calculated_status'] = item.get('status', 'Error') # Fallback to stored status or 'Error'
+                        item['estimated_daily_yield'] = 'Error'
+                        print(f"Error calculating dynamic fields for item ID {item.get('id')}: {e}")
+
+                    items.append(item)
+        except sqlite3.Error as e:
+            print(f"Database error fetching all production items: {e}")
+        return items
+
+    def update_production_item(self, item_id, data):
+        """Updates an existing production item."""
+        if not data:
+            return {"success": False, "message": "No data provided for update."}
+
+        fields = []
+        params = []
+        for key, value in data.items():
+            # Add more validation for column names if necessary
+            if key in ['name', 'associated_product_id', 'plant_date',
+                       'time_to_harvest_days', 'expected_harvest_period_days',
+                       'expected_yield_total', 'status']:
+                if key == 'plant_date':
+                    try:
+                        date.fromisoformat(value) # Validate date format
+                    except ValueError:
+                        return {"success": False, "message": f"Invalid plant_date format for {key}: {value}. Use YYYY-MM-DD."}
+                fields.append(f"{key} = ?")
+                params.append(value)
+
+        if not fields:
+            return {"success": False, "message": "No valid fields to update."}
+
+        params.append(item_id)
+        query = f"UPDATE production_items SET {', '.join(fields)} WHERE id = ?"
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                conn.commit()
+                if cursor.rowcount == 0:
+                    return {"success": False, "message": f"Production item with ID {item_id} not found."}
+                return {"success": True, "message": f"Production item ID {item_id} updated successfully."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error updating production item: {e}"}
+
+    def record_harvest(self, production_item_id, actual_harvest_amount, harvest_date_str):
+        """Records a harvest, adding it to inventory stock."""
+        if actual_harvest_amount <= 0:
+            return {"success": False, "message": "Actual harvest amount must be positive."}
+
+        production_item = self.get_production_item(production_item_id)
+        if not production_item:
+            return {"success": False, "message": f"Production item with ID {production_item_id} not found."}
+
+        associated_product_id = production_item.get('associated_product_id')
+        if associated_product_id is None:
+            return {"success": False, "message": f"Production item ID {production_item_id} does not have an associated product ID."}
+
+        # Validate harvest_date_str format
+        try:
+            date.fromisoformat(harvest_date_str)
+        except ValueError:
+            return {"success": False, "message": "Invalid harvest_date format. Use YYYY-MM-DD."}
+
+        # Call add_inventory_stock to add the harvested amount to general inventory
+        # self.add_inventory_stock handles fetching product details (like default_expiry_days)
+        # and creating the inventory_item record.
+        stock_result = self.add_inventory_stock(
+            product_id=associated_product_id,
+            quantity_str=str(actual_harvest_amount), # add_inventory_stock expects a string
+            purchase_date_str=harvest_date_str # Harvest date is treated as purchase date for inventory purposes
+        )
+
+        # Optionally, update production_item status or remaining yield here if needed in future.
+        # For now, status updates are via update_production_item or dynamic calculation.
+
+        return stock_result
 
     # --- Product Management Methods ---
     def create_product(self, name, category, subcategory, unit_of_measure, default_expiry_days,

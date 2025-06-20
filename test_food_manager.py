@@ -399,6 +399,194 @@ class TestInventoryManager(unittest.TestCase):
                         "unit_of_measure cannot be null" in str(context_empty.exception).lower() or \
                         "Failed to create product" in str(context_empty.exception) )
 
+
+# --- Test Cases for Production Items (Garden & Harvest) ---
+class TestProductionItems(unittest.TestCase):
+    def setUp(self):
+        self.manager = InventoryManager(db_filepath=":memory:")
+        # Add a product that can be associated
+        self.product1 = self.manager.create_product(name="Tomatoes", category="Produce", unit_of_measure="kg", default_expiry_days=7)
+        self.product1_id = self.product1['product_id']
+        self.product2 = self.manager.create_product(name="Basil", category="Herbs", unit_of_measure="bunch", default_expiry_days=5)
+        self.product2_id = self.product2['product_id']
+
+    def tearDown(self):
+        self.manager.close_connection()
+
+    def test_add_production_item_successful(self):
+        result = self.manager.add_production_item(
+            name="Tomato Plant A",
+            associated_product_id=self.product1_id,
+            plant_date_str="2024-01-01",
+            time_to_harvest_days=60,
+            expected_harvest_period_days=30,
+            expected_yield_total=5.0,
+            status="Growing"
+        )
+        self.assertTrue(result.get("success"))
+        self.assertIsNotNone(result.get("item_id"))
+        item = self.manager.get_production_item(result["item_id"])
+        self.assertEqual(item['name'], "Tomato Plant A")
+        self.assertEqual(item['associated_product_id'], self.product1_id)
+
+    def test_add_production_item_validation_errors(self):
+        # Invalid date
+        result = self.manager.add_production_item(name="Test Plant", associated_product_id=self.product1_id, plant_date_str="invalid-date", time_to_harvest_days=1, expected_harvest_period_days=1, expected_yield_total=1)
+        self.assertFalse(result.get("success"))
+        self.assertIn("Invalid plant_date format", result.get("message"))
+
+        # Missing required fields (e.g., name)
+        result = self.manager.add_production_item(name="", associated_product_id=self.product1_id, plant_date_str="2024-01-01", time_to_harvest_days=1, expected_harvest_period_days=1, expected_yield_total=1)
+        self.assertFalse(result.get("success"))
+        self.assertIn("Missing required production item fields", result.get("message")) # Or specific field error if manager changes
+
+    def test_get_production_item(self):
+        add_result = self.manager.add_production_item(name="Test Get Plant", plant_date_str="2024-01-01", time_to_harvest_days=30, expected_harvest_period_days=15, expected_yield_total=2.0, associated_product_id=self.product1_id)
+        item_id = add_result["item_id"]
+
+        item = self.manager.get_production_item(item_id)
+        self.assertIsNotNone(item)
+        self.assertEqual(item['name'], "Test Get Plant")
+
+        non_existent_item = self.manager.get_production_item(999)
+        self.assertIsNone(non_existent_item)
+
+    @unittest.mock.patch('Food_manager.date') # Mock date in Food_manager module
+    def test_get_production_item_dynamic_status_and_yield(self, mock_date):
+        plant_date = date(2024, 1, 1)
+        add_result = self.manager.add_production_item(
+            name="Dynamic Plant",
+            plant_date_str=plant_date.isoformat(),
+            time_to_harvest_days=30, # Harvest starts 2024-01-31
+            expected_harvest_period_days=15, # Harvest ends 2024-02-15
+            expected_yield_total=3.0,
+            associated_product_id=self.product1_id
+        )
+        item_id = add_result["item_id"]
+
+        # Scenario 1: Growing
+        mock_date.today.return_value = date(2024, 1, 15)
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['calculated_status'], "Growing")
+        self.assertAlmostEqual(item['estimated_daily_yield'], 3.0 / 15)
+
+        # Scenario 2: Harvesting
+        mock_date.today.return_value = date(2024, 2, 1)
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['calculated_status'], "Harvesting")
+
+        # Scenario 3: Finished
+        mock_date.today.return_value = date(2024, 3, 1)
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['calculated_status'], "Finished")
+
+        # Test with zero harvest period
+        add_result_zero_period = self.manager.add_production_item(name="ZeroDayPlant", plant_date_str="2024-01-01", time_to_harvest_days=10, expected_harvest_period_days=0, expected_yield_total=5.0)
+        item_zero_id = add_result_zero_period['item_id']
+        mock_date.today.return_value = date(2024, 1, 15) # After time_to_harvest, during "zero" period
+        item_zero = self.manager.get_production_item(item_zero_id)
+        self.assertEqual(item_zero['estimated_daily_yield'], 0)
+        # Status for zero harvest period: if current_date is after harvest_start_date (plant_date + time_to_harvest), it's 'Finished'
+        # harvest_start = 2024-01-11, harvest_end = 2024-01-11. So 2024-01-15 is Finished.
+        self.assertEqual(item_zero['calculated_status'], "Finished")
+
+
+    def test_get_all_production_items(self):
+        # No items
+        items = self.manager.get_all_production_items()
+        self.assertEqual(len(items), 0)
+
+        # Add multiple items
+        self.manager.add_production_item(name="Plant A", plant_date_str="2024-03-01", time_to_harvest_days=10, expected_harvest_period_days=5, expected_yield_total=1, status="Growing")
+        self.manager.add_production_item(name="Plant B", plant_date_str="2024-01-01", time_to_harvest_days=10, expected_harvest_period_days=5, expected_yield_total=2, status="Harvesting") # Stored status
+        self.manager.add_production_item(name="Plant C", plant_date_str="2024-02-01", time_to_harvest_days=10, expected_harvest_period_days=5, expected_yield_total=3, status="Growing")
+
+        items = self.manager.get_all_production_items()
+        self.assertEqual(len(items), 3)
+
+        # Test sorting (default is plant_date ASC)
+        self.assertEqual(items[0]['name'], "Plant B") # 2024-01-01
+        self.assertEqual(items[1]['name'], "Plant C") # 2024-02-01
+        self.assertEqual(items[2]['name'], "Plant A") # 2024-03-01
+
+        # Test filtering by stored status
+        items_growing = self.manager.get_all_production_items(filters={'status': 'Growing'})
+        self.assertEqual(len(items_growing), 2)
+        self.assertTrue(all(item['status'] == 'Growing' for item in items_growing))
+
+        items_harvesting = self.manager.get_all_production_items(filters={'status': 'Harvesting'})
+        self.assertEqual(len(items_harvesting), 1)
+        self.assertEqual(items_harvesting[0]['name'], "Plant B")
+
+
+    def test_update_production_item(self):
+        add_result = self.manager.add_production_item(name="Original Name", plant_date_str="2024-01-01", time_to_harvest_days=60, expected_harvest_period_days=30, expected_yield_total=5.0)
+        item_id = add_result["item_id"]
+
+        update_data = {"name": "Updated Name", "status": "Finished", "expected_yield_total": 7.5}
+        result = self.manager.update_production_item(item_id, update_data)
+        self.assertTrue(result.get("success"))
+
+        updated_item = self.manager.get_production_item(item_id)
+        self.assertEqual(updated_item['name'], "Updated Name")
+        self.assertEqual(updated_item['status'], "Finished")
+        self.assertEqual(updated_item['expected_yield_total'], 7.5)
+
+        # Attempt to update non-existent item
+        result_non_existent = self.manager.update_production_item(999, {"name": "Does not exist"})
+        self.assertFalse(result_non_existent.get("success"))
+        self.assertIn("not found", result_non_existent.get("message"))
+
+    @unittest.mock.patch.object(InventoryManager, 'add_inventory_stock') # Mock the method on the class
+    def test_record_harvest(self, mock_add_inventory_stock):
+        # Setup: Add a production item
+        plant_date_str = "2023-01-01"
+        prod_item_result = self.manager.add_production_item(
+            name="Harvestable Tomato Plant",
+            associated_product_id=self.product1_id, # Tomatoes
+            plant_date_str=plant_date_str,
+            time_to_harvest_days=30,
+            expected_harvest_period_days=30,
+            expected_yield_total=10.0,
+            status="Harvesting"
+        )
+        production_item_id = prod_item_result["item_id"]
+
+        # Define mock return value for add_inventory_stock
+        mock_add_inventory_stock.return_value = {"success": True, "message": "Stock added", "stock_item_id": 123}
+
+        # Call record_harvest
+        harvest_date_str = "2023-02-15" # Within harvest period
+        actual_harvest_amount = 2.5
+
+        result = self.manager.record_harvest(production_item_id, actual_harvest_amount, harvest_date_str)
+
+        # Assertions
+        self.assertTrue(result.get("success"))
+        self.assertEqual(result.get("stock_item_id"), 123)
+
+        # Verify add_inventory_stock was called correctly
+        mock_add_inventory_stock.assert_called_once_with(
+            product_id=self.product1_id,
+            quantity_str=str(actual_harvest_amount),
+            purchase_date_str=harvest_date_str
+        )
+
+        # Test harvesting from non-existent item
+        mock_add_inventory_stock.reset_mock() # Reset mock for next call
+        result_non_existent = self.manager.record_harvest(999, 1.0, "2023-03-01")
+        self.assertFalse(result_non_existent.get("success"))
+        self.assertIn("not found", result_non_existent.get("message", "").lower())
+        mock_add_inventory_stock.assert_not_called() # Ensure it wasn't called for non-existent item
+
+        # Test harvest with no associated product ID (if item was created with None)
+        prod_item_no_assoc_result = self.manager.add_production_item(name="Mystery Plant", associated_product_id=None, plant_date_str="2023-01-01", time_to_harvest_days=1,expected_harvest_period_days=1,expected_yield_total=1)
+        prod_item_no_assoc_id = prod_item_no_assoc_result['item_id']
+        result_no_assoc = self.manager.record_harvest(prod_item_no_assoc_id, 1.0, "2023-03-01")
+        self.assertFalse(result_no_assoc.get("success"))
+        self.assertIn("does not have an associated product id", result_no_assoc.get("message", "").lower())
+
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
 

@@ -19,6 +19,39 @@
             <textarea id="description" name="description" class="form-control" rows="3">{{ form_data.get('description', '') if form_data else '' }}</textarea>
         </div>
 
+        {# Instructions - Assuming this should be here, was commented out in previous attempt diff #}
+        <div class="form-group">
+            <label for="instructions">Instructions:</label>
+            <textarea class="form-control" id="instructions" name="instructions" rows="5">{{ form_data.get('instructions', '') if form_data else '' }}</textarea>
+        </div>
+
+        <hr>
+        <h3 style="margin-top: 20px; margin-bottom: 10px;">Production Output (Optional)</h3>
+        <div class="form-row mb-3">
+            <div class="form-group col-md-8">
+                <label for="output_product_id">Output Product</label>
+                <select class="form-control" id="output_product_id" name="output_product_id">
+                    <option value="">None - This recipe does not produce a direct inventory item</option>
+                    {% if products %} {# products is passed from the route for the main product list #}
+                        {% for product in products %}
+                            <option value="{{ product.id }}"
+                                    {% if form_data and form_data.get('output_product_id') and form_data.get('output_product_id')|int == product.id %}selected{% endif %}>
+                                {{ product.name }} ({{ product.unit_of_measure }})
+                            </option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+                <small class="form-text text-muted">If this recipe creates a new product batch (e.g., making a large batch of sauce).</small>
+            </div>
+            <div class="form-group col-md-4">
+                <label for="output_yield">Output Yield</label>
+                <input type="number" step="any" class="form-control" id="output_yield" name="output_yield"
+                       value="{{ form_data.get('output_yield', '') if form_data else '' }}" placeholder="e.g., 1.5">
+                <small class="form-text text-muted">Total quantity produced (use unit of selected Output Product).</small>
+            </div>
+        </div>
+
+        <hr>
         <h3 style="margin-top: 20px; margin-bottom: 10px;">Ingredients</h3>
         <p><small class="help-text">Enter up to 10 ingredients. Leave rows blank if not needed. Ingredient quantities should be positive numbers.</small></p>
         

@@ -502,162 +502,202 @@ def upload_excel_view():
 @app.route('/recipes/add', methods=['GET', 'POST'])
 def add_recipe_view():
     form_data_to_repopulate = {} # For GET or if POST fails and re-renders
+    all_db_products = manager.get_all_products(page=None, per_page=None) # For "Output Product" dropdown
+
     if request.method == 'POST':
         recipe_name = request.form.get('recipe_name', '').strip()
         description = request.form.get('description', '').strip()
+        output_product_id_str = request.form.get('output_product_id')
+        output_yield_str = request.form.get('output_yield')
         
-        # Process ingredients
         ingredients = []
-        form_errors = [] # Collect form validation errors before calling manager
-        for i in range(1, 11): # Max 10 ingredients from form (updated from 6 to 11 for range)
+        form_errors = []
+        for i in range(1, 11):
             ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
             ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
+            # notes are optional, not used in current RecipeManager.add_recipe for ingredient quantity_required
+            # ing_notes = request.form.get(f'ingredient_{i}_notes', '').strip()
 
-            if ing_name and ing_qty_str: # Process if both name and quantity are provided
+            if ing_name and ing_qty_str:
                 try:
-                    ing_qty = float(ing_qty_str)
-                    if ing_qty <= 0:
-                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number (greater than zero).")
+                    # The RecipeManager expects 'quantity_required' for the value,
+                    # but the form might use 'quantity' for simplicity.
+                    # Let's assume RecipeManager expects 'quantity' as string or 'quantity_required' as float.
+                    # Based on current RecipeManager, it expects 'quantity' as a string.
+                    # No, `add_recipe` in RecipeManager processes `quantity_required` from this form.
+                    # The form should submit `quantity_required` or the route should adapt.
+                    # The current `add_recipe_view` (before this change) uses `quantity_required`.
+                    # Let's stick to `quantity_required` for clarity with the manager.
+                    # The template might name it `ingredient_X_quantity` for user display.
+                    ing_qty_float = float(ing_qty_str)
+                    if ing_qty_float <= 0:
+                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number.")
                     else:
-                        ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty})
+                        # ingredients.append({'item_name': ing_name, 'quantity': ing_qty_str, 'notes': ing_notes})
+                        # Corrected to use 'quantity_required' as expected by manager logic in add_recipe
+                         ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty_float})
                 except ValueError:
                     form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'. Must be a valid number.")
-            elif ing_name and not ing_qty_str: # Name provided but not quantity
+            elif ing_name and not ing_qty_str:
                 form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
-            # If only quantity or neither is provided, it's skipped (considered an empty ingredient slot)
         
         if not recipe_name:
             form_errors.append("Recipe name is required.")
+
+        output_product_id = None
+        if output_product_id_str and output_product_id_str != "None" and output_product_id_str != "":
+            try:
+                output_product_id = int(output_product_id_str)
+            except ValueError:
+                form_errors.append("Invalid Output Product ID.")
         
-        # Optional: Enforce at least one ingredient if desired
-        # if not ingredients and any(request.form.get(f'ingredient_{i}_name') for i in range(1,6)):
-        #      form_errors.append("At least one valid ingredient (name and positive quantity) is required if ingredients are attempted.")
+        output_yield = None
+        if output_yield_str:
+            try:
+                output_yield = float(output_yield_str)
+                if output_yield <= 0 and output_product_id is not None: # Yield must be positive if an output product is set
+                     form_errors.append("Output Yield must be positive if an Output Product is selected.")
+                elif output_yield < 0 and output_product_id is None: # Allow zero yield if no product, but not negative
+                    form_errors.append("Output Yield cannot be negative.")
+            except ValueError:
+                form_errors.append("Invalid Output Yield. Must be a number.")
+
+        if output_product_id is not None and output_yield is None:
+            form_errors.append("Output Yield is required if an Output Product is selected.")
+
 
         if form_errors:
             for error in form_errors:
                 flash(error, 'error')
-            form_data_to_repopulate = request.form # Repopulate with all original attempt
-            return render_template('add_recipe.html', form_data=form_data_to_repopulate)
+            form_data_to_repopulate = request.form
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
 
-        # Data for RecipeManager (already validated for basic format by above logic)
         recipe_data = {
             "name": recipe_name,
             "description": description,
-            "ingredients": ingredients
+            "instructions": request.form.get('instructions', '').strip(), # Added instructions
+            "ingredients": ingredients, # This should be list of dicts with item_name, quantity_required
+            "output_product_id": output_product_id,
+            "output_yield": output_yield
         }
         
+        # recipe_mngr.add_recipe was updated to handle output_product_id and output_yield
         result = recipe_mngr.add_recipe(recipe_data)
         
         if result.get("success"):
             flash(result['message'], 'success')
-            return redirect(url_for('add_recipe_view')) # Redirect back to add form (or future list page)
+            return redirect(url_for('recipes_list_view'))
         else:
             flash(result['message'], 'error')
-            # Repopulate form with the data that was attempted
-            form_data_to_repopulate = {
-                'recipe_name': recipe_name,
-                'description': description
-            }
-            for i, ing in enumerate(ingredients, 1):
-                form_data_to_repopulate[f'ingredient_{i}_name'] = ing['item_name']
-                form_data_to_repopulate[f'ingredient_{i}_quantity'] = ing['quantity_required']
-            # Also add back any originally submitted (but potentially incomplete) ingredient fields
-            for i in range(1, 11): # Ensure all 10 potential fields are repopulated
-                if not form_data_to_repopulate.get(f'ingredient_{i}_name'):
-                     form_data_to_repopulate[f'ingredient_{i}_name'] = request.form.get(f'ingredient_{i}_name', '')
-                if not form_data_to_repopulate.get(f'ingredient_{i}_quantity'):
-                     form_data_to_repopulate[f'ingredient_{i}_quantity'] = request.form.get(f'ingredient_{i}_quantity', '')
-            
-            # When POST fails and re-renders, we also need the products list for the dropdowns
-            products = manager.get_all_products(page=None, per_page=None)
-            return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
+            form_data_to_repopulate = request.form
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
 
-    # This is for GET request
-    products = manager.get_all_products(page=None, per_page=None)
-    return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=products)
+    return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
 
 @app.route('/recipes/<int:recipe_id>/edit', methods=['GET', 'POST'])
 def edit_recipe_view(recipe_id):
-    # Ensure recipe_mngr.get_recipe_by_id is available (it was added in a previous step)
-    recipe = recipe_mngr.get_recipe_by_id(recipe_id)
+    recipe = recipe_mngr.get_recipe_by_id(recipe_id) # Should now include output_product_id and output_yield
 
     if not recipe:
         flash(f"Recipe with ID {recipe_id} not found.", 'error')
         return redirect(url_for('recipes_list_view'))
 
-    # Fetch all products for ingredient dropdowns
-    products = manager.get_all_products(page=None, per_page=None) # Assuming 'manager' is the InventoryManager instance
+    all_db_products = manager.get_all_products(page=None, per_page=None)
 
     if request.method == 'POST':
         recipe_name = request.form.get('recipe_name', '').strip()
         description = request.form.get('description', '').strip()
+        instructions = request.form.get('instructions', '').strip()
+        output_product_id_str = request.form.get('output_product_id')
+        output_yield_str = request.form.get('output_yield')
 
         ingredients = []
         form_errors = []
 
-        for i in range(1, 11): # Assuming max 10 ingredients, consistent with add_recipe_view
+        for i in range(1, 11):
             ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
             ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
+            # ing_notes = request.form.get(f'ingredient_{i}_notes', '').strip()
 
             if ing_name and ing_qty_str:
                 try:
-                    ing_qty = float(ing_qty_str)
-                    if ing_qty <= 0:
+                    ing_qty_float = float(ing_qty_str)
+                    if ing_qty_float <= 0:
                         form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number.")
                     else:
-                        ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty})
+                        # ingredients.append({'item_name': ing_name, 'quantity': ing_qty_str, 'notes': ing_notes})
+                        # Corrected to use 'quantity_required'
+                        ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty_float})
                 except ValueError:
                     form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'.")
             elif ing_name and not ing_qty_str:
                 form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
-            # Silently skip if neither name nor quantity is provided for a slot
 
         if not recipe_name:
             form_errors.append("Recipe name is required.")
 
+        output_product_id = None
+        if output_product_id_str and output_product_id_str != "None" and output_product_id_str != "":
+            try:
+                output_product_id = int(output_product_id_str)
+            except ValueError:
+                form_errors.append("Invalid Output Product ID.")
+
+        output_yield = None
+        if output_yield_str:
+            try:
+                output_yield = float(output_yield_str)
+                if output_yield <= 0 and output_product_id is not None:
+                     form_errors.append("Output Yield must be positive if an Output Product is selected.")
+                elif output_yield < 0 and output_product_id is None:
+                    form_errors.append("Output Yield cannot be negative.")
+            except ValueError:
+                form_errors.append("Invalid Output Yield. Must be a number.")
+
+        if output_product_id is not None and output_yield is None : # Check if yield is missing when product id is present
+             # Check if original recipe also had product_id but no yield, or if this is a new assignment
+            if not (recipe.get('output_product_id') == output_product_id and recipe.get('output_yield') is None):
+                 form_errors.append("Output Yield is required if an Output Product is selected.")
+
+
         if form_errors:
             for error in form_errors:
                 flash(error, 'error')
-            # Repopulate form with current (invalid) data
-            # The 'recipe' variable still holds the original recipe data for the GET part of the template,
-            # but for POST errors, we want to show what the user just submitted.
-            # We can pass request.form directly or construct a similar dict.
-            # Let's make it explicit, similar to add_recipe.
-            form_data_repopulate = {
-                'id': recipe_id, # Keep id for the form action URL
-                'name': recipe_name,
-                'description': description,
-                'ingredients': [] # This will be filled by the template from request.form
-            }
-            # The template 'edit_recipe.html' will need to be designed to handle this,
-            # potentially using form_data_repopulate for values if it exists, else recipe.
-            # For simplicity in the route, we can just pass request.form and let template decide.
-            return render_template('edit_recipe.html', recipe=recipe, products=products, form_data=request.form)
 
-        # If validation passes
+            form_data_repopulate = request.form.to_dict()
+            # Ensure the original recipe ID is part of the data for template if needed
+            form_data_repopulate['id'] = recipe_id
+            # Merge with original recipe for fields not directly in form or to show original if form field empty
+            # For example, the ingredients list in `recipe` is structured, request.form is flat.
+            # The template `edit_recipe.html` will need to intelligently use `form_data_repopulate` primarily,
+            # and fall back to `recipe` for things like existing ingredients if not resubmitted.
+            # This is tricky. A simple approach: template uses `form_data.get('field', recipe.field)`.
+            return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data=form_data_repopulate)
+
         updated_recipe_data = {
             "name": recipe_name,
             "description": description,
-            "ingredients": ingredients
+            "instructions": instructions,
+            "ingredients": ingredients, # This should be list of dicts with item_name, quantity_required
+            "output_product_id": output_product_id,
+            "output_yield": output_yield
         }
 
-        # Call recipe_mngr.update_recipe (which now takes recipe_id)
         result = recipe_mngr.update_recipe(recipe_id, updated_recipe_data)
 
         if result.get("success"):
             flash(result.get('message', "Recipe updated successfully!"), 'success')
-            # Redirect to recipe detail view using the *new* name
             return redirect(url_for('recipe_detail_view', recipe_name=updated_recipe_data['name']))
         else:
             flash(result.get('message', "Failed to update recipe."), 'error')
-            # Re-render with submitted data if update fails at manager level (e.g., name conflict)
-            return render_template('edit_recipe.html', recipe=recipe, products=products, form_data=request.form)
+            form_data_repopulate = request.form.to_dict()
+            form_data_repopulate['id'] = recipe_id
+            return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data=form_data_repopulate)
 
     # GET request:
-    # The 'recipe' dict fetched by get_recipe_by_id should be suitable for populating the form.
-    # It contains 'id', 'name', 'description', and 'ingredients' list.
-    # The template 'edit_recipe.html' will use this 'recipe' object.
-    return render_template('edit_recipe.html', recipe=recipe, products=products, form_data={})
+    # The 'recipe' dict (fetched earlier) is used to pre-fill the form.
+    # Ensure template can handle `output_product_id` and `output_yield` being None for older recipes.
+    return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data={})
 
 @app.route('/recipes')
 def recipes_list_view():
@@ -739,58 +779,98 @@ def make_recipe_view(recipe_name):
     # Actual implementation would consume ingredients from inventory.
     
     # Re-check if makeable before attempting to make, as inventory might have changed.
-    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
+    recipe = recipe_mngr.get_recipe_by_name(recipe_name) # This now includes output_product_id and output_yield
     if not recipe:
         flash(f"Recipe '{recipe_name}' not found.", 'error')
         return redirect(url_for('recipes_list_view'))
 
+    num_batches_str = request.form.get('num_batches', '1').strip()
+    try:
+        num_batches = int(num_batches_str)
+        if num_batches <= 0:
+            flash("Number of batches must be a positive integer.", 'error')
+            return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+    except ValueError:
+        flash("Invalid number of batches specified.", 'error')
+        return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+    # Check ingredient availability for the total quantity needed
     recipe_makeable_now = True
     if recipe.get('ingredients'):
         for ing_spec in recipe['ingredients']:
+            total_required_qty = float(ing_spec['quantity_required']) * num_batches
             available = manager.get_total_item_quantity(ing_spec['item_name'])
-            if available < float(ing_spec['quantity_required']):
+            if available < total_required_qty:
                 recipe_makeable_now = False
-                break
+                flash(f"Not enough '{ing_spec['item_name']}'. Needed: {total_required_qty}, Available: {available}.", 'warning')
+                # break # Optional: break on first insufficient ingredient or list all
     
     if not recipe_makeable_now:
-        flash(f"Cannot make '{recipe_name}'. Not enough ingredients currently available.", 'error')
+        flash(f"Cannot make {num_batches} batch(es) of '{recipe_name}'. Not enough ingredients.", 'error')
         return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
 
-    # Actual implementation to consume ingredients from inventory.
+    # Consume ingredients
     all_consumed_successfully = True
     consumption_error_messages = []
-
     if recipe.get('ingredients'):
         for ingredient in recipe['ingredients']:
             item_name = ingredient['item_name']
-            required_qty = float(ingredient['quantity_required'])
+            qty_per_batch = float(ingredient['quantity_required'])
+            total_qty_to_consume = qty_per_batch * num_batches
             
-            # consume_item returns a dict: {"success": bool, "message": str, "details": list}
-            consumption_result = manager.consume_item(item_name, required_qty)
+            consumption_result = manager.consume_item(item_name, total_qty_to_consume)
             
             if not consumption_result.get("success"):
                 all_consumed_successfully = False
-                # Accumulate error messages if specific items fail, though prior check should prevent this.
-                # This handles unexpected issues during consumption.
                 consumption_error_messages.append(
-                    f"Failed to consume {required_qty} of '{item_name}'. "
+                    f"Failed to consume {total_qty_to_consume} of '{item_name}'. "
                     f"Reason: {consumption_result.get('message', 'Unknown error.')}"
                 )
-                # If one ingredient fails, we might want to stop and not consume further,
-                # or attempt to consume all and report individual failures.
-                # For now, let's stop on first critical failure.
-                # A more advanced system might try to "roll back" previous consumptions if one fails mid-way.
                 break 
     
     if all_consumed_successfully and not consumption_error_messages:
-        flash(f"Recipe '{recipe['name']}' made successfully! Ingredients have been consumed.", 'success')
+        flash(f"{num_batches} batch(es) of '{recipe['name']}' made! Ingredients consumed.", 'success')
+
+        # Produce output item, if specified
+        output_product_id = recipe.get('output_product_id')
+        output_yield_per_batch = recipe.get('output_yield')
+
+        if output_product_id and output_yield_per_batch is not None: # Ensure yield is not None
+            try:
+                output_yield_per_batch_float = float(output_yield_per_batch)
+                if output_yield_per_batch_float > 0:
+                    total_output_yield = output_yield_per_batch_float * num_batches
+
+                    # Add to inventory. Use today's date as purchase_date for produced items.
+                    production_result = manager.add_inventory_stock(
+                        product_id=output_product_id,
+                        quantity_str=str(total_output_yield),
+                        purchase_date_str=date.today().isoformat()
+                    )
+                    if production_result.get("success"):
+                        output_product_details = manager.get_product(output_product_id)
+                        output_product_name = output_product_details.get('name', f"ID {output_product_id}") if output_product_details else f"ID {output_product_id}"
+                        flash(f"Produced {total_output_yield} of '{output_product_name}' and added to inventory.", 'success')
+                    else:
+                        flash(f"Error producing output for recipe: {production_result.get('message', 'Unknown error')}", 'error')
+                elif output_yield_per_batch_float == 0 : # Yield is zero, no production needed
+                    pass # Do nothing if yield is zero
+                else: # Negative yield, should be caught by validation ideally
+                    flash(f"Recipe has a non-positive output yield ({output_yield_per_batch_float}). No output produced.", 'warning')
+
+            except ValueError:
+                flash(f"Invalid output_yield format ('{output_yield_per_batch}') in recipe. Cannot produce output.", 'error')
+            except Exception as e: # Catch-all for other errors during production
+                flash(f"An unexpected error occurred during output production: {e}", 'error')
+
+        elif output_product_id and output_yield_per_batch is None:
+             flash(f"Recipe '{recipe['name']}' has an output product ID but missing output yield. No output produced.", 'warning')
+        # If no output_product_id, it's a recipe that doesn't produce a direct inventory item.
+
     else:
-        # If loop was broken due to consumption failure after availability check (should be rare)
         flash(f"Error making recipe '{recipe['name']}'. Some ingredients could not be consumed:", 'error')
         for err_msg in consumption_error_messages:
-            flash(err_msg, 'error')
-        # It's also possible recipe_makeable_now was false and we already flashed that.
-        # This block mainly handles errors *during* the consumption loop.
+            flash(err_msg, 'error_detail') # Use a more specific category for display
 
     return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
 
@@ -938,6 +1018,284 @@ def shopping_list_view():
                            items=shopping_list_items,
                            current_store_filter=store_filter,
                            current_search_term=search_term)
+
+# --- Garden & Harvest Routes ---
+@app.route('/garden', methods=['GET'])
+def garden_list_view():
+    # Basic implementation: Get all items, sort by plant_date by default
+    sort_by = request.args.get('sort_by', 'plant_date')
+    sort_order = request.args.get('sort_order', 'ASC').upper()
+    status_filter = request.args.get('status_filter', '').strip()
+
+    # Pagination
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 10)) # Default 10 items per page
+        if per_page < 1: per_page = 10
+    except ValueError:
+        per_page = 10
+
+    filters = {}
+    if status_filter:
+        # This filters by the *stored* status.
+        # For dynamic status filtering, logic would need to be in Python after fetching all items,
+        # or a more complex SQL query if dynamic status could be expressed in SQL.
+        filters['status'] = status_filter
+
+    # The get_all_production_items method should handle pagination and sorting.
+    # It also calculates dynamic status and yield.
+    # For now, total count for pagination is not implemented for production_items, so pass None for page/per_page
+    # to fetch all and then manually paginate if needed, or add count method to manager.
+    # For simplicity in this step, fetching all. Pagination can be added fully later.
+    all_items_raw = manager.get_all_production_items(
+        filters=filters if filters else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=None, # Fetch all for now
+        per_page=None # Fetch all for now
+    )
+
+    # Manual pagination for now
+    total_items = len(all_items_raw)
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    if page > total_pages and total_pages > 0: page = total_pages
+
+    start_index = (page - 1) * per_page
+    end_index = start_index + per_page
+    paginated_items = all_items_raw[start_index:end_index]
+
+    return render_template('garden_list.html',
+                           items=paginated_items,
+                           sort_by=sort_by,
+                           sort_order=sort_order,
+                           status_filter=status_filter,
+                           all_status_options=['Growing', 'Harvesting', 'Finished'], # For filter dropdown
+                           current_page=page,
+                           total_pages=total_pages,
+                           per_page=per_page)
+
+@app.route('/garden/add', methods=['GET', 'POST'])
+def add_production_item_view():
+    all_db_products = manager.get_all_products(page=None, per_page=None) # Get all products for dropdown
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        associated_product_id_str = request.form.get('associated_product_id')
+        plant_date_str = request.form.get('plant_date')
+        time_to_harvest_days_str = request.form.get('time_to_harvest_days')
+        expected_harvest_period_days_str = request.form.get('expected_harvest_period_days')
+        expected_yield_total_str = request.form.get('expected_yield_total')
+        status = request.form.get('status', 'Growing').strip()
+
+        errors = []
+        if not name: errors.append("Item name is required.")
+        if not plant_date_str: errors.append("Plant date is required.")
+        else:
+            try:
+                date.fromisoformat(plant_date_str)
+            except ValueError:
+                errors.append("Invalid plant date format. Use YYYY-MM-DD.")
+
+        associated_product_id = None
+        if associated_product_id_str and associated_product_id_str != "None" and associated_product_id_str != "": # Handle "None" string from dropdown
+            try:
+                associated_product_id = int(associated_product_id_str)
+            except ValueError:
+                errors.append("Invalid associated product ID.")
+
+        time_to_harvest_days = None
+        if time_to_harvest_days_str:
+            try:
+                time_to_harvest_days = int(time_to_harvest_days_str)
+                if time_to_harvest_days < 0: errors.append("Time to harvest must be non-negative.")
+            except ValueError:
+                errors.append("Time to harvest must be a whole number.")
+        else: errors.append("Time to harvest is required.")
+
+        expected_harvest_period_days = None
+        if expected_harvest_period_days_str:
+            try:
+                expected_harvest_period_days = int(expected_harvest_period_days_str)
+                if expected_harvest_period_days <= 0: errors.append("Expected harvest period must be positive.")
+            except ValueError:
+                errors.append("Expected harvest period must be a whole number.")
+        else: errors.append("Expected harvest period is required.")
+
+        expected_yield_total = None
+        if expected_yield_total_str:
+            try:
+                expected_yield_total = float(expected_yield_total_str)
+                if expected_yield_total < 0: errors.append("Expected yield must be non-negative.")
+            except ValueError:
+                errors.append("Expected yield must be a valid number.")
+        else: errors.append("Expected total yield is required.")
+
+        if status not in ['Growing', 'Harvesting', 'Finished']:
+            errors.append("Invalid status selected.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            return render_template('garden_edit.html', item=request.form, products=all_db_products, form_action_label='Add', current_page='garden_add')
+
+        result = manager.add_production_item(
+            name=name,
+            associated_product_id=associated_product_id, # This can be None
+            plant_date_str=plant_date_str,
+            time_to_harvest_days=time_to_harvest_days,
+            expected_harvest_period_days=expected_harvest_period_days,
+            expected_yield_total=expected_yield_total,
+            status=status
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('garden_list_view'))
+        else:
+            flash(result.get("message", "An error occurred adding the production item."), 'error')
+            return render_template('garden_edit.html', item=request.form, products=all_db_products, form_action_label='Add', current_page='garden_add')
+
+    return render_template('garden_edit.html', item={}, products=all_db_products, form_action_label='Add', current_page='garden_add')
+
+@app.route('/garden/<int:item_id>/edit', methods=['GET', 'POST'])
+def edit_production_item_view(item_id):
+    production_item = manager.get_production_item(item_id) # This should already return a dict
+    if not production_item:
+        flash(f"Production item with ID {item_id} not found.", 'error')
+        return redirect(url_for('garden_list_view'))
+
+    all_db_products = manager.get_all_products(page=None, per_page=None)
+
+    if request.method == 'POST':
+        # Create a mutable copy of the form data for modification
+        data_to_update = request.form.to_dict()
+
+        errors = []
+        if not data_to_update.get('name', '').strip(): errors.append("Item name is required.")
+
+        plant_date_str = data_to_update.get('plant_date')
+        if not plant_date_str: errors.append("Plant date is required.")
+        else:
+            try:
+                date.fromisoformat(plant_date_str)
+            except ValueError:
+                errors.append("Invalid plant date format. Use YYYY-MM-DD.")
+
+        assoc_prod_id_str = data_to_update.get('associated_product_id')
+        if assoc_prod_id_str and assoc_prod_id_str != "None" and assoc_prod_id_str != "":
+            try:
+                data_to_update['associated_product_id'] = int(assoc_prod_id_str)
+            except ValueError:
+                errors.append("Invalid associated product ID.")
+        else:
+            data_to_update['associated_product_id'] = None # Ensure it's None if empty or "None"
+
+        time_harvest_str = data_to_update.get('time_to_harvest_days')
+        if time_harvest_str:
+            try:
+                data_to_update['time_to_harvest_days'] = int(time_harvest_str)
+                if data_to_update['time_to_harvest_days'] < 0: errors.append("Time to harvest must be non-negative.")
+            except ValueError:
+                errors.append("Time to harvest must be a whole number.")
+        else: errors.append("Time to harvest is required.")
+
+        exp_harvest_period_str = data_to_update.get('expected_harvest_period_days')
+        if exp_harvest_period_str:
+            try:
+                data_to_update['expected_harvest_period_days'] = int(exp_harvest_period_str)
+                if data_to_update['expected_harvest_period_days'] <= 0: errors.append("Expected harvest period must be positive.")
+            except ValueError:
+                errors.append("Expected harvest period must be a whole number.")
+        else: errors.append("Expected harvest period is required.")
+
+        exp_yield_total_str = data_to_update.get('expected_yield_total')
+        if exp_yield_total_str:
+            try:
+                data_to_update['expected_yield_total'] = float(exp_yield_total_str)
+                if data_to_update['expected_yield_total'] < 0: errors.append("Expected yield must be non-negative.")
+            except ValueError:
+                errors.append("Expected yield must be a valid number.")
+        else: errors.append("Expected total yield is required.")
+
+        status_str = data_to_update.get('status', '').strip()
+        if status_str not in ['Growing', 'Harvesting', 'Finished']:
+            errors.append("Invalid status selected.")
+            data_to_update['status'] = production_item['status'] # Fallback
+        else:
+            data_to_update['status'] = status_str
+
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Repopulate with submitted data, ensuring original item ID is preserved.
+            # Merge `production_item` (original) with `data_to_update` (submitted form data).
+            # Submitted form data should take precedence for fields that were edited.
+            form_data_repopulate = {**production_item, **data_to_update}
+            return render_template('garden_edit.html', item=form_data_repopulate, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
+
+        # Remove fields from data_to_update that are not part of the production_items table schema
+        # or are not meant to be updated directly this way (e.g., calculated fields if they were in form)
+        # For now, assuming all keys in data_to_update (after cleaning) are valid for update_production_item
+
+        result = manager.update_production_item(item_id, data_to_update)
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('garden_list_view'))
+        else:
+            flash(result.get("message", "An error occurred updating the production item."), 'error')
+            form_data_repopulate = {**production_item, **data_to_update} # Repopulate with submitted data
+            return render_template('garden_edit.html', item=form_data_repopulate, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
+
+    # GET request: Convert production_item (which is a dict) to a compatible structure if needed,
+    # or ensure template handles dict directly.
+    return render_template('garden_edit.html', item=production_item, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
+
+@app.route('/garden/<int:item_id>/harvest', methods=['POST'])
+def record_harvest_view(item_id):
+    actual_harvest_amount_str = request.form.get('actual_harvest_amount')
+    harvest_date_str = request.form.get('harvest_date', date.today().isoformat()) # Default to today
+
+    errors = []
+    actual_harvest_amount = None
+    if actual_harvest_amount_str:
+        try:
+            actual_harvest_amount = float(actual_harvest_amount_str)
+            if actual_harvest_amount <= 0:
+                errors.append("Actual harvest amount must be positive.")
+        except ValueError:
+            errors.append("Actual harvest amount must be a valid number.")
+    else:
+        errors.append("Actual harvest amount is required.")
+
+    if not harvest_date_str:
+        errors.append("Harvest date is required.")
+    else:
+        try:
+            date.fromisoformat(harvest_date_str)
+        except ValueError:
+            errors.append("Invalid harvest date format. Use YYYY-MM-DD.")
+
+    if errors:
+        for error in errors:
+            flash(error, 'error')
+    else:
+        result = manager.record_harvest(
+            production_item_id=item_id,
+            actual_harvest_amount=actual_harvest_amount,
+            harvest_date_str=harvest_date_str
+        )
+        if result.get("success"):
+            flash(result.get("message", "Harvest recorded successfully and stock added to inventory."), 'success')
+        else:
+            flash(result.get("message", "Failed to record harvest."), 'error')
+
+    return redirect(url_for('garden_list_view'))
 
 # --- Product Management Routes ---
 @app.route('/products', methods=['GET'])
