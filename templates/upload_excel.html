@@ -7,6 +7,84 @@
 {% endblock %}
 
 {% block content %}
+    {# Display general flash messages (including initial upload errors/successes) #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flashes">
+        {% for category, message in messages %}
+          {% if category != 'warning_detail' and category != 'error_detail' %} {# Avoid double printing details if summary exists #}
+            <li class="{{ category }}">{{ message }}</li>
+          {% endif %}
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    {# Display specific upload warnings, if any, from initial processing or after confirmation attempt #}
+    {% if upload_warnings %}
+    <div class="flash-messages warning-block">
+        <h4>Upload Process Warnings:</h4>
+        <ul class="flashes">
+            {% for warning in upload_warnings %}
+                <li class="warning_detail">{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# Section for items pending confirmation #}
+    {% if items_pending_confirmation and items_pending_confirmation|length > 0 %}
+    <div class="confirmation-section">
+        <h2>Items Requiring Confirmation</h2>
+        <p>The following items involve new categories or subcategories. Please review and confirm to proceed.</p>
+        <form method="POST" action="{{ url_for('confirm_excel_uploads_view') }}">
+            <table class="styled-table full-width">
+                <thead>
+                    <tr>
+                        <th>Row #</th>
+                        <th>Product Name</th>
+                        <th>Action Required</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items_pending_confirmation %}
+                    <tr>
+                        <td>{{ item.row_idx }}</td>
+                        <td>{{ item.product_data.name }}</td>
+                        <td>
+                            {% if item.action_required == "confirm_new_category" %}
+                                Create New Category
+                            {% elif item.action_required == "confirm_new_subcategory" %}
+                                Create New Subcategory
+                            {% else %}
+                                {{ item.action_required | replace("_", " ") | title }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if item.action_required == "confirm_new_category" %}
+                                New Category: <strong>{{ item.confirmation_details.new_category_name }}</strong>
+                                {% if item.confirmation_details.new_subcategory_name %}
+                                    <br>With New Subcategory: <strong>{{ item.confirmation_details.new_subcategory_name }}</strong>
+                                {% endif %}
+                            {% elif item.action_required == "confirm_new_subcategory" %}
+                                Under Category: <strong>{{ item.confirmation_details.category_name }}</strong> (ID: {{ item.confirmation_details.category_id }})
+                                <br>New Subcategory: <strong>{{ item.confirmation_details.new_subcategory_name }}</strong>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <button type="submit" class="button button-success" style="margin-top:15px;"><i class="fas fa-check-circle"></i> Confirm All & Process Uploads</button>
+        </form>
+        <p style="margin-top: 10px;">
+            <a href="{{ url_for('upload_excel_view') }}" class="button button-danger"><i class="fas fa-times-circle"></i> Cancel and Start Over</a>
+            (This will clear the pending items)
+        </p>
+    </div>
+    {% else %}
+    {# Display the standard upload form if no items are pending confirmation #}
     <div class="excel-instructions">
         <h3>Instructions for Excel File Format:</h3>
         <p>Please ensure your Excel file (<code>.xlsx</code> format) has the following columns in the first sheet:</p>
@@ -15,7 +93,7 @@
             <li><strong>Quantity</strong>: (Required) The quantity of the item (Text or Number, e.g., "10 bags", "2", "1.5 liters").</li>
             <li><strong>Purchase Date</strong>: (Required) The date of purchase in YYYY-MM-DD format (e.g., 2023-10-28).</li>
             <li><strong>Expiry Days</strong>: (Required) The number of days from the purchase date until the item expires (Number, e.g., 7, 14, 30).</li>
-            <li><strong>Category</strong>: (Optional) The category of the item (Text, e.g., "Dairy", "Produce").</li>
+            <li><strong>Category</strong>: (Required for new products) The category of the item (Text, e.g., "Dairy", "Produce").</li>
             <li><strong>Subcategory</strong>: (Optional) The subcategory of the item (Text, e.g., "Milk", "Fruit").</li>
             <li><strong>Par Level</strong>: (Optional) The minimum desired quantity in stock (Number, e.g., 2, 0.5). Defaults to 0 if blank/missing. Must be non-negative.</li>
             <li><strong>Max Holding Amount</strong>: (Optional) The maximum preferred quantity to stock (Number, e.g., 4, 1). Defaults to 0 if blank/missing. Must be non-negative.</li>
@@ -23,49 +101,6 @@
             <li><strong>Unit of Measure</strong>: (Conditionally Required) The unit of measure for the item (Text, e.g., "kg", "lbs", "pcs", "liters"). This is required if the item is being added for the first time (i.e., does not exist as a product yet). If the product already exists, this column is optional and will be ignored.</li>
         </ul>
         <p>The first row of the sheet should be the header row. The order of columns does not strictly matter as long as the names are recognized (case-insensitive for "Name", "Quantity", "Purchase Date", "Expiry Days", "Category", "Subcategory", "Par Level", "Max Holding Amount", "Purchase Location", "Unit of Measure").</p>
-        <p>Example:</p>
-        <table class="example-table">
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Quantity</th>
-                    <th>Purchase Date</th>
-                    <th>Expiry Days</th>
-                    <th>Category</th>
-                    <th>Subcategory</th>
-                    <th>Par Level</th>
-                    <th>Max Holding Amount</th>
-                    <th>Purchase Location</th>
-                    <th>Unit of Measure</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>Apples</td>
-                    <td>10 bags</td>
-                    <td>2023-10-01</td>
-                    <td>14</td>
-                    <td>Produce</td>
-                    <td>Fruit</td>
-                    <td>5</td>
-                    <td>20</td>
-                    <td>Costco</td>
-                    <td>bags</td>
-                </tr>
-                <tr>
-                    <td>Milk</td>
-                    <td>2 gallon</td>
-                    <td>2023-10-15</td>
-                    <td>7</td>
-                    <td>Dairy</td>
-                    <td></td>
-                    <td>1</td>
-                    <td>2</td>
-                    <td>Sobeys</td>
-                    <td>gallon</td>
-                </tr>
-            </tbody>
-        </table>
     </div>
 
     <form method="POST" action="{{ url_for('upload_excel_view') }}" enctype="multipart/form-data" style="margin-top: 20px;">
@@ -75,6 +110,7 @@
         </div>
         <button type="submit" class="button"><i class="fas fa-upload"></i> Upload and Process File</button>
     </form>
+    {% endif %}
 
     <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
 {% endblock %}

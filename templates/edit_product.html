@@ -3,20 +3,44 @@
 {% block title %}Edit Product: {{ product.name }}{% endblock %}
 
 {% block content %}
-<h1>Edit Product: {{ product.name }}</h1>
+<h1>Edit Product: {{ product.name }} (ID: {{ product.id }})</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class=flashes>
+    {% for category, message in messages %}
+      <li class="{{ category }}">{{ message }}</li>
+    {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+
 <form method="POST" action="{{ url_for('edit_product_view', product_id=product.id) }}">
     <div>
         <label for="name">Product Name:</label>
         <input type="text" id="name" name="name" value="{{ product.name }}" required>
     </div>
+
     <div>
-        <label for="category">Category:</label>
-        <input type="text" id="category" name="category" value="{{ product.category if product.category is not none else '' }}">
+        <label for="category_id">Category:</label>
+        <select id="category_id" name="category_id" required>
+            <option value="">-- Select Category --</option>
+            {% for category_item in categories_data %}
+                <option value="{{ category_item.id }}" {% if product.category_id|int == category_item.id %}selected{% endif %}>
+                    {{ category_item.name }}
+                </option>
+            {% endfor %}
+        </select>
     </div>
+
     <div>
-        <label for="subcategory">Subcategory:</label>
-        <input type="text" id="subcategory" name="subcategory" value="{{ product.subcategory if product.subcategory is not none else '' }}">
+        <label for="subcategory_id">Subcategory:</label>
+        <select id="subcategory_id" name="subcategory_id">
+            <option value="">-- Optional --</option>
+            {# Subcategory options will be populated by JavaScript #}
+        </select>
     </div>
+
     <div>
         <label for="unit_of_measure">Unit of Measure:</label>
         <input type="text" id="unit_of_measure" name="unit_of_measure" value="{{ product.unit_of_measure }}" required>
@@ -42,4 +66,59 @@
     </div>
 </form>
 <p><a href="{{ url_for('list_products_view') }}" class="nav-link-button"><i class="fas fa-times-circle"></i> Cancel and return to Product List</a></p>
+
+<script>
+    // Embed categories data from Flask into JavaScript
+    const allCategoriesData = {{ categories_data|tojson|safe }};
+    // Embed current product's category and subcategory IDs for pre-selection
+    const currentProductCategoryId = "{{ product.category_id|default('', true) }}";
+    const currentProductSubcategoryId = "{{ product.subcategory_id|default('', true) }}";
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const categorySelect = document.getElementById('category_id');
+        const subcategorySelect = document.getElementById('subcategory_id');
+
+        function populateSubcategories(selectedCatId) {
+            // Clear existing subcategory options
+            subcategorySelect.innerHTML = '<option value="">-- Optional --</option>'; // Keep the optional default
+
+            if (selectedCatId && allCategoriesData) {
+                const selectedCategoryData = allCategoriesData.find(category => category.id.toString() === selectedCatId);
+                if (selectedCategoryData && selectedCategoryData.subcategories) {
+                    selectedCategoryData.subcategories.forEach(subcategory => {
+                        const option = document.createElement('option');
+                        option.value = subcategory.id;
+                        option.textContent = subcategory.name;
+                        // Pre-select if it matches the product's current subcategory
+                        if (currentProductSubcategoryId && subcategory.id.toString() === currentProductSubcategoryId && selectedCatId === currentProductCategoryId) {
+                            option.selected = true;
+                        }
+                        subcategorySelect.appendChild(option);
+                    });
+                }
+            }
+        }
+
+        // Event listener for category change
+        categorySelect.addEventListener('change', function () {
+            // When category changes, we are no longer trying to pre-select the product's original subcategory
+            // unless the selected category is the product's original category.
+            // For a manual change, the user is expected to pick a new subcategory.
+            // However, for the initial load, we need to respect currentProductSubcategoryId.
+            // The current logic in populateSubcategories already handles pre-selection based on currentProductSubcategoryId
+            // if the selectedCatId matches currentProductCategoryId.
+            populateSubcategories(this.value);
+        });
+
+        // Initial population of subcategories if a category is already selected
+        // This ensures that when the page loads with an existing product,
+        // its subcategories are shown and its current subcategory is selected.
+        if (currentProductCategoryId) {
+            populateSubcategories(currentProductCategoryId);
+        } else if (categorySelect.value) {
+            // Fallback if currentProductCategoryId is not set but categorySelect has a value (e.g. from form_data on error)
+             populateSubcategories(categorySelect.value);
+        }
+    });
+</script>
 {% endblock %}

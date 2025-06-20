@@ -40,14 +40,16 @@ class InventoryManager:
                     CREATE TABLE IF NOT EXISTS products (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL UNIQUE,
-                        category TEXT,
-                        subcategory TEXT,
                         unit_of_measure TEXT NOT NULL,
                         default_expiry_days INTEGER NOT NULL,
                         par_level REAL DEFAULT 0,
                         max_holding_amount REAL DEFAULT 0,
-    purchase_location TEXT,
-    consumption_override_rate REAL DEFAULT NULL
+                        purchase_location TEXT,
+                        consumption_override_rate REAL DEFAULT NULL,
+                        category_id INTEGER,
+                        subcategory_id INTEGER,
+                        FOREIGN KEY (category_id) REFERENCES categories (id),
+                        FOREIGN KEY (subcategory_id) REFERENCES subcategories (id)
                     )
                 ''')
 
@@ -94,10 +96,291 @@ class InventoryManager:
                         FOREIGN KEY (associated_product_id) REFERENCES products (id)
                     )
                 ''')
+
+                # Categories Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE
+                    )
+                ''')
+
+                # Subcategories Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS subcategories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        category_id INTEGER NOT NULL,
+                        FOREIGN KEY (category_id) REFERENCES categories (id),
+                        UNIQUE (name, category_id)
+                    )
+                ''')
                 conn.commit()
         except sqlite3.Error as e:
             raise sqlite3.Error(f"Database initialization error: {e}")
             # Depending on app design, might want to raise this or handle more gracefully
+
+    def migrate_text_categories_to_ids(self):
+        """
+        Simulates migration of products with old text-based category/subcategory
+        to new ID-based category_id/subcategory_id.
+        This method is intended for demonstration and setup.
+        """
+        print("Starting migration of text categories to IDs...")
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+
+                # --- a. Simulate Pre-existing Schema and Data ---
+                try:
+                    # Add old columns if they don't exist (for simulation)
+                    # Note: In a real migration, these columns would already exist.
+                    # This is to make the script runnable for demonstration even if DB is new.
+                    cursor.execute("SELECT old_category_text FROM products LIMIT 1")
+                except sqlite3.OperationalError: # Column doesn't exist
+                    print("Simulating old schema: Adding old_category_text and old_subcategory_text columns...")
+                    conn.executescript('''
+                        ALTER TABLE products ADD COLUMN old_category_text TEXT;
+                        ALTER TABLE products ADD COLUMN old_subcategory_text TEXT;
+                    ''')
+                    # Insert sample data only if we just added the columns (i.e., fresh simulation)
+                    print("Inserting sample products with text categories for migration...")
+                    sample_products = [
+                        ("Apple", "pcs", 14, "Produce", "Fruit"),
+                        ("Milk", "liter", 7, "Dairy", None),
+                        ("Carrot", "kg", 21, "Produce", "Vegetable"),
+                        ("Yogurt", "pcs", 10, "Dairy", "Cultured"),
+                        ("Orange Juice", "liter", 7, "Beverages", None),
+                        ("Banana", "pcs", 5, "Produce", "Fruit") # Another Produce/Fruit
+                    ]
+                    for p_name, uom, exp_days, cat_text, subcat_text in sample_products:
+                        # Check if product already exists by name to avoid IntegrityError during simulation
+                        cursor.execute("SELECT id FROM products WHERE name = ?", (p_name,))
+                        if not cursor.fetchone():
+                            cursor.execute("""
+                                INSERT INTO products (name, unit_of_measure, default_expiry_days, old_category_text, old_subcategory_text, category_id, subcategory_id)
+                                VALUES (?, ?, ?, ?, ?, NULL, NULL)
+                            """, (p_name, uom, exp_days, cat_text, subcat_text))
+                        else:
+                            # If product exists, update its old text fields for migration simulation
+                            cursor.execute("""
+                                UPDATE products SET old_category_text = ?, old_subcategory_text = ?
+                                WHERE name = ? AND category_id IS NULL
+                            """, (cat_text, subcat_text, p_name))
+                    conn.commit()
+                    print("Sample data inserted/updated for old text categories.")
+
+                # --- b. Extract Distinct Categories and Populate categories Table ---
+                print("Populating 'categories' table from old_category_text...")
+                cursor.execute("SELECT DISTINCT old_category_text FROM products WHERE old_category_text IS NOT NULL")
+                distinct_categories = [row['old_category_text'] for row in cursor.fetchall()]
+
+                for cat_name in distinct_categories:
+                    add_cat_result = self.add_category(cat_name) # Uses existing method, handles duplicates
+                    if add_cat_result['success']:
+                        print(f"Category '{cat_name}' (ID: {add_cat_result.get('category_id')}) processed/ensured in categories table.")
+                    elif "already exists" in add_cat_result.get('message',''):
+                         print(f"Category '{cat_name}' already exists, skipping addition.")
+                    else:
+                        print(f"Warning: Could not add category '{cat_name}': {add_cat_result.get('message')}")
+                conn.commit()
+
+                # --- c. Extract Distinct Subcategories and Populate subcategories Table ---
+                print("Populating 'subcategories' table...")
+                cursor.execute("""
+                    SELECT DISTINCT old_category_text, old_subcategory_text
+                    FROM products
+                    WHERE old_category_text IS NOT NULL AND old_subcategory_text IS NOT NULL
+                """)
+                distinct_subcategories = cursor.fetchall()
+
+                for row in distinct_subcategories:
+                    old_cat_text = row['old_category_text']
+                    old_subcat_text = row['old_subcategory_text']
+
+                    category_obj = self.get_category_by_name(old_cat_text)
+                    if category_obj:
+                        cat_id = category_obj['id']
+                        add_subcat_result = self.add_subcategory(old_subcat_text, cat_id) # Handles duplicates
+                        if add_subcat_result['success']:
+                            print(f"Subcategory '{old_subcat_text}' (ID: {add_subcat_result.get('subcategory_id')}) under Category '{old_cat_text}' processed.")
+                        elif "already exists" in add_subcat_result.get('message',''):
+                            print(f"Subcategory '{old_subcat_text}' under '{old_cat_text}' already exists.")
+                        else:
+                             print(f"Warning: Could not add subcategory '{old_subcat_text}' for category '{old_cat_text}': {add_subcat_result.get('message')}")
+                    else:
+                        print(f"Warning: Category '{old_cat_text}' not found for subcategory '{old_subcat_text}'. Skipping subcategory.")
+                conn.commit()
+
+                # --- d. Update products Table with category_id and subcategory_id ---
+                print("Updating 'products' table with category_id and subcategory_id...")
+                cursor.execute("SELECT id, old_category_text, old_subcategory_text FROM products WHERE category_id IS NULL")
+                products_to_update = cursor.fetchall()
+
+                for product_row in products_to_update:
+                    prod_id = product_row['id']
+                    cat_id_to_set = None
+                    sub_cat_id_to_set = None
+
+                    if product_row['old_category_text']:
+                        category_data = self.get_category_by_name(product_row['old_category_text'])
+                        if category_data:
+                            cat_id_to_set = category_data['id']
+                            if product_row['old_subcategory_text']:
+                                subcategory_data = self.get_subcategory_by_name_and_category_id(product_row['old_subcategory_text'], cat_id_to_set)
+                                if subcategory_data:
+                                    sub_cat_id_to_set = subcategory_data['id']
+                                else:
+                                    print(f"Warning: Subcategory '{product_row['old_subcategory_text']}' not found in DB for product ID {prod_id}. Subcategory ID will be NULL.")
+                        else:
+                            print(f"Warning: Category '{product_row['old_category_text']}' not found in DB for product ID {prod_id}. Category ID will be NULL.")
+
+                    if cat_id_to_set is not None:
+                        cursor.execute("""
+                            UPDATE products SET category_id = ?, subcategory_id = ?
+                            WHERE id = ?
+                        """, (cat_id_to_set, sub_cat_id_to_set, prod_id))
+                        print(f"Product ID {prod_id} updated with CategoryID: {cat_id_to_set}, SubcategoryID: {sub_cat_id_to_set}")
+                conn.commit()
+
+                # --- e. Simulate Dropping Old Columns ---
+                # In a real scenario, backup before dropping.
+                # SQLite's DROP COLUMN is only supported in version 3.35.0+
+                # This might fail in older versions.
+                print("Attempting to drop old text category columns (simulation)...")
+                try:
+                    conn.executescript('''
+                        ALTER TABLE products DROP COLUMN old_category_text;
+                        ALTER TABLE products DROP COLUMN old_subcategory_text;
+                    ''')
+                    print("Successfully dropped old_category_text and old_subcategory_text columns.")
+                except sqlite3.OperationalError as e_drop:
+                    print(f"Could not drop old columns (this is expected if SQLite version < 3.35.0 or columns already dropped): {e_drop}")
+
+                conn.commit()
+                return {"success": True, "message": "Migration of text categories to IDs completed."}
+
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Migration failed: {e}"}
+
+
+    # --- Category and Subcategory Management Methods ---
+    def add_category(self, name):
+        """Adds a new category to the categories table."""
+        if not name or not isinstance(name, str) or not name.strip():
+            return {"success": False, "message": "Category name must be a non-empty string."}
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO categories (name) VALUES (?)", (name.strip(),))
+                conn.commit()
+                category_id = cursor.lastrowid
+                return {"success": True, "message": f"Category '{name.strip()}' added successfully.", "category_id": category_id}
+        except sqlite3.IntegrityError:
+            return {"success": False, "message": f"Category name '{name.strip()}' already exists."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error adding category: {e}"}
+
+    def add_subcategory(self, name, category_id):
+        """Adds a new subcategory to the subcategories table."""
+        if not name or not isinstance(name, str) or not name.strip():
+            return {"success": False, "message": "Subcategory name must be a non-empty string."}
+        if not isinstance(category_id, int):
+             return {"success": False, "message": "Category ID must be an integer."}
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                # Check if category_id exists
+                cursor.execute("SELECT id FROM categories WHERE id = ?", (category_id,))
+                if not cursor.fetchone():
+                    return {"success": False, "message": f"Parent category with ID {category_id} not found."}
+
+                cursor.execute("INSERT INTO subcategories (name, category_id) VALUES (?, ?)", (name.strip(), category_id))
+                conn.commit()
+                subcategory_id = cursor.lastrowid
+                return {"success": True, "message": f"Subcategory '{name.strip()}' added successfully under category ID {category_id}.", "subcategory_id": subcategory_id}
+        except sqlite3.IntegrityError:
+            # This can be due to UNIQUE constraint on (name, category_id) or FOREIGN KEY constraint (though checked above)
+            return {"success": False, "message": f"Subcategory '{name.strip()}' already exists for category ID {category_id}, or foreign key constraint failed."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error adding subcategory: {e}"}
+
+    def get_all_categories_with_subcategories(self):
+        """
+        Retrieves all categories and their subcategories, ordered by name.
+        """
+        categories_list = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, name FROM categories ORDER BY name ASC")
+                categories_rows = cursor.fetchall()
+
+                for cat_row in categories_rows:
+                    category_dict = dict(cat_row)
+                    category_dict['subcategories'] = []
+
+                    cursor.execute("""
+                        SELECT id, name, category_id
+                        FROM subcategories
+                        WHERE category_id = ?
+                        ORDER BY name ASC
+                    """, (cat_row['id'],))
+                    subcategories_rows = cursor.fetchall()
+                    for sub_row in subcategories_rows:
+                        category_dict['subcategories'].append(dict(sub_row))
+                    categories_list.append(category_dict)
+            return categories_list
+        except sqlite3.Error as e:
+            print(f"Database error retrieving categories with subcategories: {e}")
+            return [] # Return empty list on error
+
+    def get_category_by_name(self, name):
+        """Retrieves a category by its name (case-insensitive)."""
+        if not name or not isinstance(name, str) or not name.strip():
+            return None
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, name FROM categories WHERE LOWER(name) = LOWER(?)", (name.strip(),))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Database error getting category by name '{name}': {e}")
+            return None
+
+    def get_subcategory_by_name_and_category_id(self, subcategory_name, category_id):
+        """Retrieves a subcategory by its name and parent category_id (case-insensitive name)."""
+        if not subcategory_name or not isinstance(subcategory_name, str) or not subcategory_name.strip() or not isinstance(category_id, int):
+            return None
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, name, category_id
+                    FROM subcategories
+                    WHERE LOWER(name) = LOWER(?) AND category_id = ?
+                """, (subcategory_name.strip(), category_id))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Database error getting subcategory by name '{subcategory_name}' and category_id {category_id}: {e}")
+            return None
+
+    def get_category_name_by_id(self, category_id):
+        """Retrieves a category name by its ID."""
+        if not isinstance(category_id, int):
+            return None
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM categories WHERE id = ?", (category_id,))
+                row = cursor.fetchone()
+                return row['name'] if row else None
+        except sqlite3.Error as e:
+            print(f"Database error getting category name by ID {category_id}: {e}")
+            return None
 
     # --- Production Item (Garden & Harvest) Methods ---
     def add_production_item(self, name, associated_product_id, plant_date_str,
@@ -321,21 +604,26 @@ class InventoryManager:
         return stock_result
 
     # --- Product Management Methods ---
-    def create_product(self, name, category, subcategory, unit_of_measure, default_expiry_days,
+    def create_product(self, name, category_id, subcategory_id, unit_of_measure, default_expiry_days,
                        par_level=0, max_holding_amount=0, purchase_location=None):
         """Inserts a new product into the products table."""
-        if not all([name, unit_of_measure, default_expiry_days is not None]): # category, subcategory can be None
-            return {"success": False, "message": "Missing required product fields (name, unit_of_measure, default_expiry_days)."}
+        # category_id is treated as required for now. subcategory_id is optional.
+        if not all([name, unit_of_measure, default_expiry_days is not None, category_id is not None]):
+            return {"success": False, "message": "Missing required product fields (name, category_id, unit_of_measure, default_expiry_days)."}
+        if category_id is not None and not isinstance(category_id, int):
+            return {"success": False, "message": "Category ID must be an integer."}
+        if subcategory_id is not None and not isinstance(subcategory_id, int):
+            return {"success": False, "message": "Subcategory ID must be an integer if provided."}
 
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO products
-                    (name, category, subcategory, unit_of_measure, default_expiry_days,
+                    (name, category_id, subcategory_id, unit_of_measure, default_expiry_days,
                      par_level, max_holding_amount, purchase_location)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, category, subcategory, unit_of_measure, default_expiry_days,
+                ''', (name, category_id, subcategory_id, unit_of_measure, default_expiry_days,
                       par_level, max_holding_amount, purchase_location))
                 conn.commit()
                 product_id = cursor.lastrowid
@@ -346,11 +634,22 @@ class InventoryManager:
             return {"success": False, "message": f"Database error creating product: {e}"}
 
     def get_product(self, product_id):
-        """Retrieves a product by its ID."""
+        """Retrieves a product by its ID, including category and subcategory names."""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+                cursor.execute("""
+                    SELECT
+                        p.id, p.name, p.unit_of_measure, p.default_expiry_days,
+                        p.par_level, p.max_holding_amount, p.purchase_location,
+                        p.consumption_override_rate, p.category_id, p.subcategory_id,
+                        c.name AS category_name,
+                        s.name AS subcategory_name
+                    FROM products p
+                    LEFT JOIN categories c ON p.category_id = c.id
+                    LEFT JOIN subcategories s ON p.subcategory_id = s.id
+                    WHERE p.id = ?
+                """, (product_id,))
                 row = cursor.fetchone()
                 return dict(row) if row else None
         except sqlite3.Error as e:
@@ -585,18 +884,28 @@ class InventoryManager:
         params = []
 
         # Base query
-        query = "SELECT * FROM products"
+        query = """
+            SELECT
+                p.id, p.name, p.unit_of_measure, p.default_expiry_days,
+                p.par_level, p.max_holding_amount, p.purchase_location,
+                p.consumption_override_rate, p.category_id, p.subcategory_id,
+                c.name AS category_name,
+                s.name AS subcategory_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories s ON p.subcategory_id = s.id
+        """
 
         # Filtering
         where_clauses = []
         if search_term:
-            where_clauses.append("LOWER(name) LIKE ?")
+            where_clauses.append("LOWER(p.name) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category:
-            where_clauses.append("LOWER(category) = ?")
+        if category: # This now filters by category NAME from the joined 'categories' table
+            where_clauses.append("LOWER(c.name) = ?")
             params.append(category.lower())
         if purchase_location:
-            where_clauses.append("LOWER(purchase_location) = ?")
+            where_clauses.append("LOWER(p.purchase_location) = ?")
             params.append(purchase_location.lower())
 
         if where_clauses:
@@ -604,18 +913,20 @@ class InventoryManager:
 
         # Sorting
         valid_sort_columns = {
-            'name': 'name',
-            'category': 'category',
-            'subcategory': 'subcategory',
-            'purchase_location': 'purchase_location'
+            'name': 'p.name',
+            'category': 'c.name',
+            'subcategory': 's.name',
+            'purchase_location': 'p.purchase_location'
+            # Add other p.columns if needed for sorting, e.g. p.default_expiry_days
         }
-        sort_column = valid_sort_columns.get(sort_by.lower(), 'name') # Default to 'name' if invalid
+        # Default to 'p.name' if sort_by is invalid or not in valid_sort_columns
+        sort_column = valid_sort_columns.get(sort_by.lower(), 'p.name')
 
         sort_order_upper = sort_order.upper()
         if sort_order_upper not in ['ASC', 'DESC']:
             sort_order_upper = 'ASC' # Default to 'ASC'
 
-        query += f" ORDER BY {sort_column} {sort_order_upper}"
+        query += f" ORDER BY {sort_column} {sort_order_upper}, p.id {sort_order_upper}" # Added p.id for stable sort
 
         # Pagination
         # If page or per_page is None, or if per_page is not a positive integer,
@@ -644,17 +955,21 @@ class InventoryManager:
         Gets the total number of products, filtered by search_term, category, and purchase_location.
         """
         params = []
-        query = "SELECT COUNT(*) as count FROM products"
+        query = """
+            SELECT COUNT(p.id) as count
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+        """ # s (subcategories) is not needed for count if not filtering by subcategory name or id
 
         where_clauses = []
         if search_term:
-            where_clauses.append("LOWER(name) LIKE ?")
+            where_clauses.append("LOWER(p.name) LIKE ?") # Alias product table as p
             params.append(f"%{search_term.lower()}%")
-        if category:
-            where_clauses.append("LOWER(category) = ?")
+        if category: # This now filters by category NAME from the joined 'categories' table
+            where_clauses.append("LOWER(c.name) = ?") # Alias category table as c
             params.append(category.lower())
         if purchase_location:
-            where_clauses.append("LOWER(purchase_location) = ?")
+            where_clauses.append("LOWER(p.purchase_location) = ?") # Alias product table as p
             params.append(purchase_location.lower())
 
         if where_clauses:
@@ -671,18 +986,19 @@ class InventoryManager:
             return 0
 
     def get_all_categories(self):
-        """Retrieves all unique category names from the products table."""
-        categories = []
+        """Retrieves all category names from the 'categories' table."""
+        # This method now fetches from the dedicated 'categories' table.
+        category_names = []
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL ORDER BY category ASC")
+                cursor.execute("SELECT name FROM categories ORDER BY name ASC")
                 rows = cursor.fetchall()
                 for row in rows:
-                    categories.append(row['category'])
+                    category_names.append(row['name'])
         except sqlite3.Error as e:
-            print(f"Database error fetching all categories: {e}")
-        return categories
+            print(f"Database error fetching all category names: {e}")
+        return category_names
 
     def get_all_purchase_locations(self):
         """Retrieves all unique purchase location names from the products table."""
@@ -879,76 +1195,144 @@ class InventoryManager:
     # This method is called by the Excel upload in app.py
     # It now relies on product_id for linking, and creates product if not found.
     def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days,
-                         category=None, subcategory=None, par_level=0, max_holding_amount=0,
-                         purchase_location=None, unit_of_measure=None): # Added unit_of_measure
+                         category=None, subcategory=None, par_level=0, max_holding_amount=0, # Text category/subcategory from Excel
+                         purchase_location=None, unit_of_measure=None,
+                         # The following are for handling pending actions from app.py
+                         confirmed_action=None, temp_category_id=None):
         """
-        Adds an item to the inventory. If the product doesn't exist, it creates it first.
-        Then, it adds the stock item to inventory_items.
-        expiry_days is used to calculate expiry_date from purchase_date_str for the batch,
-        AND as default_expiry_days if a new product is created.
-        par_level and max_holding_amount are for the product definition if created.
-        unit_of_measure is used for new product creation.
+        Adds an item to inventory. Handles product creation, category/subcategory resolution,
+        and potential user confirmation steps for new categories/subcategories.
         """
+        product_data_for_confirmation = {
+            "name": name, "quantity_str": quantity_str, "purchase_date_str": purchase_date_str,
+            "expiry_days": expiry_days, "category": category, "subcategory": subcategory,
+            "par_level": par_level, "max_holding_amount": max_holding_amount,
+            "purchase_location": purchase_location, "unit_of_measure": unit_of_measure
+        }
+
         product_info = self.get_product_by_name(name)
         product_id_to_use = None
+        category_id_to_use = None
+        subcategory_id_to_use = None
+        action_required = None
+        confirmation_details = {}
+        warnings = []
 
-        if not product_info:
-            # Product does not exist, create it
-            print(f"Product '{name}' not found, attempting to create it...")
-            # unit_of_measure is now passed to create_product.
-            # create_product itself handles validation for unit_of_measure being present.
+        if product_info:
+            product_id_to_use = product_info['id']
+            category_id_to_use = product_info.get('category_id')
+            subcategory_id_to_use = product_info.get('subcategory_id')
+            print(f"Product '{name}' found with ID {product_id_to_use}. Using existing product.")
+
+            if category and category_id_to_use:
+                db_category_name = self.get_category_name_by_id(category_id_to_use)
+                if db_category_name and db_category_name.lower() != category.strip().lower():
+                    warnings.append(f"Category '{category.strip()}' in Excel for existing product '{name}' differs from DB category '{db_category_name}'. DB category retained.")
+
+            if subcategory and subcategory_id_to_use:
+                # Need to fetch subcategory name by its ID to compare
+                # This assumes we have a method like get_subcategory_by_id(id) or can adapt get_subcategory_by_name_and_category_id
+                # For now, let's assume a direct fetch or skip detailed name check for subcategory if complex
+                # This part can be enhanced if a get_subcategory_by_id method is added.
+                # For simplicity, we'll rely on IDs for existing products.
+                pass # Placeholder for potential subcategory name mismatch warning
+
+            if unit_of_measure and unit_of_measure.strip() and product_info.get('unit_of_measure') != unit_of_measure.strip():
+                warnings.append(f"UoM for '{name}' in Excel ('{unit_of_measure.strip()}') differs from DB ('{product_info.get('unit_of_measure')}'). DB UoM retained.")
+
+        else: # New Product
+            if not category or not category.strip():
+                return {"success": False, "message": f"Category name is missing in Excel for new product '{name}'. Product not added.", "warnings": warnings}
+
+            excel_category_name = category.strip()
+
+            if confirmed_action == "confirmed_new_category":
+                # User confirmed, create the new category
+                add_cat_result = self.add_category(excel_category_name)
+                if not add_cat_result.get("success"):
+                    return {"success": False, "message": f"Failed to create new category '{excel_category_name}': {add_cat_result.get('message')}", "warnings": warnings}
+                category_id_to_use = add_cat_result['category_id']
+
+                if subcategory and subcategory.strip():
+                    excel_subcategory_name = subcategory.strip()
+                    # User confirmed new category, now also create the new subcategory under it
+                    add_subcat_result = self.add_subcategory(excel_subcategory_name, category_id_to_use)
+                    if not add_subcat_result.get("success"):
+                         return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}' for new category '{excel_category_name}': {add_subcat_result.get('message')}", "warnings": warnings}
+                    subcategory_id_to_use = add_subcat_result['subcategory_id']
+                # Proceed to create product
+
+            elif confirmed_action == "confirmed_new_subcategory" and temp_category_id is not None:
+                category_id_to_use = temp_category_id # Use the ID of the existing category
+                excel_subcategory_name = subcategory.strip() # Should be present if this action was triggered
+                add_subcat_result = self.add_subcategory(excel_subcategory_name, category_id_to_use)
+                if not add_subcat_result.get("success"):
+                    return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}': {add_subcat_result.get('message')}", "warnings": warnings}
+                subcategory_id_to_use = add_subcat_result['subcategory_id']
+                # Proceed to create product
+
+            else: # Not a confirmed action, check existing categories/subcategories
+                existing_category_obj = self.get_category_by_name(excel_category_name)
+                if existing_category_obj:
+                    category_id_to_use = existing_category_obj['id']
+                    if subcategory and subcategory.strip():
+                        excel_subcategory_name = subcategory.strip()
+                        existing_subcategory_obj = self.get_subcategory_by_name_and_category_id(excel_subcategory_name, category_id_to_use)
+                        if existing_subcategory_obj:
+                            subcategory_id_to_use = existing_subcategory_obj['id']
+                        else: # New subcategory for existing category
+                            action_required = "confirm_new_subcategory"
+                            confirmation_details = {
+                                "category_id": category_id_to_use,
+                                "category_name": existing_category_obj['name'],
+                                "new_subcategory_name": excel_subcategory_name
+                            }
+                            return {"success": False, "action_required": action_required, "confirmation_details": confirmation_details, "product_data": product_data_for_confirmation, "warnings": warnings}
+                    # Else (no subcategory provided or subcategory found), proceed to create product with existing category_id_to_use
+                else: # New category
+                    action_required = "confirm_new_category"
+                    confirmation_details = {
+                        "new_category_name": excel_category_name,
+                        "new_subcategory_name": subcategory.strip() if subcategory else None
+                    }
+                    return {"success": False, "action_required": action_required, "confirmation_details": confirmation_details, "product_data": product_data_for_confirmation, "warnings": warnings}
+
+            # Create the product if it's new and category/subcategory are resolved (either existed or confirmed & created)
+            print(f"Attempting to create new product '{name}' with CategoryID: {category_id_to_use}, SubcategoryID: {subcategory_id_to_use}")
+            if not unit_of_measure: # Unit of measure is mandatory for new products
+                return {"success": False, "message": f"Unit of Measure is missing in Excel for new product '{name}'. Product not added.", "warnings": warnings}
+
             create_product_result = self.create_product(
                 name=name,
-                category=category,
-                subcategory=subcategory,
-                unit_of_measure=unit_of_measure, # Pass the new parameter here
-                default_expiry_days=expiry_days, # Current behavior: uses batch expiry as default for new product
+                category_id=category_id_to_use,
+                subcategory_id=subcategory_id_to_use,
+                unit_of_measure=unit_of_measure,
+                default_expiry_days=expiry_days,
                 par_level=par_level,
                 max_holding_amount=max_holding_amount,
                 purchase_location=purchase_location
             )
             if create_product_result.get("success"):
                 product_id_to_use = create_product_result.get("product_id")
-                product_info = self.get_product(product_id_to_use) # Fetch newly created product info
+                # product_info = self.get_product(product_id_to_use) # Not strictly needed here, product_id_to_use is enough
                 print(f"Product '{name}' created successfully with ID {product_id_to_use}.")
             else:
-                # Failed to create product, cannot add inventory item
-                error_message = create_product_result.get("message", f"Failed to create product '{name}'.")
-                print(error_message)
-                raise ValueError(error_message)
-        else:
-            product_id_to_use = product_info['id']
-            print(f"Product '{name}' found with ID {product_id_to_use}. Using existing product.")
-            # If product exists, unit_of_measure from Excel is ignored as per plan.
-            # However, we need to detect and report a mismatch.
-            uom_mismatch_details = None
-            if unit_of_measure and unit_of_measure.strip() and product_info.get('unit_of_measure') != unit_of_measure.strip():
-                excel_uom_stripped = unit_of_measure.strip()
-                db_uom = product_info.get('unit_of_measure')
-                print(f"UoM mismatch detected for product '{product_info['name']}'. Excel UoM: '{excel_uom_stripped}', DB UoM: '{db_uom}'. Product UoM not updated.")
-                uom_mismatch_details = {
-                    'uom_mismatch': True,
-                    'original_product_name': product_info['name'], # Name here is from excel, product_info has DB name
-                    'excel_uom': excel_uom_stripped,
-                    'db_uom': db_uom
-                }
-            # Continue using product_info as is, without updating its UoM in the DB.
+                return {"success": False, "message": create_product_result.get("message", f"Failed to create product '{name}'."), "warnings": warnings}
 
-        if product_id_to_use is None: # Should ideally not be hit if create_product raises error on fail
-            final_error_msg = f"Could not find or create product '{name}'. Inventory item not added."
-            print(final_error_msg)
-            raise ValueError(final_error_msg)
+        # --- Common logic for adding inventory item once product_id_to_use is determined ---
+        if product_id_to_use is None:
+             # This case should ideally be caught by earlier checks (e.g., product not found and action not confirmed)
+            return {"success": False, "message": f"Could not determine product ID for '{name}'. Inventory item not added.", "warnings": warnings}
 
-        # Calculate expiry_date for THIS BATCH
         try:
             purchase_dt = date.fromisoformat(purchase_date_str)
+            # Use default_expiry_days from the product (either existing or newly created)
+            # Need to fetch the product if it was just created to get its default_expiry_days
+            # However, the expiry_days param is for THIS BATCH from Excel, not necessarily product default
             batch_expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
         except (ValueError, TypeError) as e:
-            error_msg = f"Invalid purchase date '{purchase_date_str}' or expiry days '{expiry_days}' for item '{name}': {e}"
-            print(error_msg)
-            raise ValueError(error_msg)
+            return {"success": False, "message": f"Invalid purchase date '{purchase_date_str}' or expiry days '{expiry_days}' for item '{name}': {e}", "warnings": warnings}
 
-        # Add to inventory_items table
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -961,18 +1345,10 @@ class InventoryManager:
                 conn.commit()
                 item_id = cursor.lastrowid
                 print(f"Successfully added item '{name}' (Batch ID: {item_id}) to inventory. Expires: {batch_expiry_dt.isoformat()}")
-
-                return_data = {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use}
-                if uom_mismatch_details:
-                    return_data.update(uom_mismatch_details)
-                else:
-                    # Ensure uom_mismatch is explicitly False if no mismatch, for consistent return structure if needed by caller
-                    return_data['uom_mismatch'] = False
-                return return_data
+                return {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use, "warnings": warnings}
         except sqlite3.Error as e:
-            db_error_msg = f"Database error adding item '{name}' to inventory: {e}"
-            print(db_error_msg)
-            raise sqlite3.Error(db_error_msg)
+            return {"success": False, "message": f"Database error adding item '{name}' to inventory: {e}", "warnings": warnings}
+
 
     def get_current_inventory(self, search_term=None, category=None, purchase_location=None,
                               expiry_start_date=None, expiry_end_date=None,
@@ -2061,4 +2437,12 @@ if __name__ == "__main__":
 
     print("\n\n--- Food Manager (SQLite DB) Demonstration Complete ---")
     print(f"Database file '{DB_FILE}' contains the data.")
+
+    # Run migration if needed (idempotent parts are handled inside the method)
+    print("\n--- Running Data Migration (if applicable) ---")
+    migration_result = manager.migrate_text_categories_to_ids()
+    if migration_result: # Check if not None
+        print(migration_result.get("message", "Migration status unknown."))
+    print("--- Migration Attempt Finished ---")
+
     # Note: To truly reset, delete DB_FILE before running again.

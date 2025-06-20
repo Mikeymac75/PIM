@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Categories and Subcategories{% endblock %}
+
+{% block content %}
+<h1>Manage Categories and Subcategories</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class=flashes>
+    {% for category, message in messages %}
+      <li class="{{ category }}">{{ message }}</li>
+    {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+
+<section class="form-section">
+    <h2>Add New Category</h2>
+    <form method="POST" action="{{ url_for('manage_categories_view') }}">
+        <input type="hidden" name="action_type" value="add_category">
+        <div>
+            <label for="category_name">Category Name:</label>
+            <input type="text" id="category_name" name="category_name" required>
+        </div>
+        <div>
+            <button type="submit" class="button"><i class="fas fa-plus"></i> Add Category</button>
+        </div>
+    </form>
+</section>
+
+<hr>
+
+<section class="list-section">
+    <h2>Existing Categories and Subcategories</h2>
+    {% if categories_data %}
+        <ul>
+            {% for category in categories_data %}
+                <li class="category-item">
+                    <h3>{{ category.name }} (ID: {{ category.id }})</h3>
+
+                    <form method="POST" action="{{ url_for('manage_categories_view') }}" class="subcategory-form">
+                        <input type="hidden" name="action_type" value="add_subcategory">
+                        <input type="hidden" name="category_id" value="{{ category.id }}">
+                        <div>
+                            <label for="subcategory_name_{{ category.id }}">New Subcategory Name:</label>
+                            <input type="text" id="subcategory_name_{{ category.id }}" name="subcategory_name" required>
+                        </div>
+                        <div>
+                            <button type="submit" class="button button-small"><i class="fas fa-plus-circle"></i> Add Subcategory</button>
+                        </div>
+                    </form>
+
+                    {% if category.subcategories %}
+                        <h4>Subcategories:</h4>
+                        <ul class="subcategory-list">
+                            {% for subcategory in category.subcategories %}
+                                <li>{{ subcategory.name }} (ID: {{ subcategory.id }})</li>
+                            {% else %}
+                                <li>No subcategories yet.</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p>No subcategories yet.</p>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No categories found. Add one above!</p>
+    {% endif %}
+</section>
+
+<style>
+    .form-section, .list-section {
+        margin-bottom: 20px;
+        padding: 15px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        background-color: #f9f9f9;
+    }
+    .category-item {
+        list-style-type: none;
+        margin-bottom: 15px;
+        padding: 10px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        background-color: #fff;
+    }
+    .category-item h3 {
+        margin-top: 0;
+        color: #337ab7; /* Bootstrap primary blue, for example */
+    }
+    .subcategory-form {
+        margin-top: 10px;
+        margin-bottom: 10px;
+        padding: 10px;
+        border: 1px dashed #ccc;
+        border-radius: 4px;
+    }
+    .subcategory-list {
+        padding-left: 20px;
+    }
+    .subcategory-list li {
+        font-size: 0.95em;
+    }
+    .button-small {
+        padding: 5px 10px;
+        font-size: 0.9em;
+    }
+</style>
+
+{% endblock %}
