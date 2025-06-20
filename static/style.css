@@ -58,7 +58,7 @@ header #branding h1 {
 
 header nav {
     float: right;
-    margin-top: 10px; /* Adjust to align with branding */
+    margin-top: 0px; /* Adjust to align with branding */
 }
 
 header .highlight, header .current a {
