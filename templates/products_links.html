@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Products Links - {{ super() }}{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Products Links</h1>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <p>Select a product related action:</p>
+    <ul>
+        <li><a href="{{ url_for('list_products_view') }}"><i class="fas fa-tasks"></i> Manage Products</a></li>
+        <li><a href="{{ url_for('create_product_view') }}"><i class="fas fa-plus-square"></i> Create New Product</a></li>
+        <li><a href="{{ url_for('list_products_view') }}"><i class="fas fa-tags"></i> Create New Categories</a></li>
+        {# Note: 'Create New Categories' currently points to list_products_view as per original base.html. Keep as is unless instructed otherwise. #}
+    </ul>
+</div>
+{% endblock %}

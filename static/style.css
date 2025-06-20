@@ -26,6 +26,7 @@ header {
     border-bottom: #007bff 3px solid; /* New blue accent */
     position: relative; /* For stacking context */
     z-index: 10; /* Ensure header is above main content for dropdown visibility */
+    overflow: visible; /* Explicitly allow content (dropdowns) to overflow header bounds */
 }
 
 /* Allow dropdowns to overflow the header's container */
@@ -92,7 +93,7 @@ header nav ul li a i {
     background-color: #343a40; /* Match header background */
     min-width: 200px; /* Adjust as needed */
     box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-    z-index: 100; /* Above other header content within its new stacking context */
+    z-index: 9999; /* Significantly increased z-index for testing */
     border-top: 3px solid #007bff; /* Blue accent to match header bottom border */
 }
 

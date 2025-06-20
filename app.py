@@ -43,6 +43,10 @@ def _get_unique_item_names(include_historical=False):
 def home():
     return render_template('home.html')
 
+@app.route('/inventory-usage-links/')
+def inventory_usage_links_view():
+    return render_template('inventory_usage_links.html', title="Inventory & Usage Links")
+
 @app.route('/inventory/current')
 def current_inventory_view():
     # Retrieve filter and sort parameters from request.args
@@ -498,6 +502,10 @@ def upload_excel_view():
             return redirect(request.url)
 
     return render_template('upload_excel.html')
+
+@app.route('/recipes-links/')
+def recipes_links_view():
+    return render_template('recipes_links.html', title="Recipe Links")
 
 @app.route('/recipes/add', methods=['GET', 'POST'])
 def add_recipe_view():
@@ -1308,6 +1316,10 @@ def record_harvest_view(item_id):
     return redirect(url_for('garden_list_view'))
 
 # --- Product Management Routes ---
+@app.route('/products-links/')
+def products_links_view():
+    return render_template('products_links.html', title="Products Links")
+
 @app.route('/products', methods=['GET'])
 def list_products_view():
     # Retrieve filter parameters
