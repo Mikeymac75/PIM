@@ -76,7 +76,7 @@
                         </button>
 
                         <!-- Harvest Modal -->
-                        <div class="modal fade" id="harvestModal-{{ item.id }}" tabindex="-1" role="dialog" aria-labelledby="harvestModalLabel-{{ item.id }}" aria-hidden="true">
+                        <div class="modal fade harvest-modal" id="harvestModal-{{ item.id }}" tabindex="-1" role="dialog" aria-labelledby="harvestModalLabel-{{ item.id }}" aria-hidden="true">
                             <div class="modal-dialog" role="document">
                                 <div class="modal-content">
                                     <form method="POST" action="{{ url_for('record_harvest_view', item_id=item.id) }}">
@@ -154,6 +154,45 @@
         harvestDateInputs.forEach(function(input) {
             if (!input.value) { // Set default only if not already set (e.g. by server-side value)
                 input.value = today;
+            }
+        });
+    });
+</script>
+<script>
+    $(document).ready(function() {
+        // Initialize all harvest modals but ensure they are not shown by default.
+        $('.harvest-modal').each(function() {
+            $(this).modal({ show: false });
+        });
+
+        // Optional: Re-check if any modal is accidentally visible and hide it.
+        // This is a more forceful approach if the above doesn't work.
+        // $('.harvest-modal.show').modal('hide');
+        // For now, let's rely on proper initialization with `show: false`.
+
+        // The user's feedback: "it appears by default, then I click harvest (the modal stays on screen) THEN if i click close it closes."
+        // This implies the .modal('hide') might be needed if { show: false } isn't enough
+        // to counteract why it's initially visible.
+        // Let's try a slightly more robust initialization.
+        // Bootstrap's default behavior for a `data-toggle="modal"` element *should* be to initialize
+        // the modal if it hasn't been. The issue is the initial "visible" state.
+        // The `show: false` during programmatic initialization is key.
+
+        // Let's also ensure that if a modal was somehow opened by a hash in URL (unlikely here) or other means,
+        // and it's one of ours, it gets hidden if it's not supposed to be shown.
+        // However, the problem description points to them being visible *without* interaction.
+
+        // Final proposed script for robustness:
+        $('.harvest-modal').each(function() {
+            var modalInstance = $(this).data('bs.modal');
+            if (!modalInstance) {
+                // If not initialized, initialize it and ensure it's hidden.
+                $(this).modal({ show: false });
+            } else {
+                // If already initialized for some reason, but visible, hide it.
+                if ($(this).hasClass('show')) {
+                    $(this).modal('hide');
+                }
             }
         });
     });
