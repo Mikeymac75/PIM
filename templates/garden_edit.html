@@ -6,8 +6,6 @@
 <div class="container mt-4">
     <h2>{{ form_action_label }} Production Item</h2>
 
-    {% include '_flash_messages.html' %}
-
     <form method="POST" action="{{ request.url }}">
         {# CSRF token if using Flask-WTF, not included for basic example #}
 
