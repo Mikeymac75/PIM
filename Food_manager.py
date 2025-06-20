@@ -234,6 +234,92 @@ class InventoryManager:
             print(f"Database error getting monthly consumption for product ID {product_id}: {e}")
         return consumption_data
 
+    def get_daily_inventory_history(self, product_id, days=30):
+        """
+        Retrieves the daily inventory quantity for a product over a specified number of past days.
+        - product_id: The ID of the product.
+        - days: The number of past days to fetch data for (defaults to 30).
+        Returns a list of dictionaries: [{'inventory_date': 'YYYY-MM-DD', 'quantity_on_hand': float}]
+        """
+        if not isinstance(product_id, int):
+            raise ValueError("product_id must be an integer.")
+        if not isinstance(days, int) or days <= 0:
+            raise ValueError("days must be a positive integer.")
+
+        today = date.today()
+        report_start_date = today - timedelta(days=days - 1)
+        events = []
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+
+                # Fetch purchase events
+                cursor.execute('''
+                    SELECT purchase_date, original_quantity_string
+                    FROM inventory_items
+                    WHERE product_id = ?
+                ''', (product_id,))
+                for row in cursor.fetchall():
+                    try:
+                        event_date = date.fromisoformat(row['purchase_date'])
+                        quantity = self._parse_quantity_string(row['original_quantity_string'])
+                        if quantity > 0:
+                            events.append({'date': event_date, 'change': quantity, 'type': 'purchase'})
+                        else:
+                            print(f"Warning: Skipping purchase event with non-positive quantity for product_id {product_id}: {row}")
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Skipping purchase event due to invalid data for product_id {product_id}: {row} - Error: {e}")
+
+                # Fetch consumption events
+                cursor.execute('''
+                    SELECT consumed_date, quantity_consumed_this_time
+                    FROM historical_items
+                    WHERE product_id = ?
+                ''', (product_id,))
+                for row in cursor.fetchall():
+                    try:
+                        event_date = date.fromisoformat(row['consumed_date'])
+                        quantity = float(row['quantity_consumed_this_time'])
+                        if quantity > 0:
+                            events.append({'date': event_date, 'change': -quantity, 'type': 'consumption'})
+                        else:
+                            print(f"Warning: Skipping consumption event with non-positive quantity for product_id {product_id}: {row}")
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Skipping consumption event due to invalid data for product_id {product_id}: {row} - Error: {e}")
+
+        except sqlite3.Error as e:
+            print(f"Database error retrieving inventory history for product ID {product_id}: {e}")
+            return []
+
+        # Sort events: by date, then by type (purchases first on same day)
+        events.sort(key=lambda x: (x['date'], 0 if x['type'] == 'purchase' else 1))
+
+        daily_inventory_data = []
+        current_simulated_stock = 0.0
+        event_idx = 0
+
+        # Pre-window stock calculation: Accumulate stock changes before the report_start_date
+        while event_idx < len(events) and events[event_idx]['date'] < report_start_date:
+            current_simulated_stock += events[event_idx]['change']
+            event_idx += 1
+
+        # Simulate and record for the report window
+        for i in range(days):
+            current_report_day = report_start_date + timedelta(days=i)
+
+            # Process events for the current_report_day
+            while event_idx < len(events) and events[event_idx]['date'] == current_report_day:
+                current_simulated_stock += events[event_idx]['change']
+                event_idx += 1
+
+            daily_inventory_data.append({
+                'inventory_date': current_report_day.isoformat(),
+                'quantity_on_hand': max(0, round(current_simulated_stock, 3))
+            })
+
+        return daily_inventory_data
+
     def get_product_by_name(self, name):
         """Retrieves a product by its name."""
         try:

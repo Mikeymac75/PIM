@@ -1349,6 +1349,8 @@ def product_modal_details(product_id):
     daily_consumption = manager.get_daily_consumption(product_id)
     # get_monthly_consumption defaults to 12 months
     monthly_consumption = manager.get_monthly_consumption(product_id)
+    # Get daily inventory history (defaults to 30 days)
+    daily_inventory_history = manager.get_daily_inventory_history(product_id)
 
     # Ensure all date/datetime objects are converted to ISO format strings for JSON serialization
     # For product_details, this depends on its structure. Assuming it's a dict from DB Row.
@@ -1397,6 +1399,7 @@ def product_modal_details(product_id):
         "product_details": product_details,
         "daily_consumption": daily_consumption,
         "monthly_consumption": monthly_consumption,
+        "daily_inventory_history": daily_inventory_history,
         "recipes_containing_product": recipes_containing_product,
         "inventory_concerns": inventory_concerns,
         "shopping_list_amount_today": shopping_list_amount_today,
