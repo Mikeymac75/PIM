@@ -226,6 +226,7 @@ class TestExcelUploadUoMMismatch(unittest.TestCase): # Create a new class for cl
 
     def tearDown(self):
         app.manager = self.original_app_manager # Restore original manager
+        # Also restore recipe_mngr if it was patched, though it wasn't in this class
         self.app_context.pop()
 
     def _create_dummy_excel_file(self, data_rows):
@@ -316,6 +317,147 @@ class TestExcelUploadUoMMismatch(unittest.TestCase): # Create a new class for cl
         # General success message for item addition should be there
         self.assertIn('success', flashed_messages)
         self.assertIn("Successfully added 1 items from the Excel file.", flashed_messages['success'])
+
+
+class TestRecipeProduction(unittest.TestCase):
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['SECRET_KEY'] = 'test_secret_key_recipe_prod'
+        app.config['SERVER_NAME'] = 'localhost.test.recipeprod' # Unique server name
+
+        self.app_context = app.app_context()
+        self.app_context.push()
+        self.client = app.test_client()
+
+        # Use the actual managers from the app, but reconfigure their DB to be in-memory for tests
+        self.original_manager_db = app.manager.db_filepath
+        self.original_recipe_mngr_db = app.recipe_mngr.db_filepath
+
+        app.manager.db_filepath = ":memory:"
+        app.manager.conn = sqlite3.connect(":memory:") # New connection for manager
+        app.manager.conn.row_factory = sqlite3.Row
+        app.manager._initialize_db() # Re-initialize its own schema
+
+        app.recipe_mngr.db_filepath = ":memory:"
+        app.recipe_mngr.conn = app.manager.conn # Crucially, make them share the SAME in-memory DB connection
+        app.recipe_mngr._initialize_db() # This should not conflict if schema is idempotent
+
+        # --- Test Data Setup ---
+        # 1. Create Products (Ingredients and Output)
+        self.milk_prod = app.manager.create_product(name="Milk For Cheese", category="Dairy", unit_of_measure="liter", default_expiry_days=7)
+        self.rennet_prod = app.manager.create_product(name="Rennet", category="Misc", unit_of_measure="tablet", default_expiry_days=365)
+        self.cheese_output_prod = app.manager.create_product(name="Shredded Cheese", category="Dairy", unit_of_measure="kg", default_expiry_days=30)
+
+        self.milk_prod_id = self.milk_prod['product_id']
+        self.rennet_prod_id = self.rennet_prod['product_id']
+        self.cheese_output_prod_id = self.cheese_output_prod['product_id']
+
+        # 2. Add Recipe
+        self.recipe_name = "Homemade Cheese"
+        self.cheese_yield = 0.4 # e.g., 0.4 kg of cheese
+        recipe_data = {
+            "name": self.recipe_name,
+            "description": "Simple homemade cheese",
+            "instructions": "Mix milk and rennet, wait, press.",
+            "ingredients": [
+                {"item_name": "Milk For Cheese", "quantity_required": 2.0}, # 2 liters of milk
+                {"item_name": "Rennet", "quantity_required": 1.0}        # 1 tablet of rennet
+            ],
+            "output_product_id": self.cheese_output_prod_id,
+            "output_yield": self.cheese_yield
+        }
+        add_recipe_result = app.recipe_mngr.add_recipe(recipe_data)
+        self.assertTrue(add_recipe_result.get('success'), f"Failed to add recipe for test: {add_recipe_result.get('message')}")
+        self.recipe_id = add_recipe_result.get('recipe_id')
+
+        # 3. Add Initial Stock for Ingredients
+        app.manager.add_inventory_stock(product_id=self.milk_prod_id, quantity_str="10", purchase_date_str="2024-01-01") # 10 liters of milk
+        app.manager.add_inventory_stock(product_id=self.rennet_prod_id, quantity_str="5", purchase_date_str="2024-01-01")   # 5 tablets of rennet
+        # Output product (Shredded Cheese) starts at 0 stock implicitly, or we can add some. Let's start at 0.
+
+    def tearDown(self):
+        # Close the shared connection via one of the managers
+        if app.manager.db_filepath == ":memory:" and app.manager.conn:
+            app.manager.close_connection()
+
+        # Restore original DB filepaths and clear conn for both managers
+        app.manager.db_filepath = self.original_manager_db
+        app.manager.conn = None
+        app.recipe_mngr.db_filepath = self.original_recipe_mngr_db
+        app.recipe_mngr.conn = None
+
+        self.app_context.pop()
+
+    def test_make_recipe_produces_output(self):
+        num_batches = 2
+
+        # Get initial quantities
+        initial_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
+        initial_rennet_qty = app.manager.get_total_item_quantity(self.rennet_prod_id)
+        initial_cheese_qty = app.manager.get_total_item_quantity(self.cheese_output_prod_id)
+        self.assertEqual(initial_cheese_qty, 0) # Assuming it starts at 0
+
+        # Simulate making the recipe
+        response = self.client.post(f'/recipes/{self.recipe_name}/make',
+                                    data={'num_batches': str(num_batches)},
+                                    follow_redirects=True)
+        self.assertEqual(response.status_code, 200) # Should redirect to recipe detail page
+
+        # Verify flashed messages
+        flashed_messages = []
+        with self.client.session_transaction() as session:
+            flashes = session.get('_flashes', [])
+            for category, message in flashes: # Convert to simple list of messages
+                flashed_messages.append(message)
+
+        self.assertTrue(any(f"{num_batches} batch(es) of '{self.recipe_name}' made! Ingredients consumed." in msg for msg in flashed_messages))
+        expected_total_yield = self.cheese_yield * num_batches
+        self.assertTrue(any(f"Produced {expected_total_yield} of 'Shredded Cheese' and added to inventory." in msg for msg in flashed_messages))
+
+        # Verify ingredient consumption
+        expected_milk_consumed = 2.0 * num_batches
+        expected_rennet_consumed = 1.0 * num_batches
+
+        final_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
+        final_rennet_qty = app.manager.get_total_item_quantity(self.rennet_prod_id)
+
+        self.assertAlmostEqual(final_milk_qty, initial_milk_qty - expected_milk_consumed)
+        self.assertAlmostEqual(final_rennet_qty, initial_rennet_qty - expected_rennet_consumed)
+
+        # Verify output product increase
+        final_cheese_qty = app.manager.get_total_item_quantity(self.cheese_output_prod_id)
+        self.assertAlmostEqual(final_cheese_qty, initial_cheese_qty + expected_total_yield)
+
+    def test_make_recipe_no_output_product_defined(self):
+        # Add a recipe without output product
+        no_output_recipe_name = "Salad Without Output"
+        app.recipe_mngr.add_recipe({
+            "name": no_output_recipe_name, "ingredients": [{"item_name": "Milk For Cheese", "quantity_required": 0.1}],
+            "output_product_id": None, "output_yield": None # Explicitly no output
+        })
+        # Ensure Milk For Cheese has stock
+        app.manager.add_inventory_stock(product_id=self.milk_prod_id, quantity_str="1", purchase_date_str="2024-01-01")
+        initial_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
+
+
+        response = self.client.post(f'/recipes/{no_output_recipe_name}/make', data={'num_batches': '1'}, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+        flashed_messages = []
+        with self.client.session_transaction() as session:
+            flashes = session.get('_flashes', [])
+            for category, message in flashes:
+                flashed_messages.append(message)
+
+        self.assertTrue(any(f"1 batch(es) of '{no_output_recipe_name}' made! Ingredients consumed." in msg for msg in flashed_messages))
+        # Ensure no production messages
+        self.assertFalse(any("Produced" in msg for msg in flashed_messages))
+        self.assertFalse(any("Error producing output" in msg for msg in flashed_messages))
+
+        # Check milk was consumed
+        final_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
+        self.assertAlmostEqual(final_milk_qty, initial_milk_qty - 0.1)
 
 
 if __name__ == '__main__':

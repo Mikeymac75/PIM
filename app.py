@@ -780,6 +780,7 @@ def make_recipe_view(recipe_name):
     
     # Re-check if makeable before attempting to make, as inventory might have changed.
     recipe = recipe_mngr.get_recipe_by_name(recipe_name) # This now includes output_product_id and output_yield
+    app.logger.info(f"Recipe fetched for making: {recipe}") # Log the entire recipe object
     if not recipe:
         flash(f"Recipe '{recipe_name}' not found.", 'error')
         return redirect(url_for('recipes_list_view'))
@@ -831,22 +832,31 @@ def make_recipe_view(recipe_name):
     if all_consumed_successfully and not consumption_error_messages:
         flash(f"{num_batches} batch(es) of '{recipe['name']}' made! Ingredients consumed.", 'success')
 
-        # Produce output item, if specified
         output_product_id = recipe.get('output_product_id')
-        output_yield_per_batch = recipe.get('output_yield')
+        output_yield_per_batch_from_recipe = recipe.get('output_yield') # Renamed
+        app.logger.info(f"Attempting production: output_product_id={output_product_id}, output_yield_per_batch_from_recipe={output_yield_per_batch_from_recipe}")
 
-        if output_product_id and output_yield_per_batch is not None: # Ensure yield is not None
+        output_yield_per_batch_float = None
+        if output_yield_per_batch_from_recipe is not None:
             try:
-                output_yield_per_batch_float = float(output_yield_per_batch)
+                output_yield_per_batch_float = float(output_yield_per_batch_from_recipe)
+            except ValueError:
+                app.logger.error(f"Invalid output_yield format ('{output_yield_per_batch_from_recipe}') in recipe ID {recipe.get('id')}. Cannot produce output.")
+                # The flash message for this case will be handled by the broader try-except block below if production fails
+
+        if output_product_id and output_yield_per_batch_float is not None:
+            try:
                 if output_yield_per_batch_float > 0:
                     total_output_yield = output_yield_per_batch_float * num_batches
-
-                    # Add to inventory. Use today's date as purchase_date for produced items.
+                    app.logger.info(f"Calculated total_output_yield: {total_output_yield} for product_id: {output_product_id}")
+                    # Ensure purchase_date_str is defined for add_inventory_stock
+                    purchase_date_str = date.today().isoformat()
                     production_result = manager.add_inventory_stock(
                         product_id=output_product_id,
                         quantity_str=str(total_output_yield),
-                        purchase_date_str=date.today().isoformat()
+                        purchase_date_str=purchase_date_str
                     )
+                    app.logger.info(f"Result of add_inventory_stock: {production_result}")
                     if production_result.get("success"):
                         output_product_details = manager.get_product(output_product_id)
                         output_product_name = output_product_details.get('name', f"ID {output_product_id}") if output_product_details else f"ID {output_product_id}"
