@@ -129,6 +129,8 @@ header nav ul li a i {
     background: #fff;
     margin-top: 20px;
     box-shadow: 0 0 15px rgba(0,0,0,0.07); /* Softer shadow */
+    position: relative; /* Ensure it's part of stacking context */
+    z-index: 1; /* Below the header */
 }
 
 /* Headings */
