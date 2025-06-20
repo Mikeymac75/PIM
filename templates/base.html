@@ -18,16 +18,39 @@
             <nav>
                 <ul>
                     <li class="{% if request.endpoint == 'home' %}current{% endif %}"><a href="{{ url_for('home') }}"><i class="fas fa-home"></i> Home</a></li>
-                    <li class="{% if request.endpoint == 'current_inventory_view' %}current{% endif %}"><a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a></li>
-                    <li class="{% if request.endpoint == 'add_inventory_stock_view' %}current{% endif %}"><a href="{{ url_for('add_inventory_stock_view') }}"><i class="fas fa-plus-circle"></i> Add Stock</a></li>
-                    <li class="{% if request.endpoint == 'historical_inventory_view' %}current{% endif %}"><a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a></li>
-                    <li class="{% if request.endpoint == 'projections_view' %}current{% endif %}"><a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a></li>
-                    <li class="{% if request.endpoint == 'list_products_view' %}current{% endif %}"><a href="{{ url_for('list_products_view') }}"><i class="fas fa-tasks"></i> Manage Products</a></li>
-                    <li class="{% if request.endpoint == 'create_product_view' %}current{% endif %}"><a href="{{ url_for('create_product_view') }}"><i class="fas fa-plus-square"></i> Create Product</a></li>
-                    <li class="{% if request.endpoint == 'consume_item_view' %}current{% endif %}"><a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a></li>
+
+                    <!-- Recipes Dropdown -->
+                    <li class="dropdown {% if request.endpoint in ['add_recipe_view', 'recipes_list_view'] %}current{% endif %}">
+                        <a href="#" class="dropbtn"><i class="fas fa-book"></i> Recipes <i class="fas fa-caret-down"></i></a>
+                        <div class="dropdown-content">
+                            <a href="{{ url_for('add_recipe_view') }}"><i class="fas fa-book-medical"></i> Add Recipe</a>
+                            <a href="{{ url_for('recipes_list_view') }}"><i class="fas fa-book-open"></i> View Recipes</a>
+                        </div>
+                    </li>
+
+                    <!-- Inventory & Usage Dropdown -->
+                    <li class="dropdown {% if request.endpoint in ['add_inventory_stock_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view'] %}current{% endif %}">
+                        <a href="#" class="dropbtn"><i class="fas fa-warehouse"></i> Inventory & Usage <i class="fas fa-caret-down"></i></a>
+                        <div class="dropdown-content">
+                            <a href="{{ url_for('add_inventory_stock_view') }}"><i class="fas fa-plus-circle"></i> Add Stock</a>
+                            <a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a>
+                            <a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a>
+                            <a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a>
+                            <a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a>
+                        </div>
+                    </li>
+
+                    <!-- Products Dropdown -->
+                    <li class="dropdown {% if request.endpoint in ['list_products_view', 'create_product_view'] %}current{% endif %}">
+                        <a href="#" class="dropbtn"><i class="fas fa-shopping-basket"></i> Products <i class="fas fa-caret-down"></i></a>
+                        <div class="dropdown-content">
+                            <a href="{{ url_for('list_products_view') }}"><i class="fas fa-tasks"></i> Manage Products</a>
+                            <a href="{{ url_for('create_product_view') }}"><i class="fas fa-plus-square"></i> Create New Product</a>
+                            <a href="{{ url_for('list_products_view') }}"><i class="fas fa-tags"></i> Create New Categories</a> {# Pointing to list_products_view for now #}
+                        </div>
+                    </li>
+
                     <li class="{% if request.endpoint == 'upload_excel_view' %}current{% endif %}"><a href="{{ url_for('upload_excel_view') }}"><i class="fas fa-file-excel"></i> Upload Excel</a></li>
-                    <li class="{% if request.endpoint == 'add_recipe_view' %}current{% endif %}"><a href="{{ url_for('add_recipe_view') }}"><i class="fas fa-book-medical"></i> Add Recipe</a></li>
-                    <li class="{% if request.endpoint == 'recipes_list_view' %}current{% endif %}"><a href="{{ url_for('recipes_list_view') }}"><i class="fas fa-book-open"></i> View Recipes</a></li>
                     <li class="{% if request.endpoint == 'garden_list_view' or request.endpoint == 'add_production_item_view' or request.endpoint == 'edit_production_item_view' %}current{% endif %}"><a href="{{ url_for('garden_list_view') }}"><i class="fas fa-leaf"></i> Garden & Harvest</a></li>
                 </ul>
             </nav>
