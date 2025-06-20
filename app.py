@@ -329,7 +329,11 @@ def upload_excel_view():
                 
                 items_added_count = 0
                 error_messages = []
-                uom_mismatch_warnings = [] # Initialize list for UoM warnings
+                # uom_mismatch_warnings = [] # These are now part of general warnings
+
+                items_pending_confirmation = []
+                all_upload_warnings = []
+
 
                 for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
                     # Stop if first cell of row is empty (common way to detect end of data)
@@ -444,50 +448,65 @@ def upload_excel_view():
 
                     # If all validations pass for this row, attempt to add to inventory
                     try:
-                        result = manager.add_item_to_list( # Capture the result
-                            name=str(name), 
-                            quantity_str=str(quantity), 
-                            purchase_date_str=purchase_date_str, 
+                        result = manager.add_item_to_list(
+                            name=str(name),
+                            quantity_str=str(quantity),
+                            purchase_date_str=purchase_date_str,
                             expiry_days=expiry_days_int,
-                            category=category if category else None, # Pass None if empty string
+                            category=category if category else None,
                             subcategory=subcategory if subcategory else None,
                             par_level=par_level_float,
                             max_holding_amount=max_holding_float,
-                            purchase_location=purchase_location_to_pass, # New
-                            unit_of_measure=unit_of_measure_val # New
+                            purchase_location=purchase_location_to_pass,
+                            unit_of_measure=unit_of_measure_val
                         )
-                        items_added_count += 1
 
-                        # Check for UoM mismatch
-                        if result.get('uom_mismatch'):
-                            warning_msg = (f"Warning: UoM for '{result.get('original_product_name')}' "
-                                           f"in Excel ('{result.get('excel_uom')}') differs from "
-                                           f"database ('{result.get('db_uom')}'). "
-                                           "Product's UoM was not updated.")
-                            uom_mismatch_warnings.append(warning_msg)
+                        if result.get("action_required"):
+                            items_pending_confirmation.append({
+                                "product_data": result["product_data"], # This is the dict of original args
+                                "confirmation_details": result["confirmation_details"],
+                                "action_required": result["action_required"],
+                                "row_idx": row_idx # For user reference
+                            })
+                        elif result.get("success"):
+                            items_added_count += 1
+                        else: # Error processing this row
+                            error_messages.append(f"Row {row_idx} ('{name}'): {result.get('message', 'Unknown error')}")
 
-                    except Exception as e: # Catch errors from manager.add_item_to_list
+                        if result.get("warnings"):
+                            for warning in result.get("warnings"):
+                                all_upload_warnings.append(f"Row {row_idx} ('{name}'): {warning}")
+
+                    except ValueError as ve: # Catch validation errors from add_item_to_list if it raises them
+                         error_messages.append(f"Row {row_idx} ('{name}'): Validation Error - {str(ve)}")
+                    except Exception as e: # Catch other errors from manager.add_item_to_list
                         error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {str(e)}")
+
+                session['items_pending_confirmation'] = items_pending_confirmation
+                session['upload_warnings'] = all_upload_warnings
+
+                if items_pending_confirmation:
+                    flash(f"{len(items_pending_confirmation)} items require confirmation for new categories/subcategories.", 'info')
+                    if items_added_count > 0: flash(f"Additionally, {items_added_count} items were added directly.", 'success')
+                    if error_messages:
+                        flash(f"{len(error_messages)} other rows had errors. Details below:", 'error')
+                        for err_msg in error_messages[:5]: flash(err_msg, 'error_detail')
+                    # Redirect to GET to display confirmation page (which is the same URL)
+                    return redirect(url_for('upload_excel_view'))
                 
-                # Flash summary for items added
+                # If no items pending, proceed with normal flash messages
                 if items_added_count > 0:
-                    flash(f"Successfully added {items_added_count} items from the Excel file.", 'success')
-
-                # Flash UoM mismatch warnings
-                if uom_mismatch_warnings:
-                    flash("Some products had Unit of Measure mismatches (UoM in Excel differs from DB; DB UoM was kept):", 'warning')
-                    for warning in uom_mismatch_warnings:
-                        flash(warning, 'warning_detail') # Use a distinct category for individual warnings if needed
-
-                # Flash errors for rows that failed
+                    flash(f"Successfully processed and added {items_added_count} items from the Excel file.", 'success')
+                if all_upload_warnings:
+                    flash(f"{len(all_upload_warnings)} warnings encountered during processing:", 'warning')
+                    for warn_msg in all_upload_warnings[:10]: flash(warn_msg, 'warning_detail')
                 if error_messages:
-                    flash(f"{len(error_messages)} rows had errors and were not processed. See details below:", 'error')
-                    for err_msg in error_messages[:5]: # Show first 5 errors
-                        flash(err_msg, 'error_detail') # Use a distinct category for individual errors
-
-                if items_added_count == 0 and not error_messages and not uom_mismatch_warnings:
+                    flash(f"{len(error_messages)} rows had errors and were not processed. Details below:", 'error')
+                    for err_msg in error_messages[:5]: flash(err_msg, 'error_detail')
+                if items_added_count == 0 and not error_messages and not all_upload_warnings and not items_pending_confirmation:
                      flash("No items were found or added from the file. The file might be empty or data starts after row 2.", 'info')
 
+                session.pop('upload_warnings', None) # Clear warnings if no pending items
                 return redirect(url_for('current_inventory_view'))
 
             except Exception as e:
@@ -497,7 +516,82 @@ def upload_excel_view():
             flash('Invalid file type. Please upload an .xlsx file.', 'error')
             return redirect(request.url)
 
-    return render_template('upload_excel.html')
+    pending_items = session.get('items_pending_confirmation', [])
+    upload_warnings = session.get('upload_warnings', []) # Retrieve warnings for display
+
+    if pending_items:
+        # If there are items pending confirmation, always show them
+        return render_template('upload_excel.html', items_pending_confirmation=pending_items, upload_warnings=upload_warnings)
+
+    # Otherwise, it's a normal GET request for the upload form (or after processing with no pending items)
+    return render_template('upload_excel.html', upload_warnings=upload_warnings) # Pass warnings even for initial page load if any exist (e.g. from previous failed confirm)
+
+@app.route('/confirm_excel_uploads', methods=['POST'])
+def confirm_excel_uploads_view():
+    items_to_process = session.pop('items_pending_confirmation', [])
+    # Retrieve and immediately clear upload_warnings from the session, as they are about to be processed or re-added.
+    all_upload_warnings = session.pop('upload_warnings', [])
+
+    final_success_count = 0
+    final_error_messages = []
+    # all_upload_warnings will accumulate new warnings from this processing step as well.
+
+    if not items_to_process:
+        flash("No items found for confirmation. Please upload a file first.", "info")
+        return redirect(url_for('upload_excel_view'))
+
+    # For now, assume a single "Confirm All" button, so we process all items.
+    # Individual confirmation would require more complex form handling.
+
+    for item_data_package in items_to_process:
+        product_data = item_data_package['product_data']
+        confirmation_details = item_data_package['confirmation_details']
+        action_required = item_data_package['action_required']
+
+        # Call add_item_to_list again, this time with confirmation details
+        # Food_manager.add_item_to_list is expected to handle these confirmed_action and temp_category_id
+        result = manager.add_item_to_list(
+            name=product_data['name'],
+            quantity_str=product_data['quantity_str'],
+            purchase_date_str=product_data['purchase_date_str'],
+            expiry_days=product_data['expiry_days'],
+            category=product_data['category'],
+            subcategory=product_data['subcategory'],
+            par_level=product_data['par_level'],
+            max_holding_amount=product_data['max_holding_amount'],
+            purchase_location=product_data['purchase_location'],
+            unit_of_measure=product_data['unit_of_measure'],
+            confirmed_action=action_required,
+            temp_category_id=confirmation_details.get('category_id') # Used if action_required is 'confirm_new_subcategory'
+        )
+
+        if result.get("success"):
+            final_success_count += 1
+        else:
+            msg = result.get('message', f"An error occurred processing item '{product_data['name']}' after confirmation.")
+            if result.get("action_required"): # Should not happen if confirmation logic is complete
+                msg += f" Further action might still be needed: {result.get('action_required')}"
+            final_error_messages.append(msg)
+
+        if result.get("warnings"):
+            # Add row context to warnings from this stage
+            row_idx_info = f" (Row {item_data_package.get('row_idx', 'N/A')})" if item_data_package.get('row_idx') else ""
+            for warning in result.get("warnings"):
+                 all_upload_warnings.append(f"Post-confirmation{row_idx_info} for '{product_data['name']}': {warning}")
+
+
+    if final_success_count > 0:
+        flash(f"Successfully processed and added {final_success_count} confirmed items.", "success")
+    if final_error_messages:
+        flash(f"{len(final_error_messages)} items had errors during final processing:", "error")
+        for err_msg in final_error_messages[:10]:
+            flash(err_msg, "error_detail")
+    if all_upload_warnings: # Display all accumulated warnings
+        flash("Warnings encountered during the entire upload process:", "warning")
+        for warn_msg in all_upload_warnings[:10]:
+            flash(warn_msg, "warning_detail")
+
+    return redirect(url_for('current_inventory_view'))
 
 @app.route('/recipes/add', methods=['GET', 'POST'])
 def add_recipe_view():
@@ -1390,8 +1484,8 @@ def list_products_view():
 def create_product_view():
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
-        category = request.form.get('category', '').strip()
-        subcategory = request.form.get('subcategory', '').strip()
+        category_id_str = request.form.get('category_id', '').strip()
+        subcategory_id_str = request.form.get('subcategory_id', '').strip() # Can be empty if optional
         unit_of_measure = request.form.get('unit_of_measure', '').strip()
         default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
         par_level_str = request.form.get('par_level', '0').strip()
@@ -1402,6 +1496,21 @@ def create_product_view():
         if not name: errors.append("Product name is required.")
         if not unit_of_measure: errors.append("Unit of measure is required.")
         if not default_expiry_days_str: errors.append("Default expiry days are required.")
+        if not category_id_str: errors.append("Category is required.")
+
+        category_id = None
+        if category_id_str:
+            try:
+                category_id = int(category_id_str)
+            except ValueError:
+                errors.append("Invalid Category ID.")
+
+        subcategory_id = None
+        if subcategory_id_str: # Only attempt conversion if a value is provided
+            try:
+                subcategory_id = int(subcategory_id_str)
+            except ValueError:
+                errors.append("Invalid Subcategory ID.")
 
         default_expiry_days = None
         try:
@@ -1436,12 +1545,14 @@ def create_product_view():
         if errors:
             for error in errors:
                 flash(error, 'error')
-            return render_template('create_product.html', form_data=request.form)
+            # Fetch categories again for re-rendering the form with dropdowns
+            all_categories_data = manager.get_all_categories_with_subcategories()
+            return render_template('create_product.html', form_data=request.form, categories_data=all_categories_data)
 
         result = manager.create_product(
             name=name,
-            category=category if category else None,
-            subcategory=subcategory if subcategory else None,
+            category_id=category_id,
+            subcategory_id=subcategory_id, # Will be None if not provided or empty
             unit_of_measure=unit_of_measure,
             default_expiry_days=default_expiry_days,
             par_level=par_level,
@@ -1454,21 +1565,26 @@ def create_product_view():
             return redirect(url_for('list_products_view'))
         else:
             flash(result.get("message", "An error occurred creating the product."), 'error')
-            return render_template('create_product.html', form_data=request.form)
+            all_categories_data = manager.get_all_categories_with_subcategories()
+            return render_template('create_product.html', form_data=request.form, categories_data=all_categories_data)
 
-    return render_template('create_product.html', form_data={})
+    # GET request
+    all_categories_data = manager.get_all_categories_with_subcategories()
+    return render_template('create_product.html', form_data={}, categories_data=all_categories_data)
 
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
 def edit_product_view(product_id):
-    product = manager.get_product(product_id)
+    product = manager.get_product(product_id) # This now fetches category_name, subcategory_name, category_id, subcategory_id
     if not product:
         flash(f"Product with ID {product_id} not found.", 'error')
         return redirect(url_for('list_products_view'))
 
+    all_categories_data = manager.get_all_categories_with_subcategories() # For dropdowns
+
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
-        category = request.form.get('category', '').strip()
-        subcategory = request.form.get('subcategory', '').strip()
+        category_id_str = request.form.get('category_id', '').strip()
+        subcategory_id_str = request.form.get('subcategory_id', '').strip()
         unit_of_measure = request.form.get('unit_of_measure', '').strip()
         default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
         par_level_str = request.form.get('par_level', '0').strip()
@@ -1479,6 +1595,21 @@ def edit_product_view(product_id):
         if not name: errors.append("Product name is required.")
         if not unit_of_measure: errors.append("Unit of measure is required.")
         if not default_expiry_days_str: errors.append("Default expiry days are required.")
+        if not category_id_str: errors.append("Category is required.")
+
+        category_id = None
+        if category_id_str:
+            try:
+                category_id = int(category_id_str)
+            except ValueError:
+                errors.append("Invalid Category ID.")
+
+        subcategory_id = None
+        if subcategory_id_str: # Optional field
+            try:
+                subcategory_id = int(subcategory_id_str)
+            except ValueError:
+                errors.append("Invalid Subcategory ID.")
 
         default_expiry_days = None
         try:
@@ -1512,14 +1643,18 @@ def edit_product_view(product_id):
                 flash(error, 'error')
             # Pass current form data back to template, merge with original product data for safety
             form_data = request.form.to_dict()
-            product_data_for_template = {**product, **form_data} # Form data overrides product data if keys clash
-            return render_template('edit_product.html', product=product_data_for_template)
+            # Ensure IDs are integers if they exist for form_data repopulation
+            if 'category_id' in form_data and form_data['category_id']: form_data['category_id'] = int(form_data['category_id'])
+            if 'subcategory_id' in form_data and form_data['subcategory_id']: form_data['subcategory_id'] = int(form_data['subcategory_id'])
 
-        result = manager.update_product(
+            product_data_for_template = {**product, **form_data}
+            return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
+
+        result = manager.update_product( # update_product expects IDs
             product_id=product_id,
             name=name,
-            category=category if category else None,
-            subcategory=subcategory if subcategory else None,
+            category_id=category_id,
+            subcategory_id=subcategory_id, # Pass None if empty
             unit_of_measure=unit_of_measure,
             default_expiry_days=default_expiry_days,
             par_level=par_level,
@@ -1533,11 +1668,13 @@ def edit_product_view(product_id):
         else:
             flash(result.get("message", f"An error occurred updating product ID {product_id}."), 'error')
             form_data = request.form.to_dict()
+            if 'category_id' in form_data and form_data['category_id']: form_data['category_id'] = int(form_data['category_id'])
+            if 'subcategory_id' in form_data and form_data['subcategory_id']: form_data['subcategory_id'] = int(form_data['subcategory_id'])
             product_data_for_template = {**product, **form_data}
-            return render_template('edit_product.html', product=product_data_for_template)
+            return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
 
-    # GET request: pass the fetched product data to the template
-    return render_template('edit_product.html', product=product)
+    # GET request: pass the fetched product data and all categories data to the template
+    return render_template('edit_product.html', product=product, categories_data=all_categories_data)
 
 # --- Inventory Management Routes ---
 @app.route('/inventory/add_stock', methods=['GET', 'POST'])
@@ -1733,6 +1870,45 @@ def edit_inventory_view():
                            selected_product_id=selected_product_id,
                            selected_product_name=selected_product_name,
                            inventory_batches=inventory_batches)
+
+# --- Category and Subcategory Management Route ---
+@app.route('/manage_categories', methods=['GET', 'POST'])
+def manage_categories_view():
+    if request.method == 'POST':
+        action_type = request.form.get('action_type')
+        if action_type == 'add_category':
+            category_name = request.form.get('category_name', '').strip()
+            if category_name:
+                result = manager.add_category(category_name)
+                if result.get('success'):
+                    flash(result['message'], 'success')
+                else:
+                    flash(result['message'], 'error')
+            else:
+                flash("Category name cannot be empty.", 'error')
+
+        elif action_type == 'add_subcategory':
+            subcategory_name = request.form.get('subcategory_name', '').strip()
+            category_id_str = request.form.get('category_id')
+            if subcategory_name and category_id_str:
+                try:
+                    category_id = int(category_id_str)
+                    result = manager.add_subcategory(subcategory_name, category_id)
+                    if result.get('success'):
+                        flash(result['message'], 'success')
+                    else:
+                        flash(result['message'], 'error')
+                except ValueError:
+                    flash("Invalid Category ID.", 'error')
+            else:
+                flash("Subcategory name and Category ID are required.", 'error')
+        else:
+            flash("Invalid action.", 'error')
+        return redirect(url_for('manage_categories_view'))
+
+    # GET request
+    categories_data = manager.get_all_categories_with_subcategories()
+    return render_template('manage_categories.html', categories_data=categories_data)
 
 @app.route('/product_modal_details/<int:product_id>', methods=['GET'])
 def product_modal_details(product_id):

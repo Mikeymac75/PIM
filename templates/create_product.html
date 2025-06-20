@@ -4,19 +4,44 @@
 
 {% block content %}
 <h1>Create New Product</h1>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class=flashes>
+    {% for category, message in messages %}
+      <li class="{{ category }}">{{ message }}</li>
+    {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+
 <form method="POST" action="{{ url_for('create_product_view') }}">
     <div>
         <label for="name">Product Name:</label>
         <input type="text" id="name" name="name" value="{{ form_data.name if form_data else '' }}" required>
     </div>
+
     <div>
-        <label for="category">Category:</label>
-        <input type="text" id="category" name="category" value="{{ form_data.category if form_data else '' }}">
+        <label for="category_id">Category:</label>
+        <select id="category_id" name="category_id" required>
+            <option value="">-- Select Category --</option>
+            {% for category in categories_data %}
+                <option value="{{ category.id }}" {% if form_data and form_data.category_id|int == category.id %}selected{% endif %}>
+                    {{ category.name }}
+                </option>
+            {% endfor %}
+        </select>
     </div>
+
     <div>
-        <label for="subcategory">Subcategory:</label>
-        <input type="text" id="subcategory" name="subcategory" value="{{ form_data.subcategory if form_data else '' }}">
+        <label for="subcategory_id">Subcategory:</label>
+        <select id="subcategory_id" name="subcategory_id">
+            <option value="">-- Optional --</option>
+            {# Subcategory options will be populated by JavaScript #}
+            {# If form_data exists and has subcategory_id, JS should select it #}
+        </select>
     </div>
+
     <div>
         <label for="unit_of_measure">Unit of Measure:</label>
         <input type="text" id="unit_of_measure" name="unit_of_measure" value="{{ form_data.unit_of_measure if form_data else '' }}" required>
@@ -41,4 +66,46 @@
         <button type="submit" class="button"><i class="fas fa-plus-square"></i> Create Product</button>
     </div>
 </form>
+
+<script>
+    // Embed categories data from Flask into JavaScript
+    const categoriesData = {{ categories_data|tojson|safe }};
+    const selectedCategoryId = "{{ form_data.category_id if form_data else '' }}";
+    const selectedSubcategoryId = "{{ form_data.subcategory_id if form_data else '' }}";
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const categorySelect = document.getElementById('category_id');
+        const subcategorySelect = document.getElementById('subcategory_id');
+
+        function populateSubcategories(categoryId) {
+            // Clear existing subcategory options
+            subcategorySelect.innerHTML = '<option value="">-- Optional --</option>';
+
+            if (categoryId && categoriesData) {
+                const selectedCategory = categoriesData.find(category => category.id.toString() === categoryId);
+                if (selectedCategory && selectedCategory.subcategories) {
+                    selectedCategory.subcategories.forEach(subcategory => {
+                        const option = document.createElement('option');
+                        option.value = subcategory.id;
+                        option.textContent = subcategory.name;
+                        if (selectedSubcategoryId && subcategory.id.toString() === selectedSubcategoryId) {
+                            option.selected = true;
+                        }
+                        subcategorySelect.appendChild(option);
+                    });
+                }
+            }
+        }
+
+        // Event listener for category change
+        categorySelect.addEventListener('change', function () {
+            populateSubcategories(this.value);
+        });
+
+        // Initial population of subcategories if a category is already selected (e.g., on form validation error)
+        if (selectedCategoryId) {
+            populateSubcategories(selectedCategoryId);
+        }
+    });
+</script>
 {% endblock %}
