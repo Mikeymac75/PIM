@@ -113,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Render Charts
             if (dailyConsumptionChartCanvas) {
-                 renderDailyChart(data.daily_consumption || []);
+                 renderDailyChart(data.daily_consumption || [], data.daily_inventory_history || []);
             }
             if (monthlyConsumptionChartCanvas) {
                 renderMonthlyChart(data.monthly_consumption || []);
@@ -163,31 +163,60 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // renderDailyChart function
-    function renderDailyChart(dailyData) {
+    function renderDailyChart(dailyData, dailyInventoryHistory) {
         if (!dailyConsumptionChartCanvas) return;
         const ctx = dailyConsumptionChartCanvas.getContext('2d');
 
-        const labels = dailyData.map(item => item.consumption_date); // Corrected from item.date
-        const dataValues = dailyData.map(item => item.total_quantity_consumed);
+        // Use inventory history labels as the primary source for chart labels
+        const chartLabels = dailyInventoryHistory.map(item => item.inventory_date);
+
+        const consumptionDataValues = chartLabels.map(labelDate => {
+            const consItem = dailyData.find(item => item.consumption_date === labelDate);
+            return consItem ? consItem.total_quantity_consumed : 0;
+        });
+
+        const inventoryDataValues = dailyInventoryHistory.map(item => item.quantity_on_hand);
 
         if (dailyChartInstance) {
             dailyChartInstance.destroy();
         }
+
+        const maxConsumption = Math.max(...consumptionDataValues, 0);
+        const maxInventory = Math.max(...inventoryDataValues, 0);
+        const suggestedMaxY = Math.max(maxConsumption, maxInventory) + 1;
+
         dailyChartInstance = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Quantity Consumed',
-                    data: dataValues,
-                    borderColor: 'rgb(75, 192, 192)',
-                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                    tension: 0.1,
-                    fill: true,
-                }]
+                labels: chartLabels,
+                datasets: [
+                    {
+                        label: 'Quantity Consumed',
+                        data: consumptionDataValues,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1,
+                        fill: true,
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: 'Current On-Hand Inventory',
+                        data: inventoryDataValues,
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.1,
+                        fill: true,
+                        yAxisID: 'y',
+                    }
+                ]
             },
             options: {
-                scales: { y: { beginAtZero: true, suggestedMax: Math.max(...dataValues, 0) + 1  } }, // Ensure y-axis adapts
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        suggestedMax: suggestedMaxY
+                    }
+                },
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
