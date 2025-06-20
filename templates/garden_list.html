@@ -185,13 +185,17 @@
 
                     // Check visibility immediately after initialization
                     if ($(this).is(':visible')) {
-                        console.warn("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE immediately after .modal({ show: false }). Attempting .modal('hide').");
-                        $(this).modal('hide'); // More forceful hide
-                        if ($(this).is(':visible')) {
-                             console.error("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE even after .modal('hide')!");
-                        } else {
-                             console.log("Garden_list.html: Modal #" + modalId + " successfully hidden with .modal('hide').");
-                        }
+                        console.warn("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE. Scheduling .modal('hide') with setTimeout.");
+                        var $modal = $(this); // Capture $(this) for use in setTimeout, to avoid context issues.
+                        setTimeout(function() {
+                            console.log("Garden_list.html: setTimeout triggered for #" + modalId + ". Attempting .modal('hide').");
+                            $modal.modal('hide'); // Use the captured $modal
+                            if ($modal.is(':visible')) {
+                                 console.error("Garden_list.html: Modal #" + modalId + " is STILL VISIBLE even after .modal('hide') in setTimeout!");
+                            } else {
+                                 console.log("Garden_list.html: Modal #" + modalId + " successfully hidden with .modal('hide') in setTimeout.");
+                            }
+                        }, 10); // Using a 10ms delay
                     } else {
                         console.log("Garden_list.html: Modal #" + modalId + " is hidden as expected after .modal({ show: false }).");
                     }
