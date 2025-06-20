@@ -569,7 +569,7 @@ class InventoryManager:
             return None
 
     def get_all_products(self, search_term=None, category=None, purchase_location=None,
-                         sort_by='name', sort_order='ASC', page=1, per_page=10):
+                         sort_by='name', sort_order='ASC', page=None, per_page=None):
         """
         Retrieves products from the products table with filtering, sorting, and pagination.
         - search_term: Filters by product name (case-insensitive).
@@ -618,13 +618,15 @@ class InventoryManager:
         query += f" ORDER BY {sort_column} {sort_order_upper}"
 
         # Pagination
-        if page is not None and per_page is not None and page > 0 and per_page > 0:
+        # If page or per_page is None, or if per_page is not a positive integer,
+        # do not apply LIMIT and OFFSET, effectively fetching all products.
+        if page is not None and per_page is not None and \
+           isinstance(page, int) and isinstance(per_page, int) and \
+           page > 0 and per_page > 0:
             offset = (page - 1) * per_page
             query += " LIMIT ? OFFSET ?"
             params.extend([per_page, offset])
-        elif per_page is not None and per_page > 0: # If only per_page is specified, assume page 1
-            query += " LIMIT ?"
-            params.append(per_page)
+        # No 'else' or 'elif' here: if conditions are not met, pagination is skipped.
 
         try:
             with self._get_db_connection() as conn:
