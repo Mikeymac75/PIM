@@ -20,8 +20,8 @@
                     <li class="{% if request.endpoint == 'home' %}current{% endif %}"><a href="{{ url_for('home') }}"><i class="fas fa-home"></i> Home</a></li>
 
                     <!-- Recipes Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['add_recipe_view', 'recipes_list_view'] %}current{% endif %}">
-                        <a href="#" class="dropbtn"><i class="fas fa-book"></i> Recipes <i class="fas fa-caret-down"></i></a>
+                    <li class="dropdown {% if request.endpoint in ['add_recipe_view', 'recipes_list_view', 'recipes_links_view'] %}current{% endif %}">
+                        <a href="{{ url_for('recipes_links_view') }}" class="dropbtn"><i class="fas fa-book"></i> Recipes <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('add_recipe_view') }}"><i class="fas fa-book-medical"></i> Add Recipe</a>
                             <a href="{{ url_for('recipes_list_view') }}"><i class="fas fa-book-open"></i> View Recipes</a>
@@ -29,8 +29,8 @@
                     </li>
 
                     <!-- Inventory & Usage Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['add_inventory_stock_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view'] %}current{% endif %}">
-                        <a href="#" class="dropbtn"><i class="fas fa-warehouse"></i> Inventory & Usage <i class="fas fa-caret-down"></i></a>
+                    <li class="dropdown {% if request.endpoint in ['add_inventory_stock_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view'] %}current{% endif %}">
+                        <a href="{{ url_for('inventory_usage_links_view') }}" class="dropbtn"><i class="fas fa-warehouse"></i> Inventory & Usage <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('add_inventory_stock_view') }}"><i class="fas fa-plus-circle"></i> Add Stock</a>
                             <a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a>
@@ -41,8 +41,8 @@
                     </li>
 
                     <!-- Products Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['list_products_view', 'create_product_view'] %}current{% endif %}">
-                        <a href="#" class="dropbtn"><i class="fas fa-shopping-basket"></i> Products <i class="fas fa-caret-down"></i></a>
+                    <li class="dropdown {% if request.endpoint in ['list_products_view', 'create_product_view', 'products_links_view'] %}current{% endif %}">
+                        <a href="{{ url_for('products_links_view') }}" class="dropbtn"><i class="fas fa-shopping-basket"></i> Products <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('list_products_view') }}"><i class="fas fa-tasks"></i> Manage Products</a>
                             <a href="{{ url_for('create_product_view') }}"><i class="fas fa-plus-square"></i> Create New Product</a>

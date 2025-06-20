@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Inventory & Usage Links - {{ super() }}{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Inventory & Usage Links</h1>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <p>Select an inventory or usage related action:</p>
+    <ul>
+        <li><a href="{{ url_for('add_inventory_stock_view') }}"><i class="fas fa-plus-circle"></i> Add Stock</a></li>
+        <li><a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a></li>
+        <li><a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a></li>
+        <li><a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a></li>
+        <li><a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a></li>
+    </ul>
+</div>
+{% endblock %}

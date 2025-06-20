@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Recipe Links - {{ super() }}{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Recipe Links</h1>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <p>Select a recipe-related action:</p>
+    <ul>
+        <li><a href="{{ url_for('add_recipe_view') }}"><i class="fas fa-book-medical"></i> Add Recipe</a></li>
+        <li><a href="{{ url_for('recipes_list_view') }}"><i class="fas fa-book-open"></i> View Recipes</a></li>
+    </ul>
+</div>
+{% endblock %}
