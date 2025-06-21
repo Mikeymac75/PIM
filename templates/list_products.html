@@ -99,8 +99,8 @@
         <tr>
             <td>{{ product.id }}</td>
             <td><a href="#" class="product-name-link" data-product-id="{{ product.id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ product.name }}</a></td>
-            <td>{{ product.category_name if product.category_name is not none else '' }}</td>
-            <td>{{ product.subcategory_name if product.subcategory_name is not none else '' }}</td>
+            <td>{{ product.category_name if product.category_name is not none else '--' }}</td>
+            <td>{{ product.subcategory_name if product.subcategory_name is not none else '--' }}</td>
             <td>{{ product.unit_of_measure }}</td>
             <td>{{ product.default_expiry_days }}</td>
             <td>{{ product.par_level if product.par_level is not none else '' }}</td>

@@ -26,7 +26,9 @@
         <select id="category_id" name="category_id" required>
             <option value="">-- Select Category --</option>
             {% for category_item in categories_data %}
-                <option value="{{ category_item.id }}" {% if product.category_id|int == category_item.id %}selected{% endif %}>
+                {# Ensure product.category_id is treated as int for comparison if it comes from form_data as string #}
+                <option value="{{ category_item.id }}"
+                        {% if product.category_id and product.category_id|int == category_item.id %}selected{% endif %}>
                     {{ category_item.name }}
                 </option>
             {% endfor %}
@@ -71,26 +73,30 @@
     // Embed categories data from Flask into JavaScript
     const allCategoriesData = {{ categories_data|tojson|safe }};
     // Embed current product's category and subcategory IDs for pre-selection
-    const currentProductCategoryId = "{{ product.category_id|default('', true) }}";
-    const currentProductSubcategoryId = "{{ product.subcategory_id|default('', true) }}";
+    // Ensure these are strings for consistent comparison, or handle type conversion in JS.
+    // .get() is used on product for safety if it's a dict from form_data which might miss keys.
+    const currentProductCategoryId = "{{ product.get('category_id')|default('', true) }}";
+    const currentProductSubcategoryId = "{{ product.get('subcategory_id')|default('', true) }}";
 
     document.addEventListener('DOMContentLoaded', function () {
         const categorySelect = document.getElementById('category_id');
         const subcategorySelect = document.getElementById('subcategory_id');
 
         function populateSubcategories(selectedCatId) {
-            // Clear existing subcategory options
-            subcategorySelect.innerHTML = '<option value="">-- Optional --</option>'; // Keep the optional default
+            subcategorySelect.innerHTML = '<option value="">-- Optional --</option>'; // Reset with default
 
             if (selectedCatId && allCategoriesData) {
-                const selectedCategoryData = allCategoriesData.find(category => category.id.toString() === selectedCatId);
+                const selectedCategoryData = allCategoriesData.find(category => category.id.toString() === selectedCatId.toString());
+
                 if (selectedCategoryData && selectedCategoryData.subcategories) {
                     selectedCategoryData.subcategories.forEach(subcategory => {
                         const option = document.createElement('option');
                         option.value = subcategory.id;
                         option.textContent = subcategory.name;
-                        // Pre-select if it matches the product's current subcategory
-                        if (currentProductSubcategoryId && subcategory.id.toString() === currentProductSubcategoryId && selectedCatId === currentProductCategoryId) {
+                        // Pre-select if it matches the product's current subcategory AND current category
+                        if (currentProductSubcategoryId &&
+                            subcategory.id.toString() === currentProductSubcategoryId.toString() &&
+                            selectedCatId.toString() === currentProductCategoryId.toString()) {
                             option.selected = true;
                         }
                         subcategorySelect.appendChild(option);
@@ -99,25 +105,25 @@
             }
         }
 
-        // Event listener for category change
         categorySelect.addEventListener('change', function () {
-            // When category changes, we are no longer trying to pre-select the product's original subcategory
-            // unless the selected category is the product's original category.
-            // For a manual change, the user is expected to pick a new subcategory.
-            // However, for the initial load, we need to respect currentProductSubcategoryId.
-            // The current logic in populateSubcategories already handles pre-selection based on currentProductSubcategoryId
-            // if the selectedCatId matches currentProductCategoryId.
+            // When category changes manually, we don't necessarily want to keep the old subcategory selected
+            // unless the new category selection is the product's original category.
+            // The populateSubcategories function will only auto-select if the selectedCatId matches currentProductCategoryId.
+            // If a user changes the main category, the subcategory should reset to "-- Optional --" or the first available,
+            // unless the change was back to the original main category.
+            // For a manual change, we effectively want to clear the subcategory pre-selection unless the category selected IS the original one.
+
+            // If the newly selected category is NOT the product's original category, then currentProductSubcategoryId should not be used for preselection.
+            // However, if they re-select the original category, then the original subcategory should be re-selected.
+            // This is handled by the condition `selectedCatId.toString() === currentProductCategoryId.toString()` inside populateSubcategories.
             populateSubcategories(this.value);
         });
 
-        // Initial population of subcategories if a category is already selected
-        // This ensures that when the page loads with an existing product,
-        // its subcategories are shown and its current subcategory is selected.
-        if (currentProductCategoryId) {
-            populateSubcategories(currentProductCategoryId);
-        } else if (categorySelect.value) {
-            // Fallback if currentProductCategoryId is not set but categorySelect has a value (e.g. from form_data on error)
-             populateSubcategories(categorySelect.value);
+        // Initial population:
+        // If category_id is already set (e.g. from product data or form_data on error), populate subcategories.
+        const initialCategoryId = categorySelect.value;
+        if (initialCategoryId) {
+            populateSubcategories(initialCategoryId);
         }
     });
 </script>

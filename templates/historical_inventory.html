@@ -81,7 +81,8 @@
                     {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
                     {{ sortable_header('quantity_consumed', 'Quantity Consumed', sort_by, sort_order, current_filters) }}
                     <th class="historical-inventory-header">Unit</th> {# Not sortable as per plan #}
-                    {{ sortable_header('category', 'Category', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('category_name', 'Category', sort_by, sort_order, current_filters) }} {# Sort by c.name via category_name #}
+                    <th class="historical-inventory-header">Subcategory</th> {# Not sortable by default #}
                     {{ sortable_header('purchase_date', 'Original Purchase Date', sort_by, sort_order, current_filters) }}
                     {{ sortable_header('expiry_date', 'Original Expiry Date', sort_by, sort_order, current_filters) }}
                     {{ sortable_header('consumed_date', 'Consumed Date', sort_by, sort_order, current_filters) }}
@@ -98,8 +99,9 @@
                         {% endif %}
                     </td>
                     <td>{{ "%.2f"|format(item.quantity_consumed_this_time) if item.quantity_consumed_this_time is number else item.quantity_consumed_this_time }}</td>
-                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td>
-                    <td>{{ item.category if item.category else '-' }}</td>
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '--' }}</td>
+                    <td>{{ item.category_name if item.category_name else '--' }}</td>
+                    <td>{{ item.subcategory_name if item.subcategory_name else '--' }}</td>
                     <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
                     <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
                     <td>{{ item.consumed_date.isoformat() if item.consumed_date else 'N/A' }}</td>

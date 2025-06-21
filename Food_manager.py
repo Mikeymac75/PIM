@@ -1375,18 +1375,22 @@ class InventoryManager:
             SELECT
                 ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
                 ii.original_quantity_string,
-                p.name AS product_name, p.category, p.subcategory, p.unit_of_measure,
-                p.par_level, p.max_holding_amount, p.purchase_location
+                p.name AS product_name,
+                p.unit_of_measure, p.par_level, p.max_holding_amount, p.purchase_location,
+                c.name AS category_name,
+                sc.name AS subcategory_name
             FROM inventory_items ii
             JOIN products p ON ii.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
         """
 
         where_clauses = []
         if search_term:
             where_clauses.append("LOWER(p.name) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category:
-            where_clauses.append("LOWER(p.category) = ?")
+        if category: # Filter by category NAME from joined 'categories' table
+            where_clauses.append("LOWER(c.name) = ?")
             params.append(category.lower())
         if purchase_location:
             where_clauses.append("LOWER(p.purchase_location) = ?")
@@ -1404,7 +1408,7 @@ class InventoryManager:
         # Sorting
         valid_sort_columns = {
             'product_name': 'p.name',
-            'category': 'p.category',
+            'category_name': 'c.name', # Updated to sort by category_name
             'purchase_location': 'p.purchase_location',
             'expiry_date': 'ii.expiry_date',
             'purchase_date': 'ii.purchase_date',
@@ -1456,14 +1460,15 @@ class InventoryManager:
             SELECT COUNT(ii.id) as count
             FROM inventory_items ii
             JOIN products p ON ii.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
         """
 
         where_clauses = []
         if search_term:
             where_clauses.append("LOWER(p.name) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category:
-            where_clauses.append("LOWER(p.category) = ?")
+        if category: # Filter by category NAME
+            where_clauses.append("LOWER(c.name) = ?")
             params.append(category.lower())
         if purchase_location:
             where_clauses.append("LOWER(p.purchase_location) = ?")
@@ -1492,11 +1497,12 @@ class InventoryManager:
         """Retrieves unique categories from products currently in inventory."""
         categories = []
         query = """
-            SELECT DISTINCT p.category
-            FROM products p
-            JOIN inventory_items ii ON p.id = ii.product_id
-            WHERE p.category IS NOT NULL
-            ORDER BY p.category ASC
+            SELECT DISTINCT c.name
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+            JOIN categories c ON p.category_id = c.id
+            WHERE c.name IS NOT NULL
+            ORDER BY c.name ASC
         """
         try:
             with self._get_db_connection() as conn:
@@ -1504,7 +1510,7 @@ class InventoryManager:
                 cursor.execute(query)
                 rows = cursor.fetchall()
                 for row in rows:
-                    categories.append(row['category'])
+                    categories.append(row['name']) # Select c.name
         except sqlite3.Error as e:
             print(f"Database error fetching current inventory categories: {e}")
         return categories
@@ -1709,18 +1715,22 @@ class InventoryManager:
                 COALESCE(p.name, hi.name) AS product_display_name,
                 hi.quantity_consumed_this_time, hi.original_quantity_string,
                 hi.purchase_date, hi.expiry_date, hi.consumed_date,
-                p.category, p.subcategory, p.unit_of_measure
+                p.unit_of_measure,
+                c.name AS category_name,
+                sc.name AS subcategory_name
             FROM historical_items hi
             LEFT JOIN products p ON hi.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
         """
 
         where_clauses = []
         if search_term:
             where_clauses.append("LOWER(COALESCE(p.name, hi.name)) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category:
+        if category: # Filter by category NAME
             # This will only include items that have a linked product and category
-            where_clauses.append("p.category IS NOT NULL AND LOWER(p.category) = ?")
+            where_clauses.append("c.name IS NOT NULL AND LOWER(c.name) = ?")
             params.append(category.lower())
         if consumed_start_date:
             where_clauses.append("hi.consumed_date >= ?")
@@ -1734,8 +1744,8 @@ class InventoryManager:
 
         # Sorting
         valid_sort_columns = {
-            'product_name': 'product_display_name', # Use alias from COALESCE
-            'category': 'p.category',
+            'product_name': 'product_display_name',
+            'category_name': 'c.name', # Updated to category_name
             'quantity_consumed': 'hi.quantity_consumed_this_time',
             'consumed_date': 'hi.consumed_date',
             'purchase_date': 'hi.purchase_date', # Added for completeness
@@ -1787,14 +1797,15 @@ class InventoryManager:
             SELECT COUNT(hi.id) as count
             FROM historical_items hi
             LEFT JOIN products p ON hi.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
         """
 
         where_clauses = []
         if search_term:
             where_clauses.append("LOWER(COALESCE(p.name, hi.name)) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category:
-            where_clauses.append("p.category IS NOT NULL AND LOWER(p.category) = ?")
+        if category: # Filter by category NAME
+            where_clauses.append("c.name IS NOT NULL AND LOWER(c.name) = ?")
             params.append(category.lower())
         if consumed_start_date:
             where_clauses.append("hi.consumed_date >= ?")
@@ -1820,23 +1831,20 @@ class InventoryManager:
         """Retrieves unique categories from products recorded in historical inventory."""
         categories = []
         query = """
-            SELECT DISTINCT p.category
-            FROM products p
-            JOIN historical_items hi ON p.id = hi.product_id
-            WHERE p.category IS NOT NULL
-            ORDER BY p.category ASC
+            SELECT DISTINCT c.name
+            FROM historical_items hi
+            JOIN products p ON hi.product_id = p.id
+            JOIN categories c ON p.category_id = c.id
+            WHERE c.name IS NOT NULL
+            ORDER BY c.name ASC
         """
-        # Using JOIN (INNER JOIN) implicitly means we only get categories for historical items
-        # that have a valid product_id and that product still exists in the products table.
-        # If we wanted categories even for items where product might have been deleted later,
-        # but category was stored historically (not current design), this query would change.
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
                 rows = cursor.fetchall()
                 for row in rows:
-                    categories.append(row['category'])
+                    categories.append(row['name']) # Select c.name
         except sqlite3.Error as e:
             print(f"Database error fetching historical inventory categories: {e}")
         return categories
