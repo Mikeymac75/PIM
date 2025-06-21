@@ -530,6 +530,177 @@ def upload_excel_view():
     # Otherwise, it's a normal GET request for the upload form (or after processing with no pending items)
     return render_template('upload_excel.html', upload_warnings=upload_warnings) # Pass warnings even for initial page load if any exist (e.g. from previous failed confirm)
 
+@app.route('/upload_recipes_excel', methods=['GET', 'POST'])
+def upload_recipes_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                workbook = openpyxl.load_workbook(file)
+                sheet = workbook.active
+
+                header_row_values = [cell.value for cell in sheet[1]]
+                header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
+
+                # Define expected headers (case-insensitive)
+                # Base headers
+                expected_base_headers = ['recipe name', 'description', 'instructions',
+                                         'output product name', 'output yield']
+                # Ingredient headers (dynamic part)
+                expected_ingredient_headers = []
+                for i in range(1, 16): # Max 15 ingredients
+                    expected_ingredient_headers.append(f'ingredient {i} name')
+                    expected_ingredient_headers.append(f'ingredient {i} quantity')
+                    expected_ingredient_headers.append(f'ingredient {i} notes')
+
+                all_expected_headers = expected_base_headers + expected_ingredient_headers
+
+                # Check for mandatory 'Recipe Name' header
+                if 'recipe name' not in header_map:
+                    flash("Missing required column in Excel: 'Recipe Name'. Please check headers.", 'error')
+                    return redirect(request.url)
+
+                recipes_added_count = 0
+                error_messages = []
+                warning_messages = []
+
+                for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                    # Helper to get cell value by header name, returns None if header missing or cell empty
+                    def get_cell_value(header_name):
+                        col_idx = header_map.get(header_name.lower())
+                        if col_idx is not None and len(row) > col_idx and row[col_idx] is not None:
+                            return str(row[col_idx]).strip()
+                        return None
+
+                    recipe_name = get_cell_value('Recipe Name')
+
+                    if not recipe_name: # Skip row if recipe name is missing
+                        # Check if any other cell in the row has data to avoid skipping genuinely sparse rows vs. blank rows.
+                        if any(get_cell_value(h) for h in all_expected_headers if h.lower() != 'recipe name'):
+                            error_messages.append(f"Row {row_idx}: Recipe Name is missing but other data present. Skipped.")
+                        continue # Skip blank or effectively blank rows silently
+
+                    description = get_cell_value('Description')
+                    instructions = get_cell_value('Instructions')
+                    output_product_name_str = get_cell_value('Output Product Name')
+                    output_yield_str = get_cell_value('Output Yield')
+
+                    row_specific_errors = []
+
+                    # Validate Output Product and Yield
+                    output_product_id = None
+                    output_yield_float = None
+
+                    if output_product_name_str:
+                        product = manager.get_product_by_name(output_product_name_str)
+                        if not product:
+                            row_specific_errors.append(f"Output Product Name '{output_product_name_str}' not found in system.")
+                        else:
+                            output_product_id = product['id']
+                            if not output_yield_str:
+                                row_specific_errors.append("Output Yield is required when Output Product Name is provided.")
+                            else:
+                                try:
+                                    output_yield_float = float(output_yield_str)
+                                    if output_yield_float <= 0:
+                                        row_specific_errors.append("Output Yield must be a positive number.")
+                                except ValueError:
+                                    row_specific_errors.append(f"Invalid Output Yield '{output_yield_str}'. Must be a number.")
+                    elif output_yield_str: # Yield provided without product name
+                        warning_messages.append(f"Row {row_idx} ('{recipe_name}'): Output Yield '{output_yield_str}' provided without an Output Product Name. Yield will be ignored.")
+
+
+                    ingredients_data = []
+                    for i in range(1, 16):
+                        ing_name_str = get_cell_value(f'Ingredient {i} Name')
+                        ing_qty_str = get_cell_value(f'Ingredient {i} Quantity')
+                        ing_notes_str = get_cell_value(f'Ingredient {i} Notes') # Optional
+
+                        if ing_name_str:
+                            # Validate ingredient product exists (optional, recipe_mngr might handle it)
+                            # For now, let's assume recipe_mngr.add_recipe handles unknown ingredient names by flagging/erroring.
+                            if not ing_qty_str:
+                                row_specific_errors.append(f"Ingredient {i} Quantity is required for '{ing_name_str}'.")
+                            else:
+                                try:
+                                    ing_qty_float = float(ing_qty_str)
+                                    if ing_qty_float <= 0:
+                                        row_specific_errors.append(f"Ingredient {i} Quantity for '{ing_name_str}' must be positive.")
+                                    else:
+                                        ingredients_data.append({
+                                            'item_name': ing_name_str,
+                                            'quantity_required': ing_qty_float, # Matching add_recipe_view
+                                            'notes': ing_notes_str if ing_notes_str else "" # Notes are optional
+                                        })
+                                except ValueError:
+                                    row_specific_errors.append(f"Invalid Ingredient {i} Quantity '{ing_qty_str}' for '{ing_name_str}'. Must be a number.")
+                        elif ing_qty_str: # Quantity provided without ingredient name
+                             row_specific_errors.append(f"Ingredient {i} Name is missing but Quantity '{ing_qty_str}' was provided.")
+
+
+                    if row_specific_errors:
+                        error_messages.append(f"Row {row_idx} ('{recipe_name}'): " + "; ".join(row_specific_errors))
+                        continue # Skip this recipe due to errors
+
+                    # Prepare data for recipe_mngr.add_recipe()
+                    recipe_data_for_manager = {
+                        "name": recipe_name,
+                        "description": description if description else "",
+                        "instructions": instructions if instructions else "",
+                        "ingredients": ingredients_data,
+                        "output_product_id": output_product_id,
+                        "output_yield": output_yield_float
+                    }
+
+                    try:
+                        result = recipe_mngr.add_recipe(recipe_data_for_manager)
+                        if result.get("success"):
+                            recipes_added_count += 1
+                        else:
+                            error_messages.append(f"Row {row_idx} ('{recipe_name}'): Failed to add recipe - {result.get('message', 'Unknown error')}")
+                    except Exception as e:
+                        error_messages.append(f"Row {row_idx} ('{recipe_name}'): Unexpected error adding recipe - {str(e)}")
+
+                # Flash messages after processing all rows
+                if recipes_added_count > 0:
+                    flash(f"Successfully added {recipes_added_count} recipes from the Excel file.", 'success')
+
+                if warning_messages:
+                    flash(f"{len(warning_messages)} warnings encountered:", 'warning')
+                    for warn_msg in warning_messages[:10]: # Show up to 10 warnings
+                        flash(warn_msg, 'warning_detail')
+
+                if error_messages:
+                    flash(f"{len(error_messages)} rows/recipes had errors and were not processed. Details below:", 'error')
+                    for err_msg in error_messages[:10]: # Show up to 10 errors
+                        flash(err_msg, 'error_detail')
+
+                if recipes_added_count == 0 and not error_messages and not warning_messages:
+                     flash("No new recipes were found or added from the file. The file might be empty, data might start after row 2, or all recipes already exist.", 'info')
+
+                return redirect(url_for('recipes_list_view'))
+
+            except openpyxl.utils.exceptions.InvalidFileException:
+                 flash("The uploaded file is not a valid Excel (.xlsx) file or is corrupted.", 'error')
+                 return redirect(request.url)
+            except Exception as e:
+                app.logger.error(f"Error processing recipe Excel file: {e}", exc_info=True)
+                flash(f"An unexpected error occurred while processing the Excel file: {e}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    return render_template('upload_recipes_excel.html')
+
 @app.route('/confirm_excel_uploads', methods=['POST'])
 def confirm_excel_uploads_view():
     items_to_process = session.pop('items_pending_confirmation', [])
