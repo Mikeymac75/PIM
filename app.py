@@ -838,6 +838,8 @@ def add_recipe_view():
         if output_product_id is not None and output_yield is None:
             form_errors.append("Output Yield is required if an Output Product is selected.")
 
+        if output_product_id is None:
+            output_yield = None
 
         if form_errors:
             for error in form_errors:
@@ -932,6 +934,8 @@ def edit_recipe_view(recipe_id):
             if not (recipe.get('output_product_id') == output_product_id and recipe.get('output_yield') is None):
                  form_errors.append("Output Yield is required if an Output Product is selected.")
 
+        if output_product_id is None:
+            output_yield = None
 
         if form_errors:
             for error in form_errors:
