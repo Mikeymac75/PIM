@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
 from Food_manager import InventoryManager
-from recipe_manager import RecipeManager
+from RecipeManager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
 import os # For accessing environment variables
@@ -778,6 +778,7 @@ def add_recipe_view():
     all_db_products = manager.get_all_products(page=None, per_page=None) # For "Output Product" dropdown
 
     if request.method == 'POST':
+        app.logger.info(f"Add Recipe - Form data: output_product_id='{request.form.get('output_product_id')}', output_yield='{request.form.get('output_yield')}'")
         recipe_name = request.form.get('recipe_name', '').strip()
         description = request.form.get('description', '').strip()
         output_product_id_str = request.form.get('output_product_id')
@@ -855,7 +856,7 @@ def add_recipe_view():
             "output_product_id": output_product_id,
             "output_yield": output_yield
         }
-        
+        app.logger.info(f"Add Recipe - Processed recipe_data for add_recipe: {recipe_data}")
         # recipe_mngr.add_recipe was updated to handle output_product_id and output_yield
         result = recipe_mngr.add_recipe(recipe_data)
         
@@ -880,6 +881,7 @@ def edit_recipe_view(recipe_id):
     all_db_products = manager.get_all_products(page=None, per_page=None)
 
     if request.method == 'POST':
+        app.logger.info(f"Edit Recipe (ID: {recipe_id}) - Form data: output_product_id='{request.form.get('output_product_id')}', output_yield='{request.form.get('output_yield')}'")
         recipe_name = request.form.get('recipe_name', '').strip()
         description = request.form.get('description', '').strip()
         instructions = request.form.get('instructions', '').strip()
@@ -959,7 +961,7 @@ def edit_recipe_view(recipe_id):
             "output_product_id": output_product_id,
             "output_yield": output_yield
         }
-
+        app.logger.info(f"Edit Recipe (ID: {recipe_id}) - Processed updated_recipe_data for update_recipe: {updated_recipe_data}")
         result = recipe_mngr.update_recipe(recipe_id, updated_recipe_data)
 
         if result.get("success"):

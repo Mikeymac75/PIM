@@ -1,6 +1,6 @@
 import unittest
 import sqlite3
-from recipe_manager import RecipeManager
+from RecipeManager import RecipeManager
 
 class TestRecipeManager(unittest.TestCase):
 
