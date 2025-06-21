@@ -1306,6 +1306,16 @@ class InventoryManager:
                 can_create_product = True
                 print(f"LOG: can_create_product set to True after confirmed_new_category processing.")
 
+            # New diagnostic logs for the 'elif' condition:
+            print(f"LOG_DIAGNOSTIC_ELIF: Checking elif condition. confirmed_action Value: '{confirmed_action}', Type: {type(confirmed_action)}")
+            print(f"LOG_DIAGNOSTIC_ELIF: temp_category_id Value: {temp_category_id}, Type: {type(temp_category_id)}")
+            if isinstance(confirmed_action, str):
+                print(f"LOG_DIAGNOSTIC_ELIF_REPR: repr(confirmed_action): {repr(confirmed_action)}")
+                print(f"LOG_DIAGNOSTIC_ELIF_STRIP_CMP: (confirmed_action.strip() == 'confirm_new_subcategory'): {confirmed_action.strip() == 'confirm_new_subcategory'}")
+            print(f"LOG_DIAGNOSTIC_ELIF_DIRECT_CMP_ACTION: (confirmed_action == 'confirm_new_subcategory'): {confirmed_action == 'confirm_new_subcategory'}")
+            print(f"LOG_DIAGNOSTIC_ELIF_DIRECT_CMP_TEMP_ID: (temp_category_id is not None): {temp_category_id is not None}")
+            print(f"LOG_DIAGNOSTIC_ELIF_COMBINED_COND: ((confirmed_action == 'confirm_new_subcategory') and (temp_category_id is not None)): {(confirmed_action == 'confirm_new_subcategory') and (temp_category_id is not None)}")
+
             elif confirmed_action == "confirmed_new_subcategory" and temp_category_id is not None:
                 print(f"LOG: Handling confirmed_new_subcategory for '{excel_subcategory_name}' under temp_category_id {temp_category_id}")
                 category_id_to_use = temp_category_id
