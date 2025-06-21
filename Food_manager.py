@@ -1203,6 +1203,8 @@ class InventoryManager:
         Adds an item to inventory. Handles product creation, category/subcategory resolution,
         and potential user confirmation steps for new categories/subcategories.
         """
+        print(f"LOG: add_item_to_list called with: name='{name}', quantity_str='{quantity_str}', purchase_date_str='{purchase_date_str}', expiry_days={expiry_days}, category='{category}', subcategory='{subcategory}', par_level={par_level}, max_holding_amount={max_holding_amount}, purchase_location='{purchase_location}', unit_of_measure='{unit_of_measure}', confirmed_action='{confirmed_action}', temp_category_id={temp_category_id}")
+
         product_data_for_confirmation = {
             "name": name, "quantity_str": quantity_str, "purchase_date_str": purchase_date_str,
             "expiry_days": expiry_days, "category": category, "subcategory": subcategory,
@@ -1223,7 +1225,7 @@ class InventoryManager:
             product_id_to_use = product_info['id']
             category_id_to_use = product_info.get('category_id')
             subcategory_id_to_use = product_info.get('subcategory_id')
-            print(f"Product '{name}' found with ID {product_id_to_use}. Using existing product.")
+            print(f"LOG: Product '{name}' found. ID: {product_id_to_use}. CategoryID: {product_info.get('category_id')}, SubcategoryID: {product_info.get('subcategory_id')}")
 
             if category and category_id_to_use:
                 db_category_name = self.get_category_name_by_id(category_id_to_use)
@@ -1238,7 +1240,9 @@ class InventoryManager:
                 warnings.append(f"UoM for '{name}' in Excel ('{unit_of_measure.strip()}') differs from DB ('{product_info.get('unit_of_measure')}'). DB UoM retained.")
 
         else: # New Product
+            print(f"LOG: Product '{name}' is new. Excel Category='{category}', Excel Subcategory='{subcategory}'")
             if not category or not category.strip():
+                print(f"LOG: Returning due to missing category name for new product '{name}'.")
                 return {"success": False, "message": f"Category name is missing in Excel for new product '{name}'. Product not added.", "warnings": warnings}
 
             excel_category_name = category.strip()
@@ -1248,58 +1252,86 @@ class InventoryManager:
             can_create_product = False
 
             if confirmed_action == "confirmed_new_category":
+                print(f"LOG: Handling confirmed_new_category for '{excel_category_name}'")
                 add_cat_result = self.add_category(excel_category_name)
+                print(f"LOG: add_category result: {add_cat_result}")
                 if not add_cat_result.get("success"):
+                    print(f"LOG: Returning due to add_category failure.")
                     return {"success": False, "message": f"Failed to create new category '{excel_category_name}': {add_cat_result.get('message')}", "warnings": warnings}
                 category_id_to_use = add_cat_result['category_id']
+                print(f"LOG: category_id_to_use set to {category_id_to_use} from new category.")
 
                 if excel_subcategory_name:
+                    print(f"LOG: Handling subcategory '{excel_subcategory_name}' for new category '{excel_category_name}'")
                     add_subcat_result = self.add_subcategory(excel_subcategory_name, category_id_to_use)
+                    print(f"LOG: add_subcategory result: {add_subcat_result}")
                     if not add_subcat_result.get("success"):
-                         return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}' for new category '{excel_category_name}': {add_subcat_result.get('message')}", "warnings": warnings}
+                        print(f"LOG: Returning due to add_subcategory failure.")
+                        return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}' for new category '{excel_category_name}': {add_subcat_result.get('message')}", "warnings": warnings}
                     subcategory_id_to_use = add_subcat_result['subcategory_id']
-                can_create_product = True # Ready to create product
+                    print(f"LOG: subcategory_id_to_use set to {subcategory_id_to_use} from new subcategory.")
+                can_create_product = True
+                print(f"LOG: can_create_product set to True after confirmed_new_category processing.")
 
             elif confirmed_action == "confirmed_new_subcategory" and temp_category_id is not None:
+                print(f"LOG: Handling confirmed_new_subcategory for '{excel_subcategory_name}' under temp_category_id {temp_category_id}")
                 category_id_to_use = temp_category_id
+                print(f"LOG: category_id_to_use set to {category_id_to_use} (from temp_category_id).")
                 if not excel_subcategory_name: # Should ideally not happen if this action was triggered
-                     return {"success": False, "message": f"Subcategory name missing for confirmed_new_subcategory action for product '{name}'.", "warnings": warnings}
+                    print(f"LOG: Returning due to missing subcategory name for confirmed_new_subcategory.")
+                    return {"success": False, "message": f"Subcategory name missing for confirmed_new_subcategory action for product '{name}'.", "warnings": warnings}
                 add_subcat_result = self.add_subcategory(excel_subcategory_name, category_id_to_use)
+                print(f"LOG: add_subcategory result: {add_subcat_result}")
                 if not add_subcat_result.get("success"):
+                    print(f"LOG: Returning due to add_subcategory failure (confirmed_new_subcategory path).")
                     return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}': {add_subcat_result.get('message')}", "warnings": warnings}
                 subcategory_id_to_use = add_subcat_result['subcategory_id']
-                can_create_product = True # Ready to create product
+                print(f"LOG: subcategory_id_to_use set to {subcategory_id_to_use} from new subcategory (confirmed_new_subcategory path).")
+                can_create_product = True
+                print(f"LOG: can_create_product set to True after confirmed_new_subcategory processing.")
 
             else: # No confirmed_action, this is the initial check
+                print(f"LOG: No confirmed_action. Initial check for category '{excel_category_name}'.")
                 existing_category_obj = self.get_category_by_name(excel_category_name)
                 if existing_category_obj:
+                    print(f"LOG: Existing category found: ID {existing_category_obj['id']}")
                     category_id_to_use = existing_category_obj['id']
                     if excel_subcategory_name:
+                        print(f"LOG: Checking for existing subcategory '{excel_subcategory_name}' under category ID {category_id_to_use}.")
                         existing_subcategory_obj = self.get_subcategory_by_name_and_category_id(excel_subcategory_name, category_id_to_use)
                         if existing_subcategory_obj:
+                            print(f"LOG: Existing subcategory found: ID {existing_subcategory_obj['id']}")
                             subcategory_id_to_use = existing_subcategory_obj['id']
-                            can_create_product = True # Category and subcategory exist
+                            can_create_product = True
+                            print(f"LOG: can_create_product set to True. Category and Subcategory exist.")
                         else: # New subcategory for existing category
+                            print(f"LOG: New subcategory '{excel_subcategory_name}' for existing category ID {category_id_to_use}. Requesting confirmation.")
                             action_required = "confirm_new_subcategory"
                             confirmation_details = {
                                 "category_id": category_id_to_use,
                                 "category_name": existing_category_obj['name'],
                                 "new_subcategory_name": excel_subcategory_name
                             }
+                            print(f"LOG: Returning action_required='{action_required}'")
                             return {"success": False, "action_required": action_required, "confirmation_details": confirmation_details, "product_data": product_data_for_confirmation, "warnings": warnings}
                     else: # No subcategory provided, existing category is enough
                         can_create_product = True
+                        print(f"LOG: can_create_product set to True. Category exists, no subcategory provided.")
                 else: # New category
+                    print(f"LOG: New category '{excel_category_name}'. Requesting confirmation.")
                     action_required = "confirm_new_category"
                     confirmation_details = {
                         "new_category_name": excel_category_name,
                         "new_subcategory_name": excel_subcategory_name # Pass along subcategory name if provided
                     }
+                    print(f"LOG: Returning action_required='{action_required}'")
                     return {"success": False, "action_required": action_required, "confirmation_details": confirmation_details, "product_data": product_data_for_confirmation, "warnings": warnings}
 
             # Create the product if it's new and category/subcategory are resolved
+            print(f"LOG: Before create_product call. can_create_product={can_create_product}. Name='{name}', CategoryID={category_id_to_use}, SubcategoryID={subcategory_id_to_use}, UoM='{unit_of_measure}'")
             if can_create_product:
                 if not unit_of_measure:
+                    print(f"LOG: Returning due to missing UoM for new product '{name}'.")
                     return {"success": False, "message": f"Unit of Measure is missing in Excel for new product '{name}'. Product not added.", "warnings": warnings}
 
                 create_product_result = self.create_product(
@@ -1312,20 +1344,25 @@ class InventoryManager:
                     max_holding_amount=max_holding_amount,
                     purchase_location=purchase_location
                 )
+                print(f"LOG: create_product result: {create_product_result}")
                 if create_product_result.get("success"):
                     product_id_to_use = create_product_result.get("product_id")
-                    print(f"Product '{name}' created successfully with ID {product_id_to_use}.")
+                    print(f"LOG: Product '{name}' created successfully with ID {product_id_to_use}.") # Note: This is user-facing print, distinct from LOG
                 else:
+                    print(f"LOG: Returning due to create_product failure for '{name}'.")
                     return {"success": False, "message": create_product_result.get("message", f"Failed to create product '{name}'."), "warnings": warnings}
             else:
                 # This case should ideally not be reached if logic is correct,
                 # as all paths should either return an action_required, an error, or set can_create_product to True.
                 # If it is reached, it means a logic path for new products didn't result in product creation or a request for confirmation.
+                print(f"LOG: Product not created because can_create_product is False. Product name: '{name}'.")
                 return {"success": False, "message": f"Internal logic error: Could not determine action for new product '{name}'. Product not created.", "warnings": warnings}
 
         # --- Common logic for adding inventory item once product_id_to_use is determined ---
+        print(f"LOG: Before adding to inventory_items. ProductIDToUse={product_id_to_use}, Name='{name}', Qty='{quantity_str}'")
         if product_id_to_use is None:
              # This case should ideally be caught by earlier checks (e.g., product not found and action not confirmed)
+            print(f"LOG: Returning because product_id_to_use is None before final inventory add for '{name}'.")
             return {"success": False, "message": f"Could not determine product ID for '{name}'. Inventory item not added.", "warnings": warnings}
 
         try:
@@ -1335,6 +1372,7 @@ class InventoryManager:
             # However, the expiry_days param is for THIS BATCH from Excel, not necessarily product default
             batch_expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
         except (ValueError, TypeError) as e:
+            print(f"LOG: Returning due to invalid date or expiry days for item '{name}'. Error: {e}")
             return {"success": False, "message": f"Invalid purchase date '{purchase_date_str}' or expiry days '{expiry_days}' for item '{name}': {e}", "warnings": warnings}
 
         try:
@@ -1348,9 +1386,10 @@ class InventoryManager:
                       batch_expiry_dt.isoformat(), str(quantity_str)))
                 conn.commit()
                 item_id = cursor.lastrowid
-                print(f"Successfully added item '{name}' (Batch ID: {item_id}) to inventory. Expires: {batch_expiry_dt.isoformat()}")
+                print(f"LOG: Successfully added item '{name}' (Batch ID: {item_id}) to inventory_items. Expires: {batch_expiry_dt.isoformat()}") # Note: This is user-facing print
                 return {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use, "warnings": warnings}
         except sqlite3.Error as e:
+            print(f"LOG: Returning due to database error adding item '{name}' to inventory_items. Error: {e}")
             return {"success": False, "message": f"Database error adding item '{name}' to inventory: {e}", "warnings": warnings}
 
 
