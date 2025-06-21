@@ -1574,17 +1574,22 @@ def create_product_view():
 
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
 def edit_product_view(product_id):
-    product = manager.get_product(product_id) # This now fetches category_name, subcategory_name, category_id, subcategory_id
-    if not product:
-        flash(f"Product with ID {product_id} not found.", 'error')
-        return redirect(url_for('list_products_view'))
+    # product = manager.get_product(product_id) # Fetched in GET, no need to re-fetch before POST processing unless stale data is a concern
+    # For POST, we primarily use form data. The product object is mainly for GET or repopulating form on error.
 
-    all_categories_data = manager.get_all_categories_with_subcategories() # For dropdowns
+    all_categories_data = manager.get_all_categories_with_subcategories() # Needed for GET and for POST error repopulation
 
     if request.method == 'POST':
+        # Fetch product again here if needed to merge with form data upon error,
+        # or rely on product object fetched if this view were structured differently.
+        # For this structure, product is fetched initially for GET.
+        # If POST fails, we use the product object that was passed to the template.
+        product_for_repopulation_on_error = manager.get_product(product_id)
+
+
         name = request.form.get('name', '').strip()
         category_id_str = request.form.get('category_id', '').strip()
-        subcategory_id_str = request.form.get('subcategory_id', '').strip()
+        subcategory_id_str = request.form.get('subcategory_id', '').strip() # Optional
         unit_of_measure = request.form.get('unit_of_measure', '').strip()
         default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
         par_level_str = request.form.get('par_level', '0').strip()
@@ -1644,17 +1649,19 @@ def edit_product_view(product_id):
             # Pass current form data back to template, merge with original product data for safety
             form_data = request.form.to_dict()
             # Ensure IDs are integers if they exist for form_data repopulation
-            if 'category_id' in form_data and form_data['category_id']: form_data['category_id'] = int(form_data['category_id'])
-            if 'subcategory_id' in form_data and form_data['subcategory_id']: form_data['subcategory_id'] = int(form_data['subcategory_id'])
+            if category_id_str: form_data['category_id'] = int(category_id_str) # Use the string from form for direct int conversion
+            if subcategory_id_str: form_data['subcategory_id'] = int(subcategory_id_str)
 
-            product_data_for_template = {**product, **form_data}
+            # Use product_for_repopulation_on_error which is guaranteed to be the state from DB
+            product_data_for_template = {**product_for_repopulation_on_error, **form_data}
             return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
 
-        result = manager.update_product( # update_product expects IDs
+        # manager.update_product was already updated to expect category_id and subcategory_id
+        result = manager.update_product(
             product_id=product_id,
             name=name,
-            category_id=category_id,
-            subcategory_id=subcategory_id, # Pass None if empty
+            category_id=category_id, # This is now an int or None
+            subcategory_id=subcategory_id, # This is now an int or None
             unit_of_measure=unit_of_measure,
             default_expiry_days=default_expiry_days,
             par_level=par_level,
@@ -1668,13 +1675,19 @@ def edit_product_view(product_id):
         else:
             flash(result.get("message", f"An error occurred updating product ID {product_id}."), 'error')
             form_data = request.form.to_dict()
-            if 'category_id' in form_data and form_data['category_id']: form_data['category_id'] = int(form_data['category_id'])
-            if 'subcategory_id' in form_data and form_data['subcategory_id']: form_data['subcategory_id'] = int(form_data['subcategory_id'])
-            product_data_for_template = {**product, **form_data}
+            if category_id_str: form_data['category_id'] = int(category_id_str)
+            if subcategory_id_str: form_data['subcategory_id'] = int(subcategory_id_str)
+            product_data_for_template = {**product_for_repopulation_on_error, **form_data}
             return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
 
-    # GET request: pass the fetched product data and all categories data to the template
-    return render_template('edit_product.html', product=product, categories_data=all_categories_data)
+    # GET request: pass the fetched product data (which includes cat/subcat names and IDs)
+    # and all_categories_data (for dropdowns) to the template.
+    product_display_data = manager.get_product(product_id) # Ensure fresh data for GET display
+    if not product_display_data: # Should be caught by initial check, but good practice
+        flash(f"Product with ID {product_id} not found.", 'error')
+        return redirect(url_for('list_products_view'))
+
+    return render_template('edit_product.html', product=product_display_data, categories_data=all_categories_data)
 
 # --- Inventory Management Routes ---
 @app.route('/inventory/add_stock', methods=['GET', 'POST'])

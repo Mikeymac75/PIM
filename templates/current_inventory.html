@@ -106,8 +106,8 @@
                     {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
                     {{ sortable_header('quantity', 'Stock Quantity', sort_by, sort_order, current_filters) }}
                     <th class="current-inventory-header">Unit</th> {# Not sortable by default, could be p.unit_of_measure #}
-                    {{ sortable_header('category', 'Category', sort_by, sort_order, current_filters) }}
-                    <th class="current-inventory-header">Subcategory</th> {# Not sortable by default, could be p.subcategory #}
+                    {{ sortable_header('category_name', 'Category', sort_by, sort_order, current_filters) }} {# Sort by c.name via category_name #}
+                    <th class="current-inventory-header">Subcategory</th> {# Not sortable by default, could be sc.name via subcategory_name #}
                     <th class="current-inventory-header text-right">Par Level</th> {# Not sortable #}
                     {{ sortable_header('purchase_location', 'Purchase Location (Product Default)', sort_by, sort_order, current_filters) }}
                     {{ sortable_header('purchase_date', 'Purchase Date (Stock)', sort_by, sort_order, current_filters) }}
@@ -126,11 +126,11 @@
                         {% endif %}
                     </td>
                     <td>{{ item.quantity }}</td>
-                    <td>{{ item.unit_of_measure if item.unit_of_measure else '-' }}</td>
-                    <td>{{ item.category if item.category else '-' }}</td>
-                    <td>{{ item.subcategory if item.subcategory else '-' }}</td>
-                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else (item.par_level if item.par_level is not none else '-') }}</td>
-                    <td>{{ item.purchase_location if item.purchase_location else '-' }}</td>
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '--' }}</td>
+                    <td>{{ item.category_name if item.category_name else '--' }}</td>
+                    <td>{{ item.subcategory_name if item.subcategory_name else '--' }}</td>
+                    <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else (item.par_level if item.par_level is not none else '--') }}</td>
+                    <td>{{ item.purchase_location if item.purchase_location else '--' }}</td>
                     <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
                     <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
                     <td>
