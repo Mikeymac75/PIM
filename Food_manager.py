@@ -1315,7 +1315,6 @@ class InventoryManager:
             print(f"LOG_DIAGNOSTIC_ELIF_DIRECT_CMP_ACTION: (confirmed_action == 'confirm_new_subcategory'): {confirmed_action == 'confirm_new_subcategory'}")
             print(f"LOG_DIAGNOSTIC_ELIF_DIRECT_CMP_TEMP_ID: (temp_category_id is not None): {temp_category_id is not None}")
             print(f"LOG_DIAGNOSTIC_ELIF_COMBINED_COND: ((confirmed_action == 'confirm_new_subcategory') and (temp_category_id is not None)): {(confirmed_action == 'confirm_new_subcategory') and (temp_category_id is not None)}")
-
             elif confirmed_action == "confirmed_new_subcategory" and temp_category_id is not None:
                 print(f"LOG: Handling confirmed_new_subcategory for '{excel_subcategory_name}' under temp_category_id {temp_category_id}")
                 category_id_to_use = temp_category_id
