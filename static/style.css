@@ -45,7 +45,7 @@ header ul {
     padding: 0;
     margin: 0;
     list-style: none;
-    overflow: hidden;
+    overflow: visible; /* Changed from hidden to prevent dropdown clipping */
 }
 
 header #branding {
