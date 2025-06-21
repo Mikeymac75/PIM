@@ -100,7 +100,7 @@ class RecipeManager:
                     cursor.execute('''
                         INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
                         VALUES (?, ?, ?, ?)
-                    ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity'), ingredient.get('notes')))
+                    ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity_required'), ingredient.get('notes')))
 
                 conn.commit()
                 return {"success": True, "message": "Recipe added successfully.", "recipe_id": recipe_id}
@@ -129,7 +129,14 @@ class RecipeManager:
                         FROM recipe_ingredients
                         WHERE recipe_id = ?
                     ''', (recipe_id,))
-                    ingredients = [dict(row) for row in cursor.fetchall()]
+                    ingredients = []
+                    for row in cursor.fetchall():
+                        ingredients.append({
+                            'id': row['id'],
+                            'item_name': row['item_name'],
+                            'quantity_required': row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'notes': row['notes']
+                        })
                     recipe['ingredients'] = ingredients
         except sqlite3.Error as e:
             print(f"Database error getting recipe by ID {recipe_id}: {e}")
@@ -156,7 +163,16 @@ class RecipeManager:
                         FROM recipe_ingredients
                         WHERE recipe_id = ?
                     ''', (recipe['id'],)) # Use the id from the fetched recipe_row
-                    ingredients = [dict(row) for row in cursor.fetchall()]
+                    ingredients = []
+                    # The SELECT for ingredients in get_recipe_by_name is:
+                    # SELECT id, item_name, quantity, notes FROM recipe_ingredients
+                    for row in cursor.fetchall():
+                        ingredients.append({
+                            'id': row['id'],
+                            'item_name': row['item_name'],
+                            'quantity_required': row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'notes': row['notes']
+                        })
                     recipe['ingredients'] = ingredients
         except sqlite3.Error as e:
             print(f"Database error getting recipe by name '{recipe_name}': {e}")
@@ -194,7 +210,16 @@ class RecipeManager:
                         FROM recipe_ingredients
                         WHERE recipe_id = ?
                     ''', (recipe['id'],))
-                    ingredients = [dict(ing_row) for ing_row in cursor.fetchall()]
+                    ingredients = []
+                    # The SELECT for ingredients in get_all_recipes is:
+                    # SELECT id, item_name, quantity, notes FROM recipe_ingredients
+                    for ing_row in cursor.fetchall():
+                        ingredients.append({
+                            'id': ing_row['id'],
+                            'item_name': ing_row['item_name'],
+                            'quantity_required': ing_row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'notes': ing_row['notes']
+                        })
                     recipe['ingredients'] = ingredients
                     recipes_list.append(recipe)
         except sqlite3.Error as e:
@@ -268,7 +293,7 @@ class RecipeManager:
                         cursor.execute('''
                             INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
                             VALUES (?, ?, ?, ?)
-                        ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity'), ingredient.get('notes')))
+                        ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity_required'), ingredient.get('notes')))
 
                 conn.commit()
                 if cursor.rowcount == 0 and not ('ingredients' in recipe_data and recipe_data['ingredients']):
