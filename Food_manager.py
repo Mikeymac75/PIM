@@ -1258,8 +1258,8 @@ class InventoryManager:
             print(f"LOG_DIAGNOSTIC_STRIP_CMP: (confirmed_action.strip() == 'confirm_new_category'): {confirmed_action.strip() == 'confirm_new_category' if isinstance(confirmed_action, str) else 'confirmed_action is not a string'}")
             print(f"LOG_DIAGNOSTIC_DIRECT_CMP: (confirmed_action == 'confirm_new_category'): {confirmed_action == 'confirm_new_category'}")
 
-
-            if confirmed_action == "confirm_new_category":
+            print(f"LOG_PRE_CONFIRM_CHECK: confirmed_action='{confirmed_action}' (type: {type(confirmed_action)}), temp_category_id='{temp_category_id}' (type: {type(temp_category_id)})")
+            if isinstance(confirmed_action, str) and confirmed_action.strip() == "confirm_new_category":
                 print(f"LOG: Handling confirmed_new_category for '{excel_category_name}'")
                 add_cat_result = self.add_category(excel_category_name)
                 print(f"LOG: add_category result: {add_cat_result}")
@@ -1306,7 +1306,8 @@ class InventoryManager:
                 can_create_product = True
                 print(f"LOG: can_create_product set to True after confirmed_new_category processing.")
 
-            elif confirmed_action == "confirmed_new_subcategory" and temp_category_id is not None:
+            elif isinstance(confirmed_action, str) and confirmed_action.strip() == "confirm_new_subcategory" and temp_category_id is not None:
+                print(f"LOG_ENTERED_CONFIRM_SUBCATEGORY_BLOCK: Processing confirmed new subcategory '{excel_subcategory_name}' for category ID {temp_category_id}.")
                 print(f"LOG: Handling confirmed_new_subcategory for '{excel_subcategory_name}' under temp_category_id {temp_category_id}")
                 category_id_to_use = temp_category_id
                 print(f"LOG: category_id_to_use set to {category_id_to_use} (from temp_category_id).")
@@ -1644,9 +1645,14 @@ class InventoryManager:
             SELECT
                 ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
                 ii.original_quantity_string,
-                p.name AS product_name, p.category, p.subcategory, p.unit_of_measure
+                p.name AS product_name,
+                c.name AS category_name,
+                s.name AS subcategory_name,
+                p.unit_of_measure
             FROM inventory_items ii
             JOIN products p ON ii.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories s ON p.subcategory_id = s.id
             WHERE ii.product_id = ?
         '''
         params = [valid_product_id]
