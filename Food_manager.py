@@ -1440,36 +1440,33 @@ class InventoryManager:
 
 
     def get_current_inventory(self, search_term=None, category=None, purchase_location=None,
-                              expiry_start_date=None, expiry_end_date=None,
-                              sort_by='expiry_date', sort_order='ASC',
+                              sort_by='p.name', sort_order='ASC',
                               page=1, per_page=10):
         """
-        Retrieves items from the current inventory, joined with product details,
-        with filtering, sorting, and pagination.
+        Retrieves aggregated product data from the current inventory.
         - search_term: Filters by product name (p.name).
-        - category: Filters by product category (p.category).
+        - category: Filters by category name (c.name).
         - purchase_location: Filters by product purchase location (p.purchase_location).
-        - expiry_start_date: Filters for expiry_date >= this date.
-        - expiry_end_date: Filters for expiry_date <= this date.
-        - sort_by: Column to sort by ('product_name', 'category', 'purchase_location',
-                   'expiry_date', 'purchase_date', 'quantity'). Defaults to 'expiry_date'.
+        - sort_by: Column to sort by (e.g., 'p.name', 'c.name'). Defaults to 'p.name'.
         - sort_order: 'ASC' or 'DESC'. Defaults to 'ASC'.
         - page: For pagination.
         - per_page: For pagination.
+        Returns a list of dictionaries, each representing a product with its aggregated data.
         """
         items = []
         params = []
 
         base_query = """
             SELECT
-                ii.id, ii.product_id, ii.quantity, ii.purchase_date, ii.expiry_date,
-                ii.original_quantity_string,
+                p.id AS product_id,
                 p.name AS product_name,
-                p.unit_of_measure, p.par_level, p.max_holding_amount, p.purchase_location,
+                p.unit_of_measure,
+                p.par_level,
                 c.name AS category_name,
-                sc.name AS subcategory_name
-            FROM inventory_items ii
-            JOIN products p ON ii.product_id = p.id
+                sc.name AS subcategory_name,
+                SUM(CAST(ii.quantity AS REAL)) AS total_quantity
+            FROM products p
+            JOIN inventory_items ii ON p.id = ii.product_id
             LEFT JOIN categories c ON p.category_id = c.id
             LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
         """
@@ -1478,49 +1475,45 @@ class InventoryManager:
         if search_term:
             where_clauses.append("LOWER(p.name) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category: # Filter by category NAME from joined 'categories' table
+        if category:
             where_clauses.append("LOWER(c.name) = ?")
             params.append(category.lower())
         if purchase_location:
             where_clauses.append("LOWER(p.purchase_location) = ?")
             params.append(purchase_location.lower())
-        if expiry_start_date:
-            where_clauses.append("ii.expiry_date >= ?")
-            params.append(expiry_start_date)
-        if expiry_end_date:
-            where_clauses.append("ii.expiry_date <= ?")
-            params.append(expiry_end_date)
 
         if where_clauses:
             base_query += " WHERE " + " AND ".join(where_clauses)
 
+        base_query += """
+            GROUP BY p.id, p.name, p.unit_of_measure, p.par_level, c.name, sc.name
+        """
+
         # Sorting
+        # Valid sort columns should now refer to product or category attributes
         valid_sort_columns = {
-            'product_name': 'p.name',
-            'category_name': 'c.name', # Updated to sort by category_name
-            'purchase_location': 'p.purchase_location',
-            'expiry_date': 'ii.expiry_date',
-            'purchase_date': 'ii.purchase_date',
-            # Sorting by quantity can be tricky due to its string nature.
-            # CAST to REAL might work for purely numeric strings.
-            'quantity': 'CAST(ii.quantity AS REAL)'
+            'p.name': 'p.name',
+            'c.name': 'c.name',
+            'total_quantity': 'total_quantity', # Can sort by aggregated quantity
+            'p.par_level': 'p.par_level'
         }
-        sort_column = valid_sort_columns.get(sort_by.lower(), 'ii.expiry_date')
+        sort_column = valid_sort_columns.get(sort_by.lower(), 'p.name')
 
         sort_order_upper = sort_order.upper()
         if sort_order_upper not in ['ASC', 'DESC']:
             sort_order_upper = 'ASC'
 
-        base_query += f" ORDER BY {sort_column} {sort_order_upper}, ii.id {sort_order_upper}" # Secondary sort for stability
+        base_query += f" ORDER BY {sort_column} {sort_order_upper}, p.id {sort_order_upper}"
 
         # Pagination
         if page is not None and per_page is not None and page > 0 and per_page > 0:
             offset = (page - 1) * per_page
             base_query += " LIMIT ? OFFSET ?"
             params.extend([per_page, offset])
-        elif per_page is not None and per_page > 0:
+        elif per_page is not None and per_page > 0: # Apply limit if only per_page is specified
             base_query += " LIMIT ?"
             params.append(per_page)
+
 
         try:
             with self._get_db_connection() as conn:
@@ -1528,46 +1521,35 @@ class InventoryManager:
                 cursor.execute(base_query, tuple(params))
                 rows = cursor.fetchall()
                 for row in rows:
-                    item = dict(row)
-                    # Convert date strings to date objects
-                    if item.get('purchase_date'):
-                        item['purchase_date'] = date.fromisoformat(item['purchase_date'])
-                    if item.get('expiry_date'):
-                        item['expiry_date'] = date.fromisoformat(item['expiry_date'])
-                    items.append(item)
+                    items.append(dict(row))
         except sqlite3.Error as e:
-            print(f"Database error fetching current inventory with filters: {e}")
+            print(f"Database error fetching aggregated current inventory: {e}")
         return items
 
-    def get_current_inventory_count(self, search_term=None, category=None, purchase_location=None,
-                                    expiry_start_date=None, expiry_end_date=None):
+    def get_current_inventory_count(self, search_term=None, category=None, purchase_location=None):
         """
-        Gets the total count of current inventory items based on filters.
+        Gets the total count of distinct products in current inventory based on filters.
         """
         params = []
+        # Query to count distinct products after filtering
         query = """
-            SELECT COUNT(ii.id) as count
-            FROM inventory_items ii
-            JOIN products p ON ii.product_id = p.id
+            SELECT COUNT(DISTINCT p.id) as count
+            FROM products p
+            JOIN inventory_items ii ON p.id = ii.product_id
             LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
         """
 
         where_clauses = []
         if search_term:
             where_clauses.append("LOWER(p.name) LIKE ?")
             params.append(f"%{search_term.lower()}%")
-        if category: # Filter by category NAME
+        if category:
             where_clauses.append("LOWER(c.name) = ?")
             params.append(category.lower())
         if purchase_location:
             where_clauses.append("LOWER(p.purchase_location) = ?")
             params.append(purchase_location.lower())
-        if expiry_start_date:
-            where_clauses.append("ii.expiry_date >= ?")
-            params.append(expiry_start_date)
-        if expiry_end_date:
-            where_clauses.append("ii.expiry_date <= ?")
-            params.append(expiry_end_date)
 
         if where_clauses:
             query += " WHERE " + " AND ".join(where_clauses)
@@ -1579,7 +1561,7 @@ class InventoryManager:
                 result = cursor.fetchone()
                 return result['count'] if result else 0
         except sqlite3.Error as e:
-            print(f"Database error getting current inventory count: {e}")
+            print(f"Database error getting distinct product count from inventory: {e}")
             return 0
 
     def get_current_inventory_categories(self):

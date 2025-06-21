@@ -40,14 +40,6 @@
     </div>
     <div class="form-row">
         <div class="form-group">
-            <label for="expiry_start_date">Expiry From:</label>
-            <input type="date" name="expiry_start_date" id="expiry_start_date" value="{{ expiry_start_date or '' }}">
-        </div>
-        <div class="form-group">
-            <label for="expiry_end_date">Expiry To:</label>
-            <input type="date" name="expiry_end_date" id="expiry_end_date" value="{{ expiry_end_date or '' }}">
-        </div>
-        <div class="form-group">
             <label for="filter_is_below_par">Below Par Level:</label>
             <select name="filter_is_below_par" id="filter_is_below_par">
                 <option value="" {% if filter_is_below_par is none or filter_is_below_par == '' %}selected{% endif %}>Any</option>
@@ -55,9 +47,10 @@
                 <option value="false" {% if filter_is_below_par is sameas false %}selected{% endif %}>No</option> {# Using sameas false because (None is false) is false #}
             </select>
         </div>
+        {# Expiry date filters removed from here #}
     </div>
     {# Hidden fields to retain current sort order and pagination when filtering #}
-    <input type="hidden" name="sort_by" value="{{ sort_by or 'expiry_date' }}">
+    <input type="hidden" name="sort_by" value="{{ sort_by or 'p.name' }}"> {# Default sort_by changed #}
     <input type="hidden" name="sort_order" value="{{ sort_order or 'ASC' }}">
     <input type="hidden" name="page" value="{{ current_page or 1 }}">
      {# We might not want to keep per_page in hidden field if we want it to reset with filters, or keep it if preferred #}
@@ -96,51 +89,47 @@
                         'search_term': search_term,
                         'category': selected_category,
                         'purchase_location': selected_purchase_location,
-                        'expiry_start_date': expiry_start_date,
-                        'expiry_end_date': expiry_end_date,
                         'filter_is_below_par': request.args.get('filter_is_below_par', ''),
                         'page': current_page,
                         'per_page': per_page
                     } %}
 
-                    {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
-                    {{ sortable_header('quantity', 'Stock Quantity', sort_by, sort_order, current_filters) }}
-                    <th class="current-inventory-header">Unit</th> {# Not sortable by default, could be p.unit_of_measure #}
-                    {{ sortable_header('category_name', 'Category', sort_by, sort_order, current_filters) }} {# Sort by c.name via category_name #}
-                    <th class="current-inventory-header">Subcategory</th> {# Not sortable by default, could be sc.name via subcategory_name #}
-                    <th class="current-inventory-header text-right">Par Level</th> {# Not sortable #}
-                    {{ sortable_header('purchase_location', 'Purchase Location (Product Default)', sort_by, sort_order, current_filters) }}
-                    {{ sortable_header('purchase_date', 'Purchase Date (Stock)', sort_by, sort_order, current_filters) }}
-                    {{ sortable_header('expiry_date', 'Expiry Date (Stock)', sort_by, sort_order, current_filters) }}
-                    <th class="current-inventory-header">Status</th> {# Not sortable #}
+                    {{ sortable_header('p.name', 'Product Name', sort_by, sort_order, current_filters) }} {# Adjusted sort key to p.name #}
+                    {{ sortable_header('total_quantity', 'Total Stock Quantity', sort_by, sort_order, current_filters) }} {# Adjusted sort key for quantity #}
+                    <th class="current-inventory-header">Unit</th>
+                    {{ sortable_header('c.name', 'Category', sort_by, sort_order, current_filters) }} {# Adjusted sort key to c.name #}
+                    <th class="current-inventory-header">Subcategory</th>
+                    <th class="current-inventory-header text-right">Par Level</th>
+                    {{ sortable_header('p.purchase_location', 'Purchase Location (Product Default)', sort_by, sort_order, current_filters) }} {# Adjusted sort key #}
+                    {# Removed Purchase Date (Stock) and Expiry Date (Stock) headers #}
+                    <th class="current-inventory-header">Status</th>
                 </tr>
             </thead>
             <tbody>
-                {% for item in items %}
+                {% for item in items %} {# Loop variable 'item' now refers to a product_dict #}
                 <tr class="{{ 'below-par-level' if item.is_below_par else '' }}">
                     <td>
+                        {# Ensure product_id is available for the modal link #}
                         {% if item.product_id %}
                         <a href="#" class="product-name-link" data-product-id="{{ item.product_id }}" onclick="openProductModal(this.dataset.productId); return false;">{{ item.product_name }}</a>
                         {% else %}
-                        {{ item.product_name }}
+                        {{ item.product_name }} {# Fallback if no product_id, though it should always be present #}
                         {% endif %}
                     </td>
-                    <td>{{ item.quantity }}</td>
+                    <td>{{ "%.2f"|format(item.total_quantity) if item.total_quantity is number else item.total_quantity }}</td> {# Display total_quantity #}
                     <td>{{ item.unit_of_measure if item.unit_of_measure else '--' }}</td>
                     <td>{{ item.category_name if item.category_name else '--' }}</td>
                     <td>{{ item.subcategory_name if item.subcategory_name else '--' }}</td>
                     <td class="text-right">{{ "%.2f"|format(item.par_level) if item.par_level is number else (item.par_level if item.par_level is not none else '--') }}</td>
                     <td>{{ item.purchase_location if item.purchase_location else '--' }}</td>
-                    <td>{{ item.purchase_date.isoformat() if item.purchase_date else 'N/A' }}</td>
-                    <td>{{ item.expiry_date.isoformat() if item.expiry_date else 'N/A' }}</td>
+                    {# Removed item.purchase_date and item.expiry_date cells #}
                     <td>
                         {% if item.is_below_par %}
                             <span class="status-pill status-below-par">Below Par</span>
-                        {% elif item.expiry_date and item.expiry_date < (today + timedelta(days=3)) %}
-                            <span class="status-pill status-expiring-soon">Expiring Soon</span>
                         {% else %}
                             <span class="status-pill status-ok">OK</span>
                         {% endif %}
+                        {# Removed expiring soon logic for now #}
                     </td>
                 </tr>
                 {% endfor %}
@@ -157,8 +146,6 @@
                 'search_term': search_term,
                 'category': selected_category,
                 'purchase_location': selected_purchase_location,
-                'expiry_start_date': expiry_start_date,
-                'expiry_end_date': expiry_end_date,
                 'filter_is_below_par': request.args.get('filter_is_below_par', ''),
                 'sort_by': sort_by,
                 'sort_order': sort_order,
@@ -185,7 +172,7 @@
 
     {% else %}
         <p class="empty-message">
-            {% if search_term or selected_category or selected_purchase_location or expiry_start_date or expiry_end_date or request.args.get('filter_is_below_par') %}
+            {% if search_term or selected_category or selected_purchase_location or request.args.get('filter_is_below_par') %}
                 No inventory items match your current filters. <a href="{{ url_for('current_inventory_view') }}">Clear filters</a> to see all items.
             {% else %}
                 Current inventory is empty. <a href="{{ url_for('add_inventory_stock_view') }}" class="button"><i class="fas fa-plus-circle"></i> Add some stock!</a>
