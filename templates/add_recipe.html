@@ -53,10 +53,10 @@
 
         <hr>
         <h3 style="margin-top: 20px; margin-bottom: 10px;">Ingredients</h3>
-        <p><small class="help-text">Enter up to 10 ingredients. Leave rows blank if not needed. Ingredient quantities should be positive numbers.</small></p>
+        <p><small class="help-text">Enter up to 15 ingredients. Leave rows blank if not needed. Ingredient quantities should be positive numbers.</small></p>
         
         <div class="ingredients-section">
-            {% for i in range(1, 11) %} {# Create 10 sets of ingredient inputs #}
+            {% for i in range(1, 16) %} {# Create 15 sets of ingredient inputs #}
             <div class="ingredient-row">
                 <div class="form-group ingredient-name">
                     <label for="ingredient_{{ i }}_name">Ingredient {{ i }} Name:</label>

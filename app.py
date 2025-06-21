@@ -614,7 +614,7 @@ def add_recipe_view():
         
         ingredients = []
         form_errors = []
-        for i in range(1, 11):
+        for i in range(1, 16):
             ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
             ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
             # notes are optional, not used in current RecipeManager.add_recipe for ingredient quantity_required
@@ -716,7 +716,7 @@ def edit_recipe_view(recipe_id):
         ingredients = []
         form_errors = []
 
-        for i in range(1, 11):
+        for i in range(1, 16):
             ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
             ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
             # ing_notes = request.form.get(f'ingredient_{i}_notes', '').strip()
