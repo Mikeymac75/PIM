@@ -1264,20 +1264,45 @@ class InventoryManager:
                 add_cat_result = self.add_category(excel_category_name)
                 print(f"LOG: add_category result: {add_cat_result}")
                 if not add_cat_result.get("success"):
-                    print(f"LOG: Returning due to add_category failure.")
-                    return {"success": False, "message": f"Failed to create new category '{excel_category_name}': {add_cat_result.get('message')}", "warnings": warnings}
-                category_id_to_use = add_cat_result['category_id']
-                print(f"LOG: category_id_to_use set to {category_id_to_use} from new category.")
+                    if "already exists" in add_cat_result.get("message", "").lower(): # Check if it failed due to already existing
+                        print(f"LOG: Category '{excel_category_name}' already exists. Fetching its ID.")
+                        existing_category_obj = self.get_category_by_name(excel_category_name)
+                        if existing_category_obj:
+                            category_id_to_use = existing_category_obj['id']
+                            print(f"LOG: Successfully fetched existing category ID: {category_id_to_use}")
+                        else:
+                            # This would be an unexpected state: add_category said it exists, but get_category_by_name can't find it.
+                            print(f"LOG: ERROR - Category '{excel_category_name}' reported as existing, but could not be fetched.")
+                            return {"success": False, "message": f"Error resolving already existing category '{excel_category_name}'.", "warnings": warnings}
+                    else:
+                        # Original failure reason, not "already exists"
+                        print(f"LOG: Returning due to add_category failure (Reason: {add_cat_result.get('message')}).")
+                        return {"success": False, "message": f"Failed to create new category '{excel_category_name}': {add_cat_result.get('message')}", "warnings": warnings}
+                else: # add_category was successful
+                    category_id_to_use = add_cat_result['category_id']
+                # category_id_to_use should now be set, either from new creation or fetched existing.
+                print(f"LOG: category_id_to_use is now {category_id_to_use} for '{excel_category_name}'.")
 
                 if excel_subcategory_name:
-                    print(f"LOG: Handling subcategory '{excel_subcategory_name}' for new category '{excel_category_name}'")
+                    print(f"LOG: Handling subcategory '{excel_subcategory_name}' for category ID {category_id_to_use}")
                     add_subcat_result = self.add_subcategory(excel_subcategory_name, category_id_to_use)
                     print(f"LOG: add_subcategory result: {add_subcat_result}")
                     if not add_subcat_result.get("success"):
-                        print(f"LOG: Returning due to add_subcategory failure.")
-                        return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}' for new category '{excel_category_name}': {add_subcat_result.get('message')}", "warnings": warnings}
-                    subcategory_id_to_use = add_subcat_result['subcategory_id']
-                    print(f"LOG: subcategory_id_to_use set to {subcategory_id_to_use} from new subcategory.")
+                        if "already exists" in add_subcat_result.get("message", "").lower():
+                            print(f"LOG: Subcategory '{excel_subcategory_name}' already exists for category ID {category_id_to_use}. Fetching its ID.")
+                            existing_subcategory_obj = self.get_subcategory_by_name_and_category_id(excel_subcategory_name, category_id_to_use)
+                            if existing_subcategory_obj:
+                                subcategory_id_to_use = existing_subcategory_obj['id']
+                                print(f"LOG: Successfully fetched existing subcategory ID: {subcategory_id_to_use}")
+                            else:
+                                print(f"LOG: ERROR - Subcategory '{excel_subcategory_name}' reported as existing for cat ID {category_id_to_use}, but could not be fetched.")
+                                return {"success": False, "message": f"Error resolving already existing subcategory '{excel_subcategory_name}'.", "warnings": warnings}
+                        else:
+                            print(f"LOG: Returning due to add_subcategory failure (Reason: {add_subcat_result.get('message')}).")
+                            return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}' for category '{excel_category_name}': {add_subcat_result.get('message')}", "warnings": warnings}
+                    else: # add_subcategory was successful
+                        subcategory_id_to_use = add_subcat_result['subcategory_id']
+                    print(f"LOG: subcategory_id_to_use is now {subcategory_id_to_use} for '{excel_subcategory_name}'.")
                 can_create_product = True
                 print(f"LOG: can_create_product set to True after confirmed_new_category processing.")
 
@@ -1288,13 +1313,25 @@ class InventoryManager:
                 if not excel_subcategory_name: # Should ideally not happen if this action was triggered
                     print(f"LOG: Returning due to missing subcategory name for confirmed_new_subcategory.")
                     return {"success": False, "message": f"Subcategory name missing for confirmed_new_subcategory action for product '{name}'.", "warnings": warnings}
+
                 add_subcat_result = self.add_subcategory(excel_subcategory_name, category_id_to_use)
-                print(f"LOG: add_subcategory result: {add_subcat_result}")
+                print(f"LOG: add_subcategory result (confirmed_new_subcategory path): {add_subcat_result}")
                 if not add_subcat_result.get("success"):
-                    print(f"LOG: Returning due to add_subcategory failure (confirmed_new_subcategory path).")
-                    return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}': {add_subcat_result.get('message')}", "warnings": warnings}
-                subcategory_id_to_use = add_subcat_result['subcategory_id']
-                print(f"LOG: subcategory_id_to_use set to {subcategory_id_to_use} from new subcategory (confirmed_new_subcategory path).")
+                    if "already exists" in add_subcat_result.get("message", "").lower():
+                        print(f"LOG: Subcategory '{excel_subcategory_name}' (confirmed path) already exists for category ID {category_id_to_use}. Fetching its ID.")
+                        existing_subcategory_obj = self.get_subcategory_by_name_and_category_id(excel_subcategory_name, category_id_to_use)
+                        if existing_subcategory_obj:
+                            subcategory_id_to_use = existing_subcategory_obj['id']
+                            print(f"LOG: Successfully fetched existing subcategory ID (confirmed path): {subcategory_id_to_use}")
+                        else:
+                            print(f"LOG: ERROR - Subcategory '{excel_subcategory_name}' (confirmed path) reported as existing for cat ID {category_id_to_use}, but could not be fetched.")
+                            return {"success": False, "message": f"Error resolving already existing subcategory '{excel_subcategory_name}' (confirmed path).", "warnings": warnings}
+                    else:
+                        print(f"LOG: Returning due to add_subcategory failure (confirmed_new_subcategory path, Reason: {add_subcat_result.get('message')}).")
+                        return {"success": False, "message": f"Failed to create new subcategory '{excel_subcategory_name}': {add_subcat_result.get('message')}", "warnings": warnings}
+                else: # add_subcategory was successful
+                    subcategory_id_to_use = add_subcat_result['subcategory_id']
+                print(f"LOG: subcategory_id_to_use (confirmed_new_subcategory path) is now {subcategory_id_to_use} for '{excel_subcategory_name}'.")
                 can_create_product = True
                 print(f"LOG: can_create_product set to True after confirmed_new_subcategory processing.")
 
