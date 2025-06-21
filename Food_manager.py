@@ -1251,6 +1251,8 @@ class InventoryManager:
             # Flag to indicate if we should proceed to product creation
             can_create_product = False
 
+            print(f"LOG_DIAGNOSTIC: Checking confirmed_action. Value: '{confirmed_action}', Type: {type(confirmed_action)}") # New diagnostic log
+
             if confirmed_action == "confirmed_new_category":
                 print(f"LOG: Handling confirmed_new_category for '{excel_category_name}'")
                 add_cat_result = self.add_category(excel_category_name)
