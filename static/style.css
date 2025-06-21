@@ -85,6 +85,7 @@ header nav ul li a i {
 .dropdown {
     position: relative;
     display: inline-block;
+    z-index: 5; /* Added to control stacking context within header */
 }
 
 .dropdown-content {
