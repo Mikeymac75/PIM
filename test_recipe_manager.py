@@ -70,7 +70,7 @@ class TestRecipeManager(unittest.TestCase):
         self.assertEqual(len(retrieved_recipe_by_id['ingredients']), 2)
         self.assertEqual(retrieved_recipe_by_id['ingredients'][0]['item_name'], "Pasta")
         # Assuming 'quantity_required' is the key stored for ingredients based on manager logic
-        self.assertEqual(float(retrieved_recipe_by_id['ingredients'][0]['quantity']), 200.0)
+        self.assertEqual(retrieved_recipe_by_id['ingredients'][0]['quantity_required'], 200.0)
         self.assertEqual(retrieved_recipe_by_id['output_product_id'], self.product1_id)
         self.assertEqual(retrieved_recipe_by_id['output_yield'], 500.0)
 
