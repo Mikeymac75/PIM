@@ -41,12 +41,12 @@
                     </li>
 
                     <!-- Products Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['list_products_view', 'create_product_view'] %}current{% endif %}">
+                    <li class="dropdown {% if request.endpoint in ['list_products_view', 'create_product_view', 'manage_categories_view'] %}current{% endif %}">
                         <a href="#" class="dropbtn"><i class="fas fa-shopping-basket"></i> Products <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('list_products_view') }}"><i class="fas fa-tasks"></i> Manage Products</a>
                             <a href="{{ url_for('create_product_view') }}"><i class="fas fa-plus-square"></i> Create New Product</a>
-                            <a href="{{ url_for('list_products_view') }}"><i class="fas fa-tags"></i> Create New Categories</a> {# Pointing to list_products_view for now #}
+                            <a href="{{ url_for('manage_categories_view') }}"><i class="fas fa-tags"></i> Manage Categories</a>
                         </div>
                     </li>
 
