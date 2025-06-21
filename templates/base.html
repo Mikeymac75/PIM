@@ -51,7 +51,13 @@
                         </div>
                     </li>
 
-                    <li class="{% if request.endpoint == 'upload_excel_view' %}current{% endif %}"><a href="{{ url_for('upload_excel_view') }}"><i class="fas fa-file-excel"></i> Upload Excel</a></li>
+                    <li class="dropdown {% if request.endpoint in ['upload_excel_view', 'upload_recipes_excel_view'] %}current{% endif %}">
+                        <a href="#" class="dropbtn"><i class="fas fa-file-excel"></i> Upload Excel <i class="fas fa-caret-down"></i></a>
+                        <div class="dropdown-content">
+                            <a href="{{ url_for('upload_excel_view') }}"><i class="fas fa-file-invoice"></i> Upload Product Inventory</a>
+                            <a href="{{ url_for('upload_recipes_excel_view') }}"><i class="fas fa-utensils"></i> Upload Recipes from Excel</a>
+                        </div>
+                    </li>
                     <li class="{% if request.endpoint == 'garden_list_view' or request.endpoint == 'add_production_item_view' or request.endpoint == 'edit_production_item_view' %}current{% endif %}"><a href="{{ url_for('garden_list_view') }}"><i class="fas fa-leaf"></i> Garden & Harvest</a></li>
                 </ul>
             </nav>
