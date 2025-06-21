@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
 from Food_manager import InventoryManager
 from recipe_manager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
