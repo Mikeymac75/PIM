@@ -53,13 +53,12 @@ def current_inventory_view():
     search_term = request.args.get('search_term', '').strip()
     selected_category = request.args.get('category', '').strip()
     selected_purchase_location = request.args.get('purchase_location', '').strip()
-    expiry_start_date = request.args.get('expiry_start_date', '').strip()
-    expiry_end_date = request.args.get('expiry_end_date', '').strip()
 
     filter_is_below_par_str = request.args.get('filter_is_below_par', 'false').strip().lower()
     filter_is_below_par = filter_is_below_par_str == 'true'
 
-    sort_by = request.args.get('sort_by', 'expiry_date').strip()
+    # Sort_by now defaults to product name, as expiry_date is not directly available for aggregated products
+    sort_by = request.args.get('sort_by', 'p.name').strip()
     sort_order = request.args.get('sort_order', 'ASC').strip().upper()
     if sort_order not in ['ASC', 'DESC']:
         sort_order = 'ASC'
@@ -77,70 +76,76 @@ def current_inventory_view():
         per_page = 20
 
     # Fetch data from manager using SQL-filterable parameters
-    inventory_items_raw = manager.get_current_inventory(
+    # Renamed inventory_items_raw to products_raw
+    products_raw = manager.get_current_inventory(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         purchase_location=selected_purchase_location if selected_purchase_location else None,
-        expiry_start_date=expiry_start_date if expiry_start_date else None,
-        expiry_end_date=expiry_end_date if expiry_end_date else None,
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,
         per_page=per_page
     )
 
+    # total_items is now the count of distinct products
     total_items = manager.get_current_inventory_count(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
-        purchase_location=selected_purchase_location if selected_purchase_location else None,
-        expiry_start_date=expiry_start_date if expiry_start_date else None,
-        expiry_end_date=expiry_end_date if expiry_end_date else None
+        purchase_location=selected_purchase_location if selected_purchase_location else None
     )
 
-    # Process items and apply is_below_par filter if requested
-    processed_inventory_items = []
-    for item_dict in inventory_items_raw:
-        item_processed = dict(item_dict)
-        numeric_quantity = manager._parse_quantity_string(item_processed['quantity'])
-        par_level = item_processed.get('par_level', 0.0)
+    # Process products and apply is_below_par filter if requested
+    # Renamed processed_inventory_items to processed_products and item_dict to product_dict
+    processed_products = []
+    for product_dict in products_raw:
+        product_processed = dict(product_dict)
+        # numeric_quantity is now total_quantity from the aggregated data
+        numeric_quantity = product_processed.get('total_quantity', 0.0)
+        par_level = product_processed.get('par_level', 0.0)
         if par_level is None: par_level = 0.0
+        # Ensure par_level is float for comparison
         else: par_level = float(par_level)
         
-        item_processed['is_below_par'] = (numeric_quantity < par_level and par_level > 0)
+        product_processed['is_below_par'] = (numeric_quantity < par_level and par_level > 0)
 
         if filter_is_below_par:
-            if item_processed['is_below_par']:
-                processed_inventory_items.append(item_processed)
+            if product_processed['is_below_par']:
+                processed_products.append(product_processed)
         else:
-            processed_inventory_items.append(item_processed)
+            processed_products.append(product_processed)
 
     # Pagination calculation (uses total_items from DB before Python-level 'is_below_par' filtering)
+    # If filter_is_below_par is active, the actual number of items on the page might be less than per_page.
+    # And total_pages might be misleading if the filter significantly reduces item count.
+    # A more accurate pagination for client-side filtering would require adjusting total_items here.
+    # For now, pagination reflects the count *before* the Python-side "is_below_par" filter.
     total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
-    if page > total_pages and total_pages > 0: # Adjust page if it's out of bounds after filtering
+    if page > total_pages and total_pages > 0:
         page = total_pages
-        # Re-fetching might be needed if is_below_par drastically changed item count for the page
-        # For this iteration, we accept the limitation that a page might show fewer items
-        # if is_below_par is filtered in Python.
+        # Optionally re-fetch if strict item count per page is needed after Python filter.
+        # products_raw = manager.get_current_inventory(...) with new page
+        # then re-process for processed_products.
+        # For now, we accept that the page might show fewer items if filtered in Python.
+        # The user is on the 'last available page' according to DB count.
 
     # Fetch filter options
-    categories_options = manager.get_current_inventory_categories()
-    purchase_locations_options = manager.get_current_inventory_purchase_locations()
+    categories_options = manager.get_current_inventory_categories() # Still relevant
+    purchase_locations_options = manager.get_current_inventory_purchase_locations() # Still relevant
 
-    today = date.today()
+    today = date.today() # Still relevant for general display, not for expiry
     return render_template(
         'current_inventory.html',
-        items=processed_inventory_items,
+        items=processed_products, # Pass processed_products
         today=today,
-        timedelta=timedelta,
+        timedelta=timedelta, # Keep if template uses it for other date logic
         current_page=page,
         total_pages=total_pages,
         per_page=per_page,
         search_term=search_term,
         selected_category=selected_category,
         selected_purchase_location=selected_purchase_location,
-        expiry_start_date=expiry_start_date,
-        expiry_end_date=expiry_end_date,
-        filter_is_below_par=filter_is_below_par, # Pass the boolean
+        # expiry_start_date and expiry_end_date removed from context
+        filter_is_below_par=filter_is_below_par,
         sort_by=sort_by,
         sort_order=sort_order,
         categories=categories_options,
