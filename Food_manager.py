@@ -1693,20 +1693,26 @@ class InventoryManager:
             purchase_location=purchase_location
         )
 
-    def update_product(self, product_id, name, category, subcategory, unit_of_measure,
+    def update_product(self, product_id, name, category_id, subcategory_id, unit_of_measure,
                        default_expiry_days, par_level, max_holding_amount, purchase_location):
         """Updates an existing product in the products table."""
-        if not all([name, unit_of_measure, default_expiry_days is not None]):
-             return {"success": False, "message": "Missing required product fields for update."}
+        # category_id is treated as required for now. subcategory_id is optional.
+        if not all([name, unit_of_measure, default_expiry_days is not None, category_id is not None]):
+            return {"success": False, "message": "Missing required product fields for update (name, category_id, unit_of_measure, default_expiry_days)."}
+        if category_id is not None and not isinstance(category_id, int):
+            return {"success": False, "message": "Category ID must be an integer."}
+        if subcategory_id is not None and not isinstance(subcategory_id, int): # subcategory_id can be None
+            return {"success": False, "message": "Subcategory ID must be an integer if provided."}
+
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE products SET
-                    name = ?, category = ?, subcategory = ?, unit_of_measure = ?,
+                    name = ?, category_id = ?, subcategory_id = ?, unit_of_measure = ?,
                     default_expiry_days = ?, par_level = ?, max_holding_amount = ?, purchase_location = ?
                     WHERE id = ?
-                ''', (name, category, subcategory, unit_of_measure, default_expiry_days,
+                ''', (name, category_id, subcategory_id, unit_of_measure, default_expiry_days,
                       par_level, max_holding_amount, purchase_location, product_id))
                 conn.commit()
                 if cursor.rowcount == 0:
