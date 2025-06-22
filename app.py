@@ -9,8 +9,12 @@ app = Flask(__name__)
 # Configure secret key: Use an environment variable for production, with a fallback for development.
 # IMPORTANT: For production, set the FLASK_SECRET_KEY environment variable to a strong, random value.
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_fallback_secret_key')
+
 # Define allowed extensions for file upload
 ALLOWED_EXTENSIONS = {'xlsx'}
+
+# Define constants for application
+FUTURE_PROJECTION_HORIZON = 60 # Days for future inventory projection
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -2161,29 +2165,49 @@ def product_modal_details(product_id):
         projection_days_for_item = COSTCO_FREQUENCY_WEEKS * 7
 
     if par_level > 0 and projection_days_for_item > 0:
-        demand_projection = manager.project_demand(
+        # Use a distinct variable name for this specific demand projection call
+        demand_projection_for_shopping = manager.project_demand(
             product_id,
             lookback_days=30, # Standard lookback
             projection_days=projection_days_for_item
         )
-        avg_daily_consumption = 0.0
-        if demand_projection.get("success"):
-            avg_daily_consumption = demand_projection.get('avg_daily_consumption', 0.0)
+        avg_daily_consumption_for_shopping = 0.0
+        if demand_projection_for_shopping.get("success"):
+            avg_daily_consumption_for_shopping = demand_projection_for_shopping.get('avg_daily_consumption', 0.0)
 
-        target_stock_after_shopping = par_level + (avg_daily_consumption * projection_days_for_item)
+        target_stock_after_shopping = par_level + (avg_daily_consumption_for_shopping * projection_days_for_item)
         recommended_purchase_amount = target_stock_after_shopping - current_on_hand_inventory
         shopping_list_amount_today = max(0, round(recommended_purchase_amount, 2))
 
-    return jsonify({
+    # --- Future Inventory Projection ---
+    # Call the new projection method
+    future_projection_result = manager.get_future_inventory_projection(product_id, projection_days=FUTURE_PROJECTION_HORIZON)
+
+    final_future_projection_data = [] # Default to empty list
+    # Handle if projection itself failed (e.g. product not found by that method, though unlikely if product_details succeeded)
+    if isinstance(future_projection_result, dict) and future_projection_result.get("success") is False:
+        app.logger.error(f"Failed to get future inventory projection for product {product_id}: {future_projection_result.get('message')}")
+        # Depending on how critical this is, you might return an error JSON response:
+        # return jsonify({"error": f"Projection data not available: {future_projection_result.get('message')}"}), 500
+        # For now, we'll allow the modal to load with empty projection data if this specific part fails.
+    elif isinstance(future_projection_result, list):
+        final_future_projection_data = future_projection_result
+    # else: future_projection_result was not a list (unexpected), final_future_projection_data remains empty.
+
+
+    data_to_return = {
         "product_details": product_details,
-        "daily_consumption": daily_consumption,
-        "monthly_consumption": monthly_consumption,
-        "daily_inventory_history": daily_inventory_history,
+        "daily_consumption": daily_consumption, # Historical daily consumption
+        "monthly_consumption": monthly_consumption, # Historical monthly consumption
+        "daily_inventory_history": daily_inventory_history, # Historical daily inventory levels
         "recipes_containing_product": recipes_containing_product,
         "inventory_concerns": inventory_concerns,
         "shopping_list_amount_today": shopping_list_amount_today,
+        "future_projection_data": final_future_projection_data # New comprehensive projection data
         # unit_of_measure, current_on_hand_inventory, nearest_expiry_date are already in product_details
-    })
+    }
+    app.logger.debug(f"Data for modal product ID {product_id}: {data_to_return}")
+    return jsonify(data_to_return)
 
 if __name__ == '__main__':
     # Debug mode should be False in a production environment

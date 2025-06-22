@@ -2276,6 +2276,50 @@ class InventoryManager:
 
         return concerns
 
+    def _get_average_daily_consumption(self, product_id, lookback_days=30):
+        """
+        Calculates or retrieves the average daily consumption for a product.
+        1. Checks for consumption_override_rate.
+        2. If not available, calculates from historical_items.
+        """
+        product = self.get_product(product_id)
+        if not product:
+            # This case should ideally be handled by the caller, but good to have a fallback.
+            print(f"Warning: Product with ID {product_id} not found in _get_average_daily_consumption.")
+            return 0.0
+
+        if product.get('consumption_override_rate') is not None:
+            try:
+                override_rate = float(product['consumption_override_rate'])
+                print(f"Using consumption_override_rate: {override_rate} for product ID {product_id}")
+                return override_rate
+            except ValueError:
+                print(f"Warning: Could not parse consumption_override_rate '{product['consumption_override_rate']}' for product ID {product_id}. Calculating from history.")
+
+        # Calculate from historical data
+        total_consumed_in_lookback = 0.0
+        today = date.today()
+        lookback_start_dt = today - timedelta(days=lookback_days)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT SUM(quantity_consumed_this_time) as total_consumed
+                    FROM historical_items
+                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date < ?
+                ''', (product_id, lookback_start_dt.isoformat(), today.isoformat())) # Use < today to not include today's consumption
+                result_row = cursor.fetchone()
+                if result_row and result_row['total_consumed'] is not None:
+                    total_consumed_in_lookback = float(result_row['total_consumed'])
+
+            if lookback_days > 0:
+                return total_consumed_in_lookback / lookback_days
+            return 0.0
+        except sqlite3.Error as e:
+            print(f"Database error calculating historical consumption for product ID {product_id}: {e}")
+            return 0.0 # Fallback to 0 on error
+
     def project_demand(self, product_name_or_id, lookback_days=30, projection_days=7):
         """
         Analyzes historical consumption and current stock to project future demand using DB.
@@ -2307,45 +2351,21 @@ class InventoryManager:
         else:
             return {"success": False, "message": "Invalid product identifier for projection."}
 
-        avg_daily_consumption = 0.0
-        consumption_rate_overridden = False
-        if product.get('consumption_override_rate') is not None:
-            try:
-                avg_daily_consumption = float(product['consumption_override_rate'])
-                consumption_rate_overridden = True
-                print(f"Using consumption_override_rate: {avg_daily_consumption} for {product_name}")
-            except ValueError:
-                print(f"Warning: Could not parse consumption_override_rate '{product['consumption_override_rate']}' for {product_name}. Proceeding with historical calculation.")
-
-        if not consumption_rate_overridden:
-            try:
-                with self._get_db_connection() as conn:
-                    cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT SUM(quantity_consumed_this_time) as total_consumed
-                    FROM historical_items 
-                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date <= ?
-                ''', (product_id, lookback_start_dt.isoformat(), today.isoformat()))
-                result_row = cursor.fetchone()
-                if result_row and result_row['total_consumed'] is not None:
-                    total_consumed_in_lookback = float(result_row['total_consumed'])
-
-                # Calculate avg_daily_consumption based on historical data if not overridden
-                avg_daily_consumption = (total_consumed_in_lookback / lookback_days) if lookback_days > 0 else 0.0
-
-            except sqlite3.Error as e:
-                print(f"Database error fetching historical data for demand projection (Product ID: {product_id}): {e}")
-                return {
-                    "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
-                    "consumption_override_rate": product.get('consumption_override_rate'),
-                    "current_stock": self.get_total_item_quantity(product_id),
-                    "avg_daily_consumption": 0, "days_to_depletion": "Error fetching history",
-                    "projected_need": 0, "lookback_days": lookback_days, "projection_days": projection_days,
-                    "success": False, "message": f"DB error calculating historical consumption: {e}"
-                }
-        # else: avg_daily_consumption is already set from override
+        # Utilize the new helper method for average daily consumption
+        avg_daily_consumption = self._get_average_daily_consumption(product_id, lookback_days)
+        # total_consumed_in_lookback is not directly available from the helper,
+        # but avg_daily_consumption is the key metric.
+        # For display purposes, if needed, it could be avg_daily_consumption * lookback_days,
+        # but this assumes the lookback period for the helper matches.
 
         current_quantity_sum = self.get_total_item_quantity(product_id)
+        # Calculation of total_consumed_in_lookback for print output needs adjustment if we rely solely on _get_average_daily_consumption
+        # For now, let's assume the print output can be simplified or the value can be derived.
+        # To maintain the original print output accurately, project_demand would still need to perform
+        # its own historical sum query or _get_average_daily_consumption would need to return more data.
+        # For this refactoring, we prioritize using the helper for avg_daily_consumption calculation.
+        # The print statement below will use avg_daily_consumption * lookback_days as an estimate.
+        total_consumed_in_lookback = avg_daily_consumption * lookback_days # Estimate for print
         
         days_to_depletion_str = "N/A"
         if avg_daily_consumption > 0:
@@ -2373,13 +2393,261 @@ class InventoryManager:
         print(f"\n--- Demand Projection for '{product_name}' (ID: {product_id}) ---")
         print(f"Unit of Measure: {product_unit}")
         print(f"Lookback: {lookback_days} days, Projection: {projection_days} days")
-        print(f"Total consumed (lookback): {total_consumed_in_lookback:.2f} {product_unit}")
+        # Note: total_consumed_in_lookback is now an estimate if using the helper that only returns avg.
+        print(f"Total consumed (lookback, estimated): {total_consumed_in_lookback:.2f} {product_unit}")
         print(f"Current stock: {current_quantity_sum:.2f} {product_unit}")
         print(f"Avg daily consumption: {avg_daily_consumption:.2f} {product_unit}/day")
         print(f"Est. days to depletion: {days_to_depletion_str}")
         print(f"Projected need (next {projection_days} days): {projected_need:.2f} {product_unit}")
         print("-----------------------------------------\n")
         return result
+
+    def get_future_inventory_projection(self, product_id, projection_days):
+        """
+        Projects future inventory levels for a product on a daily basis.
+
+        Method Signature: get_future_inventory_projection(self, product_id, projection_days)
+
+        Initialization:
+            Fetch current inventory_items for the product_id, sorted by expiry_date.
+            Fetch all production_items (garden harvests) for the product_id that are relevant.
+            Get avg_daily_consumption:
+                Use _get_average_daily_consumption helper.
+
+        Daily Iteration Loop (for d from 0 to projection_days - 1):
+            current_projection_date = date.today() + timedelta(days=d)
+            projected_inventory_today = previous_day_ending_inventory (or actual current total stock if d == 0).
+            daily_harvest = 0, daily_shrink = 0, daily_consumption = 0.
+
+            Harvests:
+                Iterate through relevant production_items.
+                If current_projection_date is within a production_item's harvest period,
+                add its estimated_daily_yield to projected_inventory_today and daily_harvest.
+
+            Spoilage (Shrink) & Consumption:
+                Identify quantity expiring today (expiring_qty_today) from a copy of inventory_items.
+                inventory_available_for_consumption = projected_inventory_today (which includes expiring_qty_today).
+                consumed_amount_for_day = min(inventory_available_for_consumption, avg_daily_consumption).
+                projected_inventory_today -= consumed_amount_for_day.
+                daily_consumption = consumed_amount_for_day.
+                amount_of_expiring_items_consumed = min(expiring_qty_today, consumed_amount_for_day).
+                shrink_for_the_day = expiring_qty_today - amount_of_expiring_items_consumed.
+                projected_inventory_today -= shrink_for_the_day.
+                daily_shrink = shrink_for_the_day.
+                Update remaining quantities in inventory batches or remove them if fully depleted.
+                (This part is simplified: we operate on total projected_inventory_today for now,
+                 actual batch depletion for *next day's* spoilage is tricky and not fully modeled here yet).
+
+            Record: Store daily data.
+            If projected_inventory_today <= 0 and no depletion date recorded, mark this date.
+
+        Return Value: List of daily record dictionaries.
+        """
+        projection_results = []
+        today = date.today()
+
+        # Fetch product details (needed for name, unit for records)
+        product = self.get_product(product_id)
+        if not product:
+            # Optionally, return an error structure or raise an exception
+            return {"success": False, "message": f"Product with ID {product_id} not found."}
+        product_name = product.get('name', f"Product {product_id}")
+        # unit_of_measure = product.get('unit_of_measure', 'units') # Not directly used in loop logic, but good for records
+
+        # Fetch current inventory batches, sorted by expiry date
+        # These are dictionaries with date objects if get_inventory_batches_for_product is used
+        inventory_batches = self.get_inventory_batches_for_product(product_id, order_by_id_desc=False) # FEFO
+
+        # Create a mutable copy for daily simulation of batch depletion (quantity update or removal)
+        # Each item in simulated_batches should store its current quantity for the simulation
+        simulated_batches = []
+        for batch in inventory_batches:
+            try:
+                # Ensure quantity is float, expiry_date is date object
+                simulated_batches.append({
+                    'id': batch['id'],
+                    'expiry_date': batch['expiry_date'] if isinstance(batch['expiry_date'], date) else date.fromisoformat(batch['expiry_date']),
+                    'current_quantity': self._parse_quantity_string(batch['quantity'])
+                })
+            except (ValueError, TypeError) as e:
+                print(f"Warning: Skipping batch {batch.get('id')} due to invalid data: {e}")
+                continue
+
+        # Sort again just in case (get_inventory_batches_for_product should already sort by expiry)
+        simulated_batches.sort(key=lambda b: b['expiry_date'])
+
+
+        # Fetch relevant production_items (garden harvests)
+        all_production_items = self.get_all_production_items() # Gets all, then filter
+        relevant_production_items = []
+        for item in all_production_items:
+            if item.get('associated_product_id') == product_id:
+                # Check if relevant (status or harvest period overlap)
+                # This logic can be refined based on how 'status' interacts with date calculations
+                try:
+                    plant_dt = date.fromisoformat(item['plant_date'])
+                    time_to_harvest = item.get('time_to_harvest_days', 0)
+                    period_days = item.get('expected_harvest_period_days', 0)
+
+                    item_harvest_start_date = plant_dt + timedelta(days=time_to_harvest)
+                    item_harvest_end_date = item_harvest_start_date + timedelta(days=period_days)
+
+                    # Relevant if its harvest period overlaps with the projection window
+                    # Or if status is Growing/Harvesting (more complex to perfectly align with dates)
+                    # Simplified: if harvest can occur during projection
+                    projection_end_date = today + timedelta(days=projection_days)
+                    if not (item_harvest_end_date < today or item_harvest_start_date > projection_end_date):
+                         # Ensure estimated_daily_yield is calculated and valid
+                        if item.get('estimated_daily_yield') == 'Error' or item.get('estimated_daily_yield') is None:
+                            daily_yield = 0
+                            if period_days > 0 and item.get('expected_yield_total') is not None:
+                                daily_yield = item['expected_yield_total'] / period_days
+                            else: # Default to 0 if cannot calculate
+                                daily_yield = 0
+                            item['estimated_daily_yield'] = daily_yield # Store calculated value
+
+                        relevant_production_items.append({
+                            'plant_date': plant_dt,
+                            'time_to_harvest_days': time_to_harvest,
+                            'expected_harvest_period_days': period_days,
+                            'estimated_daily_yield': item['estimated_daily_yield'],
+                            'harvest_start_date': item_harvest_start_date, # Store calculated dates
+                            'harvest_end_date': item_harvest_end_date
+                        })
+                except (ValueError, TypeError, KeyError) as e:
+                    print(f"Warning: Could not process production item {item.get('id')} for projection: {e}")
+                    continue
+
+
+        # Get average daily consumption
+        avg_daily_consumption = self._get_average_daily_consumption(product_id, lookback_days=30)
+
+        # Initial inventory state
+        current_total_stock = sum(b['current_quantity'] for b in simulated_batches)
+        previous_day_ending_inventory = current_total_stock
+        depletion_date_recorded = False
+
+        for d in range(projection_days):
+            current_projection_date = today + timedelta(days=d)
+
+            opening_inventory_today = previous_day_ending_inventory
+            projected_inventory_today = opening_inventory_today # Start with previous day's end
+
+            daily_harvest = 0.0
+            daily_shrink = 0.0
+            daily_consumption = 0.0
+
+            # 1. Add Harvests for the day
+            for prod_item in relevant_production_items:
+                if prod_item['harvest_start_date'] <= current_projection_date <= prod_item['harvest_end_date']:
+                    harvest_this_day = float(prod_item.get('estimated_daily_yield', 0))
+                    daily_harvest += harvest_this_day
+                    projected_inventory_today += harvest_this_day
+
+            # Inventory after harvest, before consumption and spoilage
+            inventory_before_consumption_spoilage = projected_inventory_today
+
+            # 2. Determine potential spoilage for *today* from existing batches
+            expiring_qty_today = 0.0
+            # Iterate over a copy of simulated_batches for inspection, actual modification happens later
+            for batch in list(simulated_batches): # Iterate copy for safe removal
+                if batch['expiry_date'] == current_projection_date:
+                    expiring_qty_today += batch['current_quantity']
+
+            # 3. Account for Consumption for the day
+            # Consumption happens from the total available pool (including items that might expire today)
+            consumed_amount_for_day = min(projected_inventory_today, avg_daily_consumption)
+            daily_consumption = consumed_amount_for_day
+            projected_inventory_today -= consumed_amount_for_day # Reduce total inventory
+
+            # 4. Attribute consumption to batches (FEFO) and calculate shrink
+            # This section determines how much of the expiring quantity was consumed vs. spoiled
+
+            # Of the quantity that was set to expire today, how much was part of what got consumed?
+            amount_of_expiring_items_consumed_today = min(expiring_qty_today, consumed_amount_for_day)
+
+            # Shrink is the portion of "expiring_qty_today" that was NOT consumed
+            shrink_for_the_day = expiring_qty_today - amount_of_expiring_items_consumed_today
+            daily_shrink = shrink_for_the_day
+
+            # The projected_inventory_today already had consumed_amount_for_day removed.
+            # Now, subtract the part of shrink_for_the_day that effectively removes inventory
+            # that wasn't consumed and has now spoiled.
+            # If consumed_amount_for_day >= expiring_qty_today, all expiring items were consumed, so shrink is 0.
+            # If consumed_amount_for_day < expiring_qty_today, then (expiring_qty_today - consumed_amount_for_day) spoiled.
+            # This amount needs to be subtracted from inventory if it wasn't already effectively removed
+            # by the consumption logic.
+
+            # Let's re-evaluate projected_inventory_today based on clearer steps:
+            # Start of day: opening_inventory_today
+            # Add harvest: opening_inventory_today + daily_harvest
+            # Potential consumption: avg_daily_consumption
+            # Potential spoilage: expiring_qty_today (from batches expiring *today*)
+
+            # Logic revised:
+            # projected_inventory_after_harvest = opening_inventory_today + daily_harvest
+            # consumed_today = min(projected_inventory_after_harvest, avg_daily_consumption)
+            # inventory_after_consumption = projected_inventory_after_harvest - consumed_today
+            # daily_consumption = consumed_today
+
+            # Now, from inventory_after_consumption, what spoils?
+            # Spoilage is from items expiring *today*.
+            # We need to track remaining quantities in batches to do this perfectly.
+
+            # Simpler spoilage for now (as per plan step 7):
+            # The `shrink_for_the_day` is calculated above.
+            # The `projected_inventory_today` was reduced by `consumed_amount_for_day`.
+            # Now, it also needs to be reduced by `shrink_for_the_day`.
+            projected_inventory_today -= shrink_for_the_day # This was the crucial part.
+
+
+            # 5. Update simulated_batches for the *next* day's calculation
+            # This part is essential for multi-day accuracy of spoilage.
+            # Deplete consumed amounts from batches (FEFO)
+            temp_consumed_to_allocate = daily_consumption
+            for batch in sorted(simulated_batches, key=lambda b: b['expiry_date']): # FEFO
+                if temp_consumed_to_allocate <= 0: break
+                amount_from_this_batch = min(batch['current_quantity'], temp_consumed_to_allocate)
+                batch['current_quantity'] -= amount_from_this_batch
+                temp_consumed_to_allocate -= amount_from_this_batch
+
+            # Remove spoiled batches (those that expired today and whose remaining quantity contributed to daily_shrink)
+            temp_shrink_to_allocate = daily_shrink
+            for batch in list(simulated_batches): # Iterate copy for removal
+                if batch['expiry_date'] == current_projection_date:
+                    if temp_shrink_to_allocate <=0: break # All shrink accounted for
+                    amount_spoiled_this_batch = min(batch['current_quantity'], temp_shrink_to_allocate)
+                    batch['current_quantity'] -= amount_spoiled_this_batch
+                    temp_shrink_to_allocate -= amount_spoiled_this_batch
+
+            # Clean up empty batches from simulated_batches
+            simulated_batches = [b for b in simulated_batches if b['current_quantity'] > 0.001] # Keep if some qty remains
+
+            # Ensure projected_inventory_today is not negative
+            projected_inventory_today = max(0, projected_inventory_today)
+
+            # Depletion date
+            depleted_this_day = False
+            if not depletion_date_recorded and projected_inventory_today <= 0:
+                depleted_this_day = True
+                depletion_date_recorded = True # Mark that we've found the first depletion date
+
+            projection_results.append({
+                'date': current_projection_date.isoformat(),
+                'product_id': product_id, # For reference
+                'product_name': product_name, # For reference
+                'opening_inventory': round(opening_inventory_today, 2),
+                'harvest': round(daily_harvest, 2),
+                'consumption': round(daily_consumption, 2),
+                'shrink': round(daily_shrink, 2),
+                'projected_ending_inventory': round(projected_inventory_today, 2),
+                'depletion_date_reached': depleted_this_day
+            })
+
+            previous_day_ending_inventory = projected_inventory_today
+
+        return projection_results
+
 
     def export_data_to_csv(self, filename_prefix="inventory_export_db"):
         """Exports current and historical inventory, and projections to CSV files from DB."""
@@ -2396,35 +2664,87 @@ class InventoryManager:
             except IOError as e: print(f"Error exporting data to '{filename}': {e}")
             except Exception as e: print(f"An unexpected error occurred during CSV export: {e}")
 
-        current_inv_data = self.get_current_inventory()
-        if current_inv_data:
-            # Ensure all keys are present for DictWriter, even if some rows don't have them all
-            # (though SQL SELECT should be consistent)
-            current_fields = ["id", "name", "quantity", "purchase_date", "expiry_date", "original_quantity_string"]
-            write_to_csv_internal(f"{filename_prefix}_current.csv", current_inv_data, current_fields)
-        else: print("Current inventory empty. Skipping export.")
+        current_inv_data = self.get_current_inventory() # This method needs to be checked if it returns full item details or aggregated
+        # For current_fields, if get_current_inventory() is aggregated, we might need a different source for raw batch data.
+        # Assuming get_inventory_batches_for_product(product_id) would be used if exporting specific product batches.
+        # The original current_fields were ["id", "name", "quantity", "purchase_date", "expiry_date", "original_quantity_string"]
+        # which implies batch-level data. If get_current_inventory provides aggregated data, this export part might need adjustment
+        # or a different method call to get all batches of all products.
+        # For now, let's assume get_current_inventory() can provide some form of list of dicts suitable for export.
+        # A more robust export might iterate all products, then all batches for each.
 
-        historical_inv_data = self.get_historical_inventory()
+        # Let's use get_all_products() and then get_inventory_batches_for_product() for a more complete current inventory export.
+        all_prods_for_export = self.get_all_products()
+        all_current_batches_export = []
+        for prod in all_prods_for_export:
+            batches = self.get_inventory_batches_for_product(prod['id'])
+            all_current_batches_export.extend(batches)
+
+        if all_current_batches_export:
+            current_fields = ["id", "product_id", "product_name", "quantity", "purchase_date", "expiry_date", "original_quantity_string", "unit_of_measure"]
+            # Filter data to ensure only existing keys are written (safer for DictWriter)
+            filtered_current_export = []
+            for batch_dict in all_current_batches_export:
+                filtered_dict = {k: batch_dict.get(k) for k in current_fields if k in batch_dict}
+                filtered_current_export.append(filtered_dict)
+            write_to_csv_internal(f"{filename_prefix}_current_batches.csv", filtered_current_export, current_fields)
+        else: print("Current inventory (batches) empty. Skipping export.")
+
+
+        historical_inv_data = self.get_historical_inventory() # This should be fine.
         if historical_inv_data:
-            hist_fields = ["id", "name", "quantity_consumed_this_time", "original_quantity_string", 
-                           "purchase_date", "expiry_date", "consumed_date"]
-            write_to_csv_internal(f"{filename_prefix}_historical.csv", historical_inv_data, hist_fields)
+            hist_fields = ["id", "product_id", "product_display_name", "quantity_consumed_this_time", "original_quantity_string",
+                           "purchase_date", "expiry_date", "consumed_date", "unit_of_measure", "category_name", "subcategory_name"]
+            # Filter data for safety
+            filtered_hist_export = []
+            for hist_dict in historical_inv_data:
+                # Use product_display_name as 'name' for consistency if needed by CSV consumer
+                hist_dict['name'] = hist_dict.get('product_display_name', hist_dict.get('name'))
+                filtered_dict = {k: hist_dict.get(k) for k in hist_fields if k in hist_dict}
+                filtered_hist_export.append(filtered_dict)
+
+            write_to_csv_internal(f"{filename_prefix}_historical.csv", filtered_hist_export, hist_fields)
         else: print("Historical inventory empty. Skipping export.")
 
-        unique_items = set(item['name'] for item in current_inv_data) | \
-                       set(item['name'] for item in historical_inv_data)
-        if unique_items:
-            projections = [self.project_demand(name) for name in sorted(list(unique_items))]
-            # Filter out projections that might have indicated an error during calculation
-            successful_projections = [p for p in projections if p.get("success", True)]
-            if successful_projections:
-                # Get fieldnames from the first successful projection, excluding 'success' if it was added
-                proj_fields = [key for key in successful_projections[0].keys() if key != 'success']
-                write_to_csv_internal(f"{filename_prefix}_projections.csv", successful_projections, proj_fields)
+        # Projections export:
+        # The original code projected demand for items in current/historical.
+        # For future inventory projection, this part might change or be an additional export.
+        # For now, keeping the demand projection export as it was.
+        unique_product_ids_for_demand_projection = set()
+        if all_current_batches_export: # Use product_ids from current batches
+            for item in all_current_batches_export: unique_product_ids_for_demand_projection.add(item['product_id'])
+        if historical_inv_data: # Use product_ids from historical items
+            for item in historical_inv_data: unique_product_ids_for_demand_projection.add(item['product_id'])
+
+        if unique_product_ids_for_demand_projection:
+            demand_projections = [self.project_demand(pid) for pid in sorted(list(unique_product_ids_for_demand_projection))]
+            successful_demand_projections = [p for p in demand_projections if p.get("success", True)] # Original logic
+            if successful_demand_projections:
+                # Make sure all dicts have the same keys for CSV. Get all possible keys from the successful projections.
+                all_proj_keys = set()
+                for p in successful_demand_projections: all_proj_keys.update(p.keys())
+                proj_fields = sorted([key for key in list(all_proj_keys) if key != 'success'])
+
+                write_to_csv_internal(f"{filename_prefix}_demand_projections.csv", successful_demand_projections, proj_fields)
             else:
-                print("No successful projection data generated. Skipping export.")
+                print("No successful demand projection data generated. Skipping export.")
         else:
-            print("No items found to generate projections. Skipping projection export.")
+            print("No items found to generate demand projections. Skipping demand projection export.")
+
+        # Example for exporting future inventory projection for a specific product (can be expanded)
+        # This is just an example, you'd likely iterate or select products for this export.
+        # For demonstration, let's pick the first product_id if available.
+        if unique_product_ids_for_demand_projection:
+            first_product_id_for_future_proj = next(iter(unique_product_ids_for_demand_projection), None)
+            if first_product_id_for_future_proj:
+                future_proj_data = self.get_future_inventory_projection(first_product_id_for_future_proj, 30) # Project 30 days
+                if future_proj_data and isinstance(future_proj_data, list) and len(future_proj_data) > 0 : # Check if it's a list of records
+                    future_proj_fields = future_proj_data[0].keys() # Assuming all dicts have same keys
+                    write_to_csv_internal(f"{filename_prefix}_future_inventory_proj_prod_{first_product_id_for_future_proj}.csv", future_proj_data, list(future_proj_fields))
+                elif isinstance(future_proj_data, dict) and not future_proj_data.get("success", True): # Handle error dict
+                    print(f"Could not generate future inventory projection for product {first_product_id_for_future_proj}: {future_proj_data.get('message')}")
+                else:
+                    print(f"No future inventory projection data generated for product {first_product_id_for_future_proj}.")
 
 
 # --- Standalone Garden Produce Functions (Not part of InventoryManager class) ---
