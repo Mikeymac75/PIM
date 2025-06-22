@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Backup and Restore{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Backup and Restore</h2>
+    <hr>
+
+    <h4>Create Backup</h4>
+    <p>Click the button below to download a backup of the current database.</p>
+    <a href="{{ url_for('create_backup_view') }}" class="btn btn-primary">Create and Download Backup</a>
+    <hr>
+
+    <h4>Restore from Backup</h4>
+    <p class="text-danger"><strong>Warning:</strong> Restoring from a backup will overwrite the current database.
+        A backup of the current database will be made automatically before restoration.</p>
+    <form method="POST" action="{{ url_for('restore_from_backup_view') }}" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="backup_file">Select Backup File (.db):</label>
+            <input type="file" class="form-control-file" id="backup_file" name="backup_file" accept=".db" required>
+        </div>
+        <button type="submit" class="btn btn-warning">Restore Database</button>
+    </form>
+    <hr>
+
+    <a href="{{ url_for('home') }}" class="btn btn-secondary">Back to Home</a>
+</div>
+{% endblock %}
