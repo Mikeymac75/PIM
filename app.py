@@ -123,7 +123,8 @@ def current_inventory_view():
                            current_page=page, total_pages=total_pages, per_page=per_page, search_term=search_term,
                            selected_category=selected_category, selected_purchase_location=selected_purchase_location,
                            filter_is_below_par=filter_is_below_par, sort_by=sort_by, sort_order=sort_order,
-                           categories=categories_options, purchase_locations=purchase_locations_options)
+                           categories=categories_options, purchase_locations=purchase_locations_options
+                           )
 
 @app.route('/inventory/upload_excel', methods=['GET', 'POST'])
 def upload_excel_view():
