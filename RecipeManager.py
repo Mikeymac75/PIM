@@ -138,9 +138,9 @@ class RecipeManager:
                             'notes': row['notes']
                         })
                     recipe['ingredients'] = ingredients
-                    return {"success": True, "data": recipe, "message": "Recipe retrieved successfully."}
-                else:
-                    return {"success": False, "message": f"Recipe with ID {recipe_id} not found.", "data": None, "error_type": "NotFound"}
+                return {"success": True, "data": recipe, "message": "Recipe retrieved successfully."}
+            else:
+                return {"success": False, "message": f"Recipe with ID {recipe_id} not found.", "data": None, "error_type": "NotFound"}
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error getting recipe by ID {recipe_id}: {e}", "error_details": str(e), "data": None, "error_type": "DBError"}
 
@@ -176,9 +176,9 @@ class RecipeManager:
                             'notes': row['notes']
                         })
                     recipe['ingredients'] = ingredients
-                    return {"success": True, "data": recipe, "message": "Recipe retrieved successfully."}
-                else:
-                    return {"success": False, "message": f"Recipe with name '{recipe_name}' not found.", "data": None, "error_type": "NotFound"}
+                return {"success": True, "data": recipe, "message": "Recipe retrieved successfully."}
+            else:
+                return {"success": False, "message": f"Recipe with name '{recipe_name}' not found.", "data": None, "error_type": "NotFound"}
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error getting recipe by name '{recipe_name}': {e}", "error_details": str(e), "data": None, "error_type": "DBError"}
 
