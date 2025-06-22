@@ -22,23 +22,26 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# Define the shared database file path
+# Use an environment variable for the database path, with a default for development.
+# IMPORTANT: For production or specific setups, set DATABASE_FILE_PATH environment variable.
 DATABASE_FILE = os.environ.get('DATABASE_FILE_PATH', 'food_app.db')
+
+# Instantiate Managers globally, using the shared database file
+# The manager classes themselves will handle DB initialization (table creation IF NOT EXISTS)
 manager = InventoryManager(db_filepath=DATABASE_FILE)
 recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
 
 # --- Helper Functions ---
 def _get_unique_item_names(include_historical=False):
-    all_products_response = manager.get_all_products(page=None, per_page=None)
-    unique_names = set()
-    if all_products_response.get("success"):
-        products_data = all_products_response.get("data", [])
-        if all_products_response.get("warnings"):
-            for warning in all_products_response["warnings"]:
-                app.logger.warning(f"_get_unique_item_names Warning: {warning}")
-        for product in products_data:
-            if 'name' in product: unique_names.add(product['name'])
-    else:
-        app.logger.error(f"Error in _get_unique_item_names: {all_products_response.get('message')} (Type: {all_products_response.get('error_type')})")
+    """
+    Helper to get sorted unique item names from the products table.
+    The `include_historical` parameter is less relevant now as we fetch from a definitive product list.
+    """
+    # manager.get_all_products() returns a list of product dictionaries
+    all_products = manager.get_all_products()
+    # Assuming each product dict has a 'name' key
+    unique_names = set(product['name'] for product in all_products if 'name' in product)
     return sorted(list(unique_names))
 
 # --- Flask Routes ---
@@ -52,78 +55,250 @@ def inventory_usage_links_view():
 
 @app.route('/inventory/current')
 def current_inventory_view():
+    # Retrieve filter and sort parameters from request.args
     search_term = request.args.get('search_term', '').strip()
     selected_category = request.args.get('category', '').strip()
     selected_purchase_location = request.args.get('purchase_location', '').strip()
-    filter_is_below_par = request.args.get('filter_is_below_par', 'false').strip().lower() == 'true'
+
+    filter_is_below_par_str = request.args.get('filter_is_below_par', 'false').strip().lower()
+    filter_is_below_par = filter_is_below_par_str == 'true'
+
+    # Sort_by now defaults to product name, as expiry_date is not directly available for aggregated products
     sort_by = request.args.get('sort_by', 'p.name').strip()
     sort_order = request.args.get('sort_order', 'ASC').strip().upper()
-    if sort_order not in ['ASC', 'DESC']: sort_order = 'ASC'
-    try: page = int(request.args.get('page', 1)); page = max(1, page)
-    except ValueError: page = 1
-    try: per_page = int(request.args.get('per_page', 20)); per_page = max(1, per_page)
-    except ValueError: per_page = 20
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
 
-    products_raw_response = manager.get_current_inventory(
-        search_term=search_term or None, category=selected_category or None,
-        purchase_location=selected_purchase_location or None, sort_by=sort_by,
-        sort_order=sort_order, page=page, per_page=per_page
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20)) # Default 20 items per page
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Fetch data from manager using SQL-filterable parameters
+    # Renamed inventory_items_raw to products_raw
+    products_raw = manager.get_current_inventory(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
     )
-    products_raw = []
-    if products_raw_response.get("success"):
-        products_raw = products_raw_response.get("data", [])
-        for warning in products_raw_response.get("warnings", []): app.logger.warning(f"Current Inventory: {warning}")
-    else:
-        flash(products_raw_response.get("message", "Error fetching current inventory."), "error")
-        app.logger.error(f"Current Inventory Error: {products_raw_response.get('message')} (Type: {products_raw_response.get('error_type')})")
 
-    total_items_response = manager.get_current_inventory_count(
-        search_term=search_term or None, category=selected_category or None,
-        purchase_location=selected_purchase_location or None
+    # total_items is now the count of distinct products
+    total_items = manager.get_current_inventory_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None
     )
-    total_items = 0
-    if total_items_response.get("success"):
-        total_items = total_items_response.get("data", 0)
-        for warning in total_items_response.get("warnings", []): app.logger.warning(f"Current Inventory Count: {warning}")
-    else:
-        flash(total_items_response.get("message", "Error fetching inventory count."), "error")
-        app.logger.error(f"Current Inventory Count Error: {total_items_response.get('message')} (Type: {total_items_response.get('error_type')})")
 
+    # Process products and apply is_below_par filter if requested
+    # Renamed processed_inventory_items to processed_products and item_dict to product_dict
     processed_products = []
     for product_dict in products_raw:
         product_processed = dict(product_dict)
+        # numeric_quantity is now total_quantity from the aggregated data
         numeric_quantity = product_processed.get('total_quantity', 0.0)
-        par_level = float(product_processed.get('par_level', 0.0) or 0.0)
+        par_level = product_processed.get('par_level', 0.0)
+        if par_level is None: par_level = 0.0
+        # Ensure par_level is float for comparison
+        else: par_level = float(par_level)
+        
         product_processed['is_below_par'] = (numeric_quantity < par_level and par_level > 0)
-        if not filter_is_below_par or product_processed['is_below_par']:
+
+        if filter_is_below_par:
+            if product_processed['is_below_par']:
+                processed_products.append(product_processed)
+        else:
             processed_products.append(product_processed)
 
+    # Pagination calculation (uses total_items from DB before Python-level 'is_below_par' filtering)
+    # If filter_is_below_par is active, the actual number of items on the page might be less than per_page.
+    # And total_pages might be misleading if the filter significantly reduces item count.
+    # A more accurate pagination for client-side filtering would require adjusting total_items here.
+    # For now, pagination reflects the count *before* the Python-side "is_below_par" filter.
     total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
-    if page > total_pages and total_pages > 0: page = total_pages # Adjust if page out of bounds
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+        # Optionally re-fetch if strict item count per page is needed after Python filter.
+        # products_raw = manager.get_current_inventory(...) with new page
+        # then re-process for processed_products.
+        # For now, we accept that the page might show fewer items if filtered in Python.
+        # The user is on the 'last available page' according to DB count.
 
-    categories_options_response = manager.get_current_inventory_categories()
-    categories_options = []
-    if categories_options_response.get("success"):
-        categories_options = categories_options_response.get("data", [])
-        for warning in categories_options_response.get("warnings",[]): app.logger.warning(f"Current Inv Cats: {warning}")
-    else:
-        flash(categories_options_response.get("message", "Error fetching categories."), "error")
-        app.logger.error(f"Current Inv Cats Error: {categories_options_response.get('message')} (Type: {categories_options_response.get('error_type')})")
+    # Fetch filter options
+    categories_options = manager.get_current_inventory_categories() # Still relevant
+    purchase_locations_options = manager.get_current_inventory_purchase_locations() # Still relevant
 
-    purchase_locations_options_response = manager.get_current_inventory_purchase_locations()
-    purchase_locations_options = []
-    if purchase_locations_options_response.get("success"):
-        purchase_locations_options = purchase_locations_options_response.get("data", [])
-        for warning in purchase_locations_options_response.get("warnings",[]): app.logger.warning(f"Current Inv Locs: {warning}")
-    else:
-        flash(purchase_locations_options_response.get("message", "Error fetching purchase locations."), "error")
-        app.logger.error(f"Current Inv Locs Error: {purchase_locations_options_response.get('message')} (Type: {purchase_locations_options_response.get('error_type')})")
+    today = date.today() # Still relevant for general display, not for expiry
+    return render_template(
+        'current_inventory.html',
+        items=processed_products, # Pass processed_products
+        today=today,
+        timedelta=timedelta, # Keep if template uses it for other date logic
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        selected_purchase_location=selected_purchase_location,
+        # expiry_start_date and expiry_end_date removed from context
+        filter_is_below_par=filter_is_below_par,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options,
+        purchase_locations=purchase_locations_options
+    )
+
+@app.route('/inventory/historical')
+def historical_inventory_view():
+    # Retrieve filter and sort parameters
+    search_term = request.args.get('search_term', '').strip()
+    selected_category = request.args.get('category', '').strip()
+    consumed_start_date = request.args.get('consumed_start_date', '').strip()
+    consumed_end_date = request.args.get('consumed_end_date', '').strip()
+
+    sort_by = request.args.get('sort_by', 'consumed_date').strip()
+    sort_order = request.args.get('sort_order', 'DESC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'DESC'
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20))
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Fetch data from manager
+    historical_items = manager.get_historical_inventory(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        consumed_start_date=consumed_start_date if consumed_start_date else None,
+        consumed_end_date=consumed_end_date if consumed_end_date else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
+
+    total_items = manager.get_historical_inventory_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        consumed_start_date=consumed_start_date if consumed_start_date else None,
+        consumed_end_date=consumed_end_date if consumed_end_date else None
+    )
+
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+
+    # Adjust page if out of bounds (e.g., after filters change total item count)
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+        # Re-fetch for the new valid page
+        historical_items = manager.get_historical_inventory(
+            search_term=search_term if search_term else None,
+            category=selected_category if selected_category else None,
+            consumed_start_date=consumed_start_date if consumed_start_date else None,
+            consumed_end_date=consumed_end_date if consumed_end_date else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            per_page=per_page
+        )
+
+    # Fetch filter options
+    categories_options = manager.get_historical_inventory_categories()
+
+    return render_template(
+        'historical_inventory.html',
+        items=historical_items,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        consumed_start_date=consumed_start_date,
+        consumed_end_date=consumed_end_date,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options
+    )
+
+@app.route('/inventory/consume', methods=['GET', 'POST'])
+def consume_item_view():
+    item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
+    all_recipes = recipe_mngr.get_all_recipes() # Fetch recipes once for the view
+
+    if request.method == 'POST':
+        consumption_type = request.form.get('consumption_type', 'item') # Default to 'item'
+
+        if consumption_type == 'recipe':
+            recipe_name_to_consume = request.form.get('recipe_name_to_consume')
+            if not recipe_name_to_consume:
+                flash("Please select a recipe to consume.", 'error')
+                # item_names and all_recipes are already fetched
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+            else:
+                # Redirect to the make_recipe_view, which handles the actual consumption
+                return redirect(url_for('make_recipe_view', recipe_name=recipe_name_to_consume))
         
-    return render_template('current_inventory.html', items=processed_products, today=date.today(), timedelta=timedelta,
-                           current_page=page, total_pages=total_pages, per_page=per_page, search_term=search_term,
-                           selected_category=selected_category, selected_purchase_location=selected_purchase_location,
-                           filter_is_below_par=filter_is_below_par, sort_by=sort_by, sort_order=sort_order,
-                           categories=categories_options, purchase_locations=purchase_locations_options)
+        # Else, it's an 'item' consumption (existing logic)
+        else: # consumption_type == 'item'
+            item_name = request.form.get('item_name')
+            quantity_consumed_str = request.form.get('quantity_consumed')
+
+            errors = []
+            if not item_name:
+                errors.append("Item name is required.")
+
+            numeric_quantity_consumed = None # Initialize to None
+            if not quantity_consumed_str:
+                errors.append("Quantity to consume is required.")
+            else:
+                try:
+                    numeric_quantity_consumed = float(quantity_consumed_str) # Allow for float quantities
+                    if numeric_quantity_consumed <= 0: # This check is now in FoodManager, but good to have here too for early feedback
+                        errors.append("Quantity to consume must be a positive number (greater than zero).")
+                except ValueError:
+                    errors.append("Quantity to consume must be a valid number.")
+
+            if errors:
+                for error in errors:
+                    flash(error, 'error')
+                # item_names and all_recipes are already fetched
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+
+            # If validation passes for item consumption
+            try:
+                result = manager.consume_item(item_name, numeric_quantity_consumed)
+
+                if result.get("success"):
+                    flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
+                else:
+                    flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
+
+                return redirect(url_for('current_inventory_view'))
+
+            except Exception as e:
+                flash(f"An unexpected error occurred while consuming item: {e}", 'error')
+                # item_names and all_recipes are already fetched
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+
+    # For GET request (all_recipes already fetched)
+    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data={})
 
 @app.route('/inventory/upload_excel', methods=['GET', 'POST'])
 def upload_excel_view():
@@ -131,6 +306,248 @@ def upload_excel_view():
         if 'excel_file' not in request.files:
             flash('No file part in the request.', 'error')
             return redirect(request.url)
+        
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                workbook = openpyxl.load_workbook(file)
+                sheet = workbook.active # Get the first active sheet
+
+                # Determine header row and map columns
+                # Assuming first row is header
+                header_row_values = [cell.value for cell in sheet[1]]
+                # Create a mapping from lowercased header name to its column index
+                header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
+
+                required_headers = ['name', 'quantity', 'purchase date', 'expiry days']
+                missing_headers = [req_h for req_h in required_headers if req_h not in header_map]
+                if missing_headers:
+                    flash(f"Missing required columns in Excel: {', '.join(missing_headers)}. Please check headers.", 'error')
+                    return redirect(request.url)
+
+                name_col = header_map['name']
+                qty_col = header_map['quantity']
+                pdate_col = header_map['purchase date']
+                expdays_col = header_map['expiry days']
+                
+                # Optional columns, get their index if they exist, otherwise None
+                category_col = header_map.get('category') 
+                subcategory_col = header_map.get('subcategory')
+                par_level_col = header_map.get('par level')
+                max_holding_col = header_map.get('max holding amount')
+                purchase_location_col = header_map.get('purchase location') # New
+                unit_of_measure_col = header_map.get('unit of measure') # New
+                
+                items_added_count = 0
+                error_messages = []
+                # uom_mismatch_warnings = [] # These are now part of general warnings
+
+                items_pending_confirmation = []
+                all_upload_warnings = []
+
+
+                for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                    # Stop if first cell of row is empty (common way to detect end of data)
+                    # Ensure the row has enough columns to prevent IndexError if a row is shorter than header
+                    if len(row) <= max(name_col, qty_col, pdate_col, expdays_col):
+                        error_messages.append(f"Row {row_idx}: Skipped due to insufficient columns.")
+                        continue
+
+                    name = str(row[name_col]).strip() if row[name_col] is not None else None
+                    quantity = str(row[qty_col]).strip() if row[qty_col] is not None else None
+                    purchase_date_val = row[pdate_col] # Handled by type checks later
+                    expiry_days_val = row[expdays_col] # Handled by type checks later
+
+                    # Extract optional fields, defaulting to None if column doesn't exist or cell is empty
+                    category = str(row[category_col]).strip() if category_col is not None and row[category_col] is not None else None
+                    subcategory = str(row[subcategory_col]).strip() if subcategory_col is not None and row[subcategory_col] is not None else None
+                    par_level_val = row[par_level_col] if par_level_col is not None and row[par_level_col] is not None else "0" # Default to "0" if cell empty/col missing
+                    max_holding_val = row[max_holding_col] if max_holding_col is not None and row[max_holding_col] is not None else "0" # Default to "0"
+                    purchase_location_val = str(row[purchase_location_col]).strip() if purchase_location_col is not None and row[purchase_location_col] is not None else None # New
+                    unit_of_measure_val = str(row[unit_of_measure_col]).strip() if unit_of_measure_col is not None and row[unit_of_measure_col] is not None else None # New
+
+                    # Skip row if essential 'name' field is missing
+                    if not name:
+                        # Check if any other relevant cell in the row has data to avoid skipping genuinely sparse rows
+                        # vs. completely blank rows often found at the end of sheets.
+                        other_cells_have_data = any(
+                            row[col_idx] for col_idx in [qty_col, pdate_col, expdays_col,
+                                                         category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col, unit_of_measure_col]
+                            if col_idx is not None and len(row) > col_idx and row[col_idx] is not None
+                        )
+                        if other_cells_have_data:
+                            error_messages.append(f"Row {row_idx}: Name is missing but other data present. Skipped.")
+                        # If all relevant cells are effectively empty, it's likely an empty row, so just continue
+                        elif not any(row[col_idx] for col_idx in [name_col, qty_col, pdate_col, expdays_col,
+                                                                category_col, subcategory_col, par_level_col, max_holding_col, purchase_location_col, unit_of_measure_col]
+                                     if col_idx is not None and len(row) > col_idx and row[col_idx] is not None):
+                            continue
+                        else: # Name missing, other fields might be empty too, but log it
+                             error_messages.append(f"Row {row_idx}: Name is missing. Skipped.")
+                        continue
+                    
+                    row_errors = []
+                    # Validate required fields
+                    if quantity is None or quantity == "": row_errors.append("Quantity is missing.") # Quantity is text, can be "0"
+                    if purchase_date_val is None: row_errors.append("Purchase Date is missing.")
+                    if expiry_days_val is None: row_errors.append("Expiry Days is missing.")
+
+                    purchase_date_str = None
+                    if isinstance(purchase_date_val, datetime):
+                        purchase_date_str = purchase_date_val.strftime('%Y-%m-%d')
+                    elif isinstance(purchase_date_val, str):
+                        try:
+                            date.fromisoformat(purchase_date_val) # Validate format
+                            purchase_date_str = purchase_date_val
+                        except ValueError:
+                            row_errors.append(f"Invalid Purchase Date format '{purchase_date_val}'. Use YYYY-MM-DD.")
+                    elif purchase_date_val is not None: 
+                         row_errors.append(f"Purchase Date '{purchase_date_val}' is not in YYYY-MM-DD text or Excel date format.")
+
+                    expiry_days_int = None # Will hold successfully parsed int
+                    if isinstance(expiry_days_val, (int, float)):
+                        expiry_days_int = int(expiry_days_val)
+                        if expiry_days_int < 0:
+                            row_errors.append("Expiry Days must be a non-negative number.")
+                            expiry_days_int = None # Reset if invalid
+                    elif isinstance(expiry_days_val, str) and expiry_days_val.strip().lstrip('-').isdigit(): # Handle numbers as strings, allow negative for initial check
+                        expiry_days_int = int(expiry_days_val.strip())
+                        if expiry_days_int < 0:
+                             row_errors.append("Expiry Days must be a non-negative number.")
+                             expiry_days_int = None # Reset if invalid
+                    elif expiry_days_val is not None: # If not None and not int/float/parsable string
+                        row_errors.append(f"Expiry Days '{expiry_days_val}' must be a valid whole number.")
+
+                    # Validate optional numeric fields: par_level, max_holding_amount
+                    par_level_float = None
+                    try:
+                        par_level_val_cleaned = str(par_level_val).strip() if par_level_val is not None else "0"
+                        par_level_float = float(par_level_val_cleaned)
+                        if par_level_float < 0:
+                            row_errors.append("Par Level must be a non-negative number.")
+                            par_level_float = None # Reset if invalid
+                    except (ValueError, TypeError):
+                        row_errors.append(f"Invalid Par Level '{par_level_val}'. Must be a valid number.")
+
+                    max_holding_float = None
+                    try:
+                        max_holding_val_cleaned = str(max_holding_val).strip() if max_holding_val is not None else "0"
+                        max_holding_float = float(max_holding_val_cleaned)
+                        if max_holding_float < 0:
+                            row_errors.append("Max Holding Amount must be a non-negative number.")
+                            max_holding_float = None # Reset if invalid
+                    except (ValueError, TypeError):
+                        row_errors.append(f"Invalid Max Holding Amount '{max_holding_val}'. Must be a valid number.")
+
+                    # Validate purchase_location_val (optional, but if provided, must be one of the allowed values)
+                    purchase_location_to_pass = None
+                    if purchase_location_val:
+                        allowed_locations = ['Sobeys', 'Costco']
+                        if purchase_location_val in allowed_locations:
+                            purchase_location_to_pass = purchase_location_val
+                        else:
+                            row_errors.append(f"Invalid Purchase Location '{purchase_location_val}'. If provided, must be one of: {', '.join(allowed_locations)}.")
+                    
+                    # Conditional requirement for unit_of_measure
+                    product_exists = manager.get_product_by_name(name)
+                    if not product_exists and not unit_of_measure_val:
+                        row_errors.append("Unit of Measure is required for new products.")
+
+                    if row_errors: 
+                        error_messages.append(f"Row {row_idx} ('{name}'): " + "; ".join(row_errors))
+                        continue 
+
+                    # If all validations pass for this row, attempt to add to inventory
+                    try:
+                        result = manager.add_item_to_list(
+                            name=str(name),
+                            quantity_str=str(quantity),
+                            purchase_date_str=purchase_date_str,
+                            expiry_days=expiry_days_int,
+                            category=category if category else None,
+                            subcategory=subcategory if subcategory else None,
+                            par_level=par_level_float,
+                            max_holding_amount=max_holding_float,
+                            purchase_location=purchase_location_to_pass,
+                            unit_of_measure=unit_of_measure_val
+                        )
+
+                        if result.get("action_required"):
+                            items_pending_confirmation.append({
+                                "product_data": result["product_data"], # This is the dict of original args
+                                "confirmation_details": result["confirmation_details"],
+                                "action_required": result["action_required"],
+                                "row_idx": row_idx # For user reference
+                            })
+                        elif result.get("success"):
+                            items_added_count += 1
+                        else: # Error processing this row
+                            error_messages.append(f"Row {row_idx} ('{name}'): {result.get('message', 'Unknown error')}")
+
+                        if result.get("warnings"):
+                            for warning in result.get("warnings"):
+                                all_upload_warnings.append(f"Row {row_idx} ('{name}'): {warning}")
+
+                    except ValueError as ve: # Catch validation errors from add_item_to_list if it raises them
+                         error_messages.append(f"Row {row_idx} ('{name}'): Validation Error - {str(ve)}")
+                    except Exception as e: # Catch other errors from manager.add_item_to_list
+                        error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {str(e)}")
+
+                session['items_pending_confirmation'] = items_pending_confirmation
+                session['upload_warnings'] = all_upload_warnings
+
+                if items_pending_confirmation:
+                    flash(f"{len(items_pending_confirmation)} items require confirmation for new categories/subcategories.", 'info')
+                    if items_added_count > 0: flash(f"Additionally, {items_added_count} items were added directly.", 'success')
+                    if error_messages:
+                        flash(f"{len(error_messages)} other rows had errors. Details below:", 'error')
+                        for err_msg in error_messages[:5]: flash(err_msg, 'error_detail')
+                    # Redirect to GET to display confirmation page (which is the same URL)
+                    return redirect(url_for('upload_excel_view'))
+                
+                # If no items pending, proceed with normal flash messages
+                if items_added_count > 0:
+                    flash(f"Successfully processed and added {items_added_count} items from the Excel file.", 'success')
+                if all_upload_warnings:
+                    flash(f"{len(all_upload_warnings)} warnings encountered during processing:", 'warning')
+                    for warn_msg in all_upload_warnings[:10]: flash(warn_msg, 'warning_detail')
+                if error_messages:
+                    flash(f"{len(error_messages)} rows had errors and were not processed. Details below:", 'error')
+                    for err_msg in error_messages[:5]: flash(err_msg, 'error_detail')
+                if items_added_count == 0 and not error_messages and not all_upload_warnings and not items_pending_confirmation:
+                     flash("No items were found or added from the file. The file might be empty or data starts after row 2.", 'info')
+
+                session.pop('upload_warnings', None) # Clear warnings if no pending items
+                return redirect(url_for('current_inventory_view'))
+
+            except Exception as e:
+                flash(f"An error occurred while processing the Excel file: {e}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    pending_items = session.get('items_pending_confirmation', [])
+    upload_warnings = session.get('upload_warnings', []) # Retrieve warnings for display
+
+    if pending_items:
+        # If there are items pending confirmation, always show them
+        return render_template('upload_excel.html', items_pending_confirmation=pending_items, upload_warnings=upload_warnings)
+
+    # Otherwise, it's a normal GET request for the upload form (or after processing with no pending items)
+    return render_template('upload_excel.html', upload_warnings=upload_warnings) # Pass warnings even for initial page load if any exist (e.g. from previous failed confirm)
+
+@app.route('/upload_recipes_excel', methods=['GET', 'POST'])
+def upload_recipes_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
         file = request.files['excel_file']
         if file.filename == '':
             flash('No selected file.', 'error')
@@ -140,200 +557,2152 @@ def upload_excel_view():
             try:
                 workbook = openpyxl.load_workbook(file)
                 sheet = workbook.active
+
                 header_row_values = [cell.value for cell in sheet[1]]
                 header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
-                
-                required_excel_headers = ['name', 'quantity', 'purchase date', 'expiry days']
-                missing_excel_headers = [req_h for req_h in required_excel_headers if req_h not in header_map]
-                if missing_excel_headers:
-                    flash(f"Missing required columns in Excel: {', '.join(missing_excel_headers)}. Please check headers.", 'error')
+
+                # Define expected headers (case-insensitive)
+                # Base headers
+                expected_base_headers = ['recipe name', 'description', 'instructions',
+                                         'output product name', 'output yield']
+                # Ingredient headers (dynamic part)
+                expected_ingredient_headers = []
+                for i in range(1, 16): # Max 15 ingredients
+                    expected_ingredient_headers.append(f'ingredient {i} name')
+                    expected_ingredient_headers.append(f'ingredient {i} quantity')
+                    expected_ingredient_headers.append(f'ingredient {i} notes')
+
+                all_expected_headers = expected_base_headers + expected_ingredient_headers
+
+                # Check for mandatory 'Recipe Name' header
+                if 'recipe name' not in header_map:
+                    flash("Missing required column in Excel: 'Recipe Name'. Please check headers.", 'error')
                     return redirect(request.url)
 
-                items_added_count = 0; error_messages = []; items_pending_confirmation = []; all_upload_warnings = []
+                recipes_added_count = 0
+                error_messages = []
+                warning_messages = []
 
-                for row_idx, excel_row_values in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-                    if all(cell_value is None for cell_value in excel_row_values[:len(header_map)]): continue
+                for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                    # Helper to get cell value by header name, returns None if header missing or cell empty
+                    def get_cell_value(header_name):
+                        col_idx = header_map.get(header_name.lower())
+                        if col_idx is not None and len(row) > col_idx and row[col_idx] is not None:
+                            return str(row[col_idx]).strip()
+                        return None
 
-                    row_data_dict = {}
-                    excel_header_to_dict_key = {
-                        'name': 'name', 'quantity': 'quantity_str', 'purchase date': 'purchase_date_val',
-                        'expiry days': 'expiry_days_val', 'category': 'category_name', 'subcategory': 'subcategory_name',
-                        'par level': 'par_level_val', 'max holding amount': 'max_holding_val',
-                        'purchase location': 'purchase_location', 'unit of measure': 'unit_of_measure'
+                    recipe_name = get_cell_value('Recipe Name')
+
+                    if not recipe_name: # Skip row if recipe name is missing
+                        # Check if any other cell in the row has data to avoid skipping genuinely sparse rows vs. blank rows.
+                        if any(get_cell_value(h) for h in all_expected_headers if h.lower() != 'recipe name'):
+                            error_messages.append(f"Row {row_idx}: Recipe Name is missing but other data present. Skipped.")
+                        continue # Skip blank or effectively blank rows silently
+
+                    description = get_cell_value('Description')
+                    instructions = get_cell_value('Instructions')
+                    output_product_name_str = get_cell_value('Output Product Name')
+                    output_yield_str = get_cell_value('Output Yield')
+
+                    row_specific_errors = []
+
+                    # Validate Output Product and Yield
+                    output_product_id = None
+                    output_yield_float = None
+
+                    if output_product_name_str:
+                        product = manager.get_product_by_name(output_product_name_str)
+                        if not product:
+                            row_specific_errors.append(f"Output Product Name '{output_product_name_str}' not found in system.")
+                        else:
+                            output_product_id = product['id']
+                            if not output_yield_str:
+                                row_specific_errors.append("Output Yield is required when Output Product Name is provided.")
+                            else:
+                                try:
+                                    output_yield_float = float(output_yield_str)
+                                    if output_yield_float <= 0:
+                                        row_specific_errors.append("Output Yield must be a positive number.")
+                                except ValueError:
+                                    row_specific_errors.append(f"Invalid Output Yield '{output_yield_str}'. Must be a number.")
+                    elif output_yield_str: # Yield provided without product name
+                        warning_messages.append(f"Row {row_idx} ('{recipe_name}'): Output Yield '{output_yield_str}' provided without an Output Product Name. Yield will be ignored.")
+
+
+                    ingredients_data = []
+                    for i in range(1, 16):
+                        ing_name_str = get_cell_value(f'Ingredient {i} Name')
+                        ing_qty_str = get_cell_value(f'Ingredient {i} Quantity')
+                        ing_notes_str = get_cell_value(f'Ingredient {i} Notes') # Optional
+
+                        if ing_name_str:
+                            # Validate ingredient product exists (optional, recipe_mngr might handle it)
+                            # For now, let's assume recipe_mngr.add_recipe handles unknown ingredient names by flagging/erroring.
+                            if not ing_qty_str:
+                                row_specific_errors.append(f"Ingredient {i} Quantity is required for '{ing_name_str}'.")
+                            else:
+                                try:
+                                    ing_qty_float = float(ing_qty_str)
+                                    if ing_qty_float <= 0:
+                                        row_specific_errors.append(f"Ingredient {i} Quantity for '{ing_name_str}' must be positive.")
+                                    else:
+                                        ingredients_data.append({
+                                            'item_name': ing_name_str,
+                                            'quantity_required': ing_qty_float, # Matching add_recipe_view
+                                            'notes': ing_notes_str if ing_notes_str else "" # Notes are optional
+                                        })
+                                except ValueError:
+                                    row_specific_errors.append(f"Invalid Ingredient {i} Quantity '{ing_qty_str}' for '{ing_name_str}'. Must be a number.")
+                        elif ing_qty_str: # Quantity provided without ingredient name
+                             row_specific_errors.append(f"Ingredient {i} Name is missing but Quantity '{ing_qty_str}' was provided.")
+
+
+                    if row_specific_errors:
+                        error_messages.append(f"Row {row_idx} ('{recipe_name}'): " + "; ".join(row_specific_errors))
+                        continue # Skip this recipe due to errors
+
+                    # Prepare data for recipe_mngr.add_recipe()
+                    recipe_data_for_manager = {
+                        "name": recipe_name,
+                        "description": description if description else "",
+                        "instructions": instructions if instructions else "",
+                        "ingredients": ingredients_data,
+                        "output_product_id": output_product_id,
+                        "output_yield": output_yield_float
                     }
-                    for header_name, col_idx in header_map.items():
-                        if col_idx < len(excel_row_values):
-                            dict_key = excel_header_to_dict_key.get(header_name)
-                            if dict_key:
-                                cell_val = excel_row_values[col_idx]
-                                if dict_key == 'quantity_str': row_data_dict[dict_key] = str(cell_val) if cell_val is not None else None
-                                elif isinstance(cell_val, str): row_data_dict[dict_key] = cell_val.strip()
-                                else: row_data_dict[dict_key] = cell_val
-                    
-                    current_item_name = row_data_dict.get('name', 'N/A')
-                    if not current_item_name or (current_item_name == 'N/A' and not any(v for k,v in row_data_dict.items() if k != 'name')):
-                        if any(v for k,v in row_data_dict.items() if k != 'name'): # Only error if other data present
-                             error_messages.append(f"Row {row_idx}: Name is missing but other data present. Skipped.")
-                        continue # Skip blank or effectively blank rows
 
-                    result = manager.process_excel_row_for_inventory_upload(row_data_dict)
+                    try:
+                        result = recipe_mngr.add_recipe(recipe_data_for_manager)
+                        if result.get("success"):
+                            recipes_added_count += 1
+                        else:
+                            error_messages.append(f"Row {row_idx} ('{recipe_name}'): Failed to add recipe - {result.get('message', 'Unknown error')}")
+                    except Exception as e:
+                        error_messages.append(f"Row {row_idx} ('{recipe_name}'): Unexpected error adding recipe - {str(e)}")
 
-                    for warning in result.get("warnings", []): all_upload_warnings.append(f"Row {row_idx} ('{current_item_name}'): {warning}")
-                    for err in result.get("row_errors", []): error_messages.append(f"Row {row_idx} ('{current_item_name}'): {err}")
-                    
-                    status = result.get("status")
-                    if status == "success": items_added_count += 1
-                    elif status == "confirmation_required":
-                        items_pending_confirmation.append({
-                            "product_data": result.get("product_data_for_confirmation", row_data_dict),
-                            "confirmation_details": result.get("confirmation_details", {}),
-                            "action_required": result.get("action_required"), "row_idx": row_idx
-                        })
-                    elif status == "error" and not result.get("row_errors"):
-                        error_messages.append(f"Row {row_idx} ('{current_item_name}'): {result.get('message', 'Unknown processing error.')}")
-                        app.logger.error(f"Upload Excel Row {row_idx} ('{current_item_name}') - Processing Error: {result.get('message')}")
+                # Flash messages after processing all rows
+                if recipes_added_count > 0:
+                    flash(f"Successfully added {recipes_added_count} recipes from the Excel file.", 'success')
 
-                session['items_pending_confirmation'] = items_pending_confirmation
-                session['upload_warnings'] = all_upload_warnings
+                if warning_messages:
+                    flash(f"{len(warning_messages)} warnings encountered:", 'warning')
+                    for warn_msg in warning_messages[:10]: # Show up to 10 warnings
+                        flash(warn_msg, 'warning_detail')
 
-                if items_pending_confirmation:
-                    flash(f"{len(items_pending_confirmation)} items require confirmation.", 'info')
-                if items_added_count > 0: flash(f"{items_added_count} items added directly.", 'success')
                 if error_messages:
-                    flash(f"{len(error_messages)} rows had errors. Details below:", 'error')
-                    for err_msg in error_messages[:5]: flash(err_msg, 'error_detail')
-                if not items_pending_confirmation and items_added_count == 0 and not error_messages and not all_upload_warnings:
-                     flash("No items were found or processed from the file.", 'info')
+                    flash(f"{len(error_messages)} rows/recipes had errors and were not processed. Details below:", 'error')
+                    for err_msg in error_messages[:10]: # Show up to 10 errors
+                        flash(err_msg, 'error_detail')
 
-                if items_pending_confirmation: return redirect(url_for('upload_excel_view')) # Show confirmation page
-                session.pop('upload_warnings', None) # Clear if no pending items
-                return redirect(url_for('current_inventory_view'))
+                if recipes_added_count == 0 and not error_messages and not warning_messages:
+                     flash("No new recipes were found or added from the file. The file might be empty, data might start after row 2, or all recipes already exist.", 'info')
 
+                return redirect(url_for('recipes_list_view'))
+
+            except openpyxl.utils.exceptions.InvalidFileException:
+                 flash("The uploaded file is not a valid Excel (.xlsx) file or is corrupted.", 'error')
+                 return redirect(request.url)
             except Exception as e:
-                app.logger.error(f"Error processing Excel file: {e}", exc_info=True)
-                flash(f"An error occurred while processing the Excel file: {str(e)}", 'error')
+                app.logger.error(f"Error processing recipe Excel file: {e}", exc_info=True)
+                flash(f"An unexpected error occurred while processing the Excel file: {e}", 'error')
                 return redirect(request.url)
         else:
             flash('Invalid file type. Please upload an .xlsx file.', 'error')
             return redirect(request.url)
 
-    pending_items = session.get('items_pending_confirmation', [])
-    upload_warnings_display = session.get('upload_warnings', [])
-    if not pending_items: session.pop('upload_warnings', None) # Clear if no longer needed
-
-    return render_template('upload_excel.html', items_pending_confirmation=pending_items, upload_warnings=upload_warnings_display)
+    return render_template('upload_recipes_excel.html')
 
 @app.route('/confirm_excel_uploads', methods=['POST'])
 def confirm_excel_uploads_view():
     items_to_process = session.pop('items_pending_confirmation', [])
+    # Retrieve and immediately clear upload_warnings from the session, as they are about to be processed or re-added.
     all_upload_warnings = session.pop('upload_warnings', [])
-    final_success_count = 0; final_error_messages = []
+
+    final_success_count = 0
+    final_error_messages = []
+    # all_upload_warnings will accumulate new warnings from this processing step as well.
 
     if not items_to_process:
-        flash("No items for confirmation.", "info"); return redirect(url_for('upload_excel_view'))
+        flash("No items found for confirmation. Please upload a file first.", "info")
+        return redirect(url_for('upload_excel_view'))
+
+    # For now, assume a single "Confirm All" button, so we process all items.
+    # Individual confirmation would require more complex form handling.
 
     for item_data_package in items_to_process:
-        product_data = item_data_package['product_data'] # This is the original row_data_dict
+        product_data = item_data_package['product_data']
         confirmation_details = item_data_package['confirmation_details']
         action_required = item_data_package['action_required']
 
-        result = manager.process_excel_row_for_inventory_upload(
-            row_data=product_data,
+        # Call add_item_to_list again, this time with confirmation details
+        # Food_manager.add_item_to_list is expected to handle these confirmed_action and temp_category_id
+        result = manager.add_item_to_list(
+            name=product_data['name'],
+            quantity_str=product_data['quantity_str'],
+            purchase_date_str=product_data['purchase_date_str'],
+            expiry_days=product_data['expiry_days'],
+            category=product_data['category'],
+            subcategory=product_data['subcategory'],
+            par_level=product_data['par_level'],
+            max_holding_amount=product_data['max_holding_amount'],
+            purchase_location=product_data['purchase_location'],
+            unit_of_measure=product_data['unit_of_measure'],
             confirmed_action=action_required,
-            temp_category_id=confirmation_details.get('category_id')
+            temp_category_id=confirmation_details.get('category_id') # Used if action_required is 'confirm_new_subcategory'
         )
 
-        current_item_name = product_data.get('name', 'N/A')
-        row_idx_info = f" (Row {item_data_package.get('row_idx', 'N/A')})"
-
-        for warning in result.get("warnings", []):
-            all_upload_warnings.append(f"Post-confirmation{row_idx_info} for '{current_item_name}': {warning}")
-            app.logger.warning(f"Confirm Upload Warning{row_idx_info} for '{current_item_name}': {warning}")
-
-        status = result.get("status")
-        if status == "success":
+        if result.get("success"):
             final_success_count += 1
-        elif status == "confirmation_required":
-            msg = f"Item '{current_item_name}'{row_idx_info} still requires confirmation: {result.get('message')}"
-            final_error_messages.append(msg); app.logger.error(msg)
-        else: # Error
-            user_message = result.get('message', f"Error processing item '{current_item_name}'{row_idx_info}.")
-            final_error_messages.append(f"Row {item_data_package.get('row_idx', 'N/A')} ('{current_item_name}'): {user_message}")
-            log_msg = f"Confirm Upload Error for '{current_item_name}'{row_idx_info}: {user_message}"
-            if result.get("row_errors"): log_msg += f" Row Errors: {'; '.join(result.get('row_errors'))}"
-            app.logger.error(log_msg)
+        else:
+            msg = result.get('message', f"An error occurred processing item '{product_data['name']}' after confirmation.")
+            if result.get("action_required"): # Should not happen if confirmation logic is complete
+                msg += f" Further action might still be needed: {result.get('action_required')}"
+            final_error_messages.append(msg)
 
-    if final_success_count > 0: flash(f"{final_success_count} confirmed items added.", "success")
+        if result.get("warnings"):
+            # Add row context to warnings from this stage
+            row_idx_info = f" (Row {item_data_package.get('row_idx', 'N/A')})" if item_data_package.get('row_idx') else ""
+            for warning in result.get("warnings"):
+                 all_upload_warnings.append(f"Post-confirmation{row_idx_info} for '{product_data['name']}': {warning}")
+
+
+    if final_success_count > 0:
+        flash(f"Successfully processed and added {final_success_count} confirmed items.", "success")
     if final_error_messages:
-        flash(f"{len(final_error_messages)} items had errors during confirmation:", "error")
-        for err_msg in final_error_messages[:10]: flash(err_msg, "error_detail")
-    if all_upload_warnings:
-        flash("Warnings during confirmation process:", "warning")
-        for warn_msg in all_upload_warnings[:10]: flash(warn_msg, "warning_detail")
+        flash(f"{len(final_error_messages)} items had errors during final processing:", "error")
+        for err_msg in final_error_messages[:10]:
+            flash(err_msg, "error_detail")
+    if all_upload_warnings: # Display all accumulated warnings
+        flash("Warnings encountered during the entire upload process:", "warning")
+        for warn_msg in all_upload_warnings[:10]:
+            flash(warn_msg, "warning_detail")
 
     return redirect(url_for('current_inventory_view'))
 
-# ... (rest of app.py, assuming it's correctly refactored from previous steps or doesn't need changes for this subtask)
-# For brevity, only showing the parts that are being actively changed or are immediately adjacent.
-# The overwrite will use the full file content.
-# --- Flask Routes --- (This is a marker, the actual routes below are assumed to be in the full file)
-# ... (inventory_historical_view, consume_item_view (already refactored for Food_Manager), recipe routes, etc.)
-# ... (The rest of the file content from the previous read_files operation)
-# Ensure all other routes are included in the final overwrite.
-# The following is just to ensure the file ends correctly for the overwrite.
 @app.route('/recipes-links/')
-def recipes_links_view(): return render_template('recipes_links.html', title="Recipe Links")
+def recipes_links_view():
+    return render_template('recipes_links.html', title="Recipe Links")
+
 @app.route('/recipes/add', methods=['GET', 'POST'])
-def add_recipe_view(): return "" # Placeholder
+def add_recipe_view():
+    form_data_to_repopulate = {} # For GET or if POST fails and re-renders
+    all_db_products = manager.get_all_products(page=None, per_page=None) # For "Output Product" dropdown
+
+    if request.method == 'POST':
+        app.logger.info(f"Add Recipe - Form data: output_product_id='{request.form.get('output_product_id')}', output_yield='{request.form.get('output_yield')}'")
+        recipe_name = request.form.get('recipe_name', '').strip()
+        description = request.form.get('description', '').strip()
+        output_product_id_str = request.form.get('output_product_id')
+        output_yield_str = request.form.get('output_yield')
+        
+        ingredients = []
+        form_errors = []
+        for i in range(1, 16):
+            ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
+            ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
+            # notes are optional, not used in current RecipeManager.add_recipe for ingredient quantity_required
+            # ing_notes = request.form.get(f'ingredient_{i}_notes', '').strip()
+
+            if ing_name and ing_qty_str:
+                try:
+                    # The RecipeManager expects 'quantity_required' for the value,
+                    # but the form might use 'quantity' for simplicity.
+                    # Let's assume RecipeManager expects 'quantity' as string or 'quantity_required' as float.
+                    # Based on current RecipeManager, it expects 'quantity' as a string.
+                    # No, `add_recipe` in RecipeManager processes `quantity_required` from this form.
+                    # The form should submit `quantity_required` or the route should adapt.
+                    # The current `add_recipe_view` (before this change) uses `quantity_required`.
+                    # Let's stick to `quantity_required` for clarity with the manager.
+                    # The template might name it `ingredient_X_quantity` for user display.
+                    ing_qty_float = float(ing_qty_str)
+                    if ing_qty_float <= 0:
+                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number.")
+                    else:
+                        # ingredients.append({'item_name': ing_name, 'quantity': ing_qty_str, 'notes': ing_notes})
+                        # Corrected to use 'quantity_required' as expected by manager logic in add_recipe
+                         ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty_float})
+                except ValueError:
+                    form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'. Must be a valid number.")
+            elif ing_name and not ing_qty_str:
+                form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
+        
+        if not recipe_name:
+            form_errors.append("Recipe name is required.")
+
+        output_product_id = None
+        if output_product_id_str and output_product_id_str != "None" and output_product_id_str != "":
+            try:
+                output_product_id = int(output_product_id_str)
+            except ValueError:
+                form_errors.append("Invalid Output Product ID.")
+        
+        output_yield = None
+        if output_yield_str:
+            try:
+                output_yield = float(output_yield_str)
+                if output_yield <= 0 and output_product_id is not None: # Yield must be positive if an output product is set
+                     form_errors.append("Output Yield must be positive if an Output Product is selected.")
+                elif output_yield < 0 and output_product_id is None: # Allow zero yield if no product, but not negative
+                    form_errors.append("Output Yield cannot be negative.")
+            except ValueError:
+                form_errors.append("Invalid Output Yield. Must be a number.")
+
+        if output_product_id is not None and output_yield is None:
+            form_errors.append("Output Yield is required if an Output Product is selected.")
+
+        if output_product_id is None:
+            output_yield = None
+
+        if form_errors:
+            for error in form_errors:
+                flash(error, 'error')
+            form_data_to_repopulate = request.form
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
+
+        recipe_data = {
+            "name": recipe_name,
+            "description": description,
+            "instructions": request.form.get('instructions', '').strip(), # Added instructions
+            "ingredients": ingredients, # This should be list of dicts with item_name, quantity_required
+            "output_product_id": output_product_id,
+            "output_yield": output_yield
+        }
+        app.logger.info(f"Add Recipe - Processed recipe_data for add_recipe: {recipe_data}")
+        # recipe_mngr.add_recipe was updated to handle output_product_id and output_yield
+        result = recipe_mngr.add_recipe(recipe_data)
+        
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('recipes_list_view'))
+        else:
+            flash(result['message'], 'error')
+            form_data_to_repopulate = request.form
+            return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
+
+    return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
+
 @app.route('/recipes/<int:recipe_id>/edit', methods=['GET', 'POST'])
-def edit_recipe_view(recipe_id): return "" # Placeholder
+def edit_recipe_view(recipe_id):
+    recipe = recipe_mngr.get_recipe_by_id(recipe_id) # Should now include output_product_id and output_yield
+
+    if not recipe:
+        flash(f"Recipe with ID {recipe_id} not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+
+    all_db_products = manager.get_all_products(page=None, per_page=None)
+
+    if request.method == 'POST':
+        app.logger.info(f"Edit Recipe (ID: {recipe_id}) - Form data: output_product_id='{request.form.get('output_product_id')}', output_yield='{request.form.get('output_yield')}'")
+        recipe_name = request.form.get('recipe_name', '').strip()
+        description = request.form.get('description', '').strip()
+        instructions = request.form.get('instructions', '').strip()
+        output_product_id_str = request.form.get('output_product_id')
+        output_yield_str = request.form.get('output_yield')
+
+        ingredients = []
+        form_errors = []
+
+        for i in range(1, 16):
+            ing_name = request.form.get(f'ingredient_{i}_name', '').strip()
+            ing_qty_str = request.form.get(f'ingredient_{i}_quantity', '').strip()
+            # ing_notes = request.form.get(f'ingredient_{i}_notes', '').strip()
+
+            if ing_name and ing_qty_str:
+                try:
+                    ing_qty_float = float(ing_qty_str)
+                    if ing_qty_float <= 0:
+                        form_errors.append(f"Ingredient '{ing_name}': Quantity must be a positive number.")
+                    else:
+                        # ingredients.append({'item_name': ing_name, 'quantity': ing_qty_str, 'notes': ing_notes})
+                        # Corrected to use 'quantity_required'
+                        ingredients.append({'item_name': ing_name, 'quantity_required': ing_qty_float})
+                except ValueError:
+                    form_errors.append(f"Ingredient '{ing_name}': Invalid quantity '{ing_qty_str}'.")
+            elif ing_name and not ing_qty_str:
+                form_errors.append(f"Ingredient '{ing_name}': Quantity is missing.")
+
+        if not recipe_name:
+            form_errors.append("Recipe name is required.")
+
+        output_product_id = None
+        if output_product_id_str and output_product_id_str != "None" and output_product_id_str != "":
+            try:
+                output_product_id = int(output_product_id_str)
+            except ValueError:
+                form_errors.append("Invalid Output Product ID.")
+
+        output_yield = None
+        if output_yield_str:
+            try:
+                output_yield = float(output_yield_str)
+                if output_yield <= 0 and output_product_id is not None:
+                     form_errors.append("Output Yield must be positive if an Output Product is selected.")
+                elif output_yield < 0 and output_product_id is None:
+                    form_errors.append("Output Yield cannot be negative.")
+            except ValueError:
+                form_errors.append("Invalid Output Yield. Must be a number.")
+
+        if output_product_id is not None and output_yield is None : # Check if yield is missing when product id is present
+             # Check if original recipe also had product_id but no yield, or if this is a new assignment
+            if not (recipe.get('output_product_id') == output_product_id and recipe.get('output_yield') is None):
+                 form_errors.append("Output Yield is required if an Output Product is selected.")
+
+        if output_product_id is None:
+            output_yield = None
+
+        if form_errors:
+            for error in form_errors:
+                flash(error, 'error')
+
+            form_data_repopulate = request.form.to_dict()
+            # Ensure the original recipe ID is part of the data for template if needed
+            form_data_repopulate['id'] = recipe_id
+            # Merge with original recipe for fields not directly in form or to show original if form field empty
+            # For example, the ingredients list in `recipe` is structured, request.form is flat.
+            # The template `edit_recipe.html` will need to intelligently use `form_data_repopulate` primarily,
+            # and fall back to `recipe` for things like existing ingredients if not resubmitted.
+            # This is tricky. A simple approach: template uses `form_data.get('field', recipe.field)`.
+            return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data=form_data_repopulate)
+
+        updated_recipe_data = {
+            "name": recipe_name,
+            "description": description,
+            "instructions": instructions,
+            "ingredients": ingredients, # This should be list of dicts with item_name, quantity_required
+            "output_product_id": output_product_id,
+            "output_yield": output_yield
+        }
+        app.logger.info(f"Edit Recipe (ID: {recipe_id}) - Processed updated_recipe_data for update_recipe: {updated_recipe_data}")
+        result = recipe_mngr.update_recipe(recipe_id, updated_recipe_data)
+
+        if result.get("success"):
+            flash(result.get('message', "Recipe updated successfully!"), 'success')
+            return redirect(url_for('recipe_detail_view', recipe_name=updated_recipe_data['name']))
+        else:
+            flash(result.get('message', "Failed to update recipe."), 'error')
+            form_data_repopulate = request.form.to_dict()
+            form_data_repopulate['id'] = recipe_id
+            return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data=form_data_repopulate)
+
+    # GET request:
+    # The 'recipe' dict (fetched earlier) is used to pre-fill the form.
+    # Ensure template can handle `output_product_id` and `output_yield` being None for older recipes.
+    return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data={})
+
 @app.route('/recipes')
-def recipes_list_view(): return "" # Placeholder
+def recipes_list_view():
+    all_recipes = recipe_mngr.get_all_recipes()
+    # Sort recipes by name for consistent display order
+    sorted_recipes = sorted(all_recipes, key=lambda r: r['name'].lower())
+    return render_template('recipes_list.html', recipes=sorted_recipes)
+
 @app.route('/recipes/id/<int:recipe_id>')
-def recipe_detail_view_by_id(recipe_id): return "" # Placeholder
-@app.route('/recipes/name/<path:recipe_name>')
-def recipe_detail_view(recipe_name): return "" # Placeholder
+def recipe_detail_view_by_id(recipe_id):
+    recipe = recipe_mngr.get_recipe_by_id(recipe_id)
+    if not recipe:
+        flash(f"Recipe with ID {recipe_id} not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+    # Since other parts of the app might link by name, we redirect to the name-based URL
+    # to maintain consistency and allow `make_recipe_view` to work as is.
+    # This also simplifies if the name changes; links using ID will find the new name.
+    return redirect(url_for('recipe_detail_view', recipe_name=recipe['name']))
+
+@app.route('/recipes/name/<path:recipe_name>') # Using path for flexibility with names
+def recipe_detail_view(recipe_name):
+    # This function now serves as the canonical URL for recipe details by name.
+    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
+
+    if not recipe:
+        flash(f"Recipe '{recipe_name}' not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+
+    ingredients_status = []
+    recipe_makeable = True # Assume true until an insufficient ingredient is found
+
+    if recipe.get('ingredients'):
+        for ing in recipe['ingredients']:
+            item_name = ing['item_name']
+            required_qty = float(ing['quantity_required'])
+            
+            # Use the new helper method from InventoryManager
+            available_qty = manager.get_total_item_quantity(item_name)
+            
+            remaining_qty = available_qty - required_qty
+            sufficient = remaining_qty >= 0
+
+            if not sufficient:
+                recipe_makeable = False # Mark recipe as not makeable
+
+            # Fetch product details to get unit_of_measure
+            product_details = manager.get_product_by_name(item_name)
+            product_unit_of_measure = 'units' # Default unit
+            ingredient_product_id = None # Default to None
+            if product_details:
+                if product_details.get('unit_of_measure'):
+                    product_unit_of_measure = product_details['unit_of_measure']
+                if product_details.get('id'):
+                    ingredient_product_id = product_details['id']
+
+            ingredients_status.append({
+                'name': item_name,
+                'product_id': ingredient_product_id, # Add product_id here
+                'required': required_qty,
+                'available': available_qty,
+                'remaining': remaining_qty,
+                'sufficient': sufficient,
+                'needed_more': -remaining_qty if not sufficient else 0,
+                'unit_of_measure': product_unit_of_measure,
+            })
+    else: # Recipe has no ingredients listed
+        recipe_makeable = True # Technically makeable if no ingredients are needed
+
+    return render_template('recipe_detail.html', 
+                           recipe=recipe, 
+                           ingredients_status=ingredients_status, 
+                           recipe_makeable=recipe_makeable)
+
+# Placeholder for Make Recipe POST route - to be implemented in a later subtask
 @app.route('/recipes/<path:recipe_name>/make', methods=['GET', 'POST'])
-def make_recipe_view(recipe_name): return "" # Placeholder
+def make_recipe_view(recipe_name):
+    # This is where the logic to "make" the recipe would go.
+    # For now, just flash a message and redirect.
+    # Actual implementation would consume ingredients from inventory.
+    
+    # Re-check if makeable before attempting to make, as inventory might have changed.
+    recipe = recipe_mngr.get_recipe_by_name(recipe_name) # This now includes output_product_id and output_yield
+    app.logger.info(f"Recipe fetched for making: {recipe}") # Log the entire recipe object
+    if not recipe:
+        flash(f"Recipe '{recipe_name}' not found.", 'error')
+        return redirect(url_for('recipes_list_view'))
+
+    num_batches_str = request.form.get('num_batches', '1').strip()
+    try:
+        num_batches = int(num_batches_str)
+        if num_batches <= 0:
+            flash("Number of batches must be a positive integer.", 'error')
+            return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+    except ValueError:
+        flash("Invalid number of batches specified.", 'error')
+        return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+    # Check ingredient availability for the total quantity needed
+    recipe_makeable_now = True
+    if recipe.get('ingredients'):
+        for ing_spec in recipe['ingredients']:
+            total_required_qty = float(ing_spec['quantity_required']) * num_batches
+            available = manager.get_total_item_quantity(ing_spec['item_name'])
+            if available < total_required_qty:
+                recipe_makeable_now = False
+                flash(f"Not enough '{ing_spec['item_name']}'. Needed: {total_required_qty}, Available: {available}.", 'warning')
+                # break # Optional: break on first insufficient ingredient or list all
+    
+    if not recipe_makeable_now:
+        flash(f"Cannot make {num_batches} batch(es) of '{recipe_name}'. Not enough ingredients.", 'error')
+        return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+    # Consume ingredients
+    all_consumed_successfully = True
+    consumption_error_messages = []
+    if recipe.get('ingredients'):
+        for ingredient in recipe['ingredients']:
+            item_name = ingredient['item_name']
+            qty_per_batch = float(ingredient['quantity_required'])
+            total_qty_to_consume = qty_per_batch * num_batches
+            
+            consumption_result = manager.consume_item(item_name, total_qty_to_consume)
+            
+            if not consumption_result.get("success"):
+                all_consumed_successfully = False
+                consumption_error_messages.append(
+                    f"Failed to consume {total_qty_to_consume} of '{item_name}'. "
+                    f"Reason: {consumption_result.get('message', 'Unknown error.')}"
+                )
+                break 
+    
+    if all_consumed_successfully and not consumption_error_messages:
+        flash(f"{num_batches} batch(es) of '{recipe['name']}' made! Ingredients consumed.", 'success')
+
+        output_product_id = recipe.get('output_product_id')
+        output_yield_per_batch_from_recipe = recipe.get('output_yield') # Renamed
+        app.logger.info(f"Attempting production: output_product_id={output_product_id}, output_yield_per_batch_from_recipe={output_yield_per_batch_from_recipe}")
+
+        output_yield_per_batch_float = None
+        if output_yield_per_batch_from_recipe is not None:
+            try:
+                output_yield_per_batch_float = float(output_yield_per_batch_from_recipe)
+            except ValueError:
+                app.logger.error(f"Invalid output_yield format ('{output_yield_per_batch_from_recipe}') in recipe ID {recipe.get('id')}. Cannot produce output.")
+                # The flash message for this case will be handled by the broader try-except block below if production fails
+
+        if output_product_id and output_yield_per_batch_float is not None:
+            try:
+                if output_yield_per_batch_float > 0:
+                    total_output_yield = output_yield_per_batch_float * num_batches
+                    app.logger.info(f"Calculated total_output_yield: {total_output_yield} for product_id: {output_product_id}")
+                    # Ensure purchase_date_str is defined for add_inventory_stock
+                    purchase_date_str = date.today().isoformat()
+                    production_result = manager.add_inventory_stock(
+                        product_id=output_product_id,
+                        quantity_str=str(total_output_yield),
+                        purchase_date_str=purchase_date_str
+                    )
+                    app.logger.info(f"Result of add_inventory_stock: {production_result}")
+                    if production_result.get("success"):
+                        output_product_details = manager.get_product(output_product_id)
+                        output_product_name = output_product_details.get('name', f"ID {output_product_id}") if output_product_details else f"ID {output_product_id}"
+                        flash(f"Produced {total_output_yield} of '{output_product_name}' and added to inventory.", 'success')
+                    else:
+                        flash(f"Error producing output for recipe: {production_result.get('message', 'Unknown error')}", 'error')
+                elif output_yield_per_batch_float == 0 : # Yield is zero, no production needed
+                    pass # Do nothing if yield is zero
+                else: # Negative yield, should be caught by validation ideally
+                    flash(f"Recipe has a non-positive output yield ({output_yield_per_batch_float}). No output produced.", 'warning')
+
+            except ValueError:
+                flash(f"Invalid output_yield format ('{output_yield_per_batch}') in recipe. Cannot produce output.", 'error')
+            except Exception as e: # Catch-all for other errors during production
+                flash(f"An unexpected error occurred during output production: {e}", 'error')
+
+        elif output_product_id and output_yield_per_batch is None:
+             flash(f"Recipe '{recipe['name']}' has an output product ID but missing output yield. No output produced.", 'warning')
+        # If no output_product_id, it's a recipe that doesn't produce a direct inventory item.
+
+    else:
+        flash(f"Error making recipe '{recipe['name']}'. Some ingredients could not be consumed:", 'error')
+        for err_msg in consumption_error_messages:
+            flash(err_msg, 'error_detail') # Use a more specific category for display
+
+    return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+
 @app.route('/inventory/projections')
-def projections_view(): return "" # Placeholder
+def projections_view():
+    # Retrieve filter, sort, and pagination parameters for the product list
+    search_term = request.args.get('search_term', '').strip()
+    selected_category = request.args.get('category', '').strip()
+    selected_purchase_location = request.args.get('purchase_location', '').strip()
+
+    sort_by = request.args.get('sort_by', 'name').strip() # Default sort for product list
+    sort_order = request.args.get('sort_order', 'ASC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 10)) # Default 10 products per page for projections
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 10
+
+    # Fetch total count of products for pagination of the product list
+    total_products_for_list = manager.get_products_for_projection_list_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None
+    )
+
+    total_pages = (total_products_for_list + per_page - 1) // per_page if per_page > 0 else 1
+
+    # Adjust page if out of bounds
+    original_page = page
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+    elif page == 0 and total_pages > 0: # Should not happen if page default is 1 and min is 1
+        page = 1
+
+
+    # Fetch the paginated list of products
+    products_on_page = manager.get_products_for_projection_list(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        purchase_location=selected_purchase_location if selected_purchase_location else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
+
+    projection_results_list = []
+    if products_on_page:
+        for product_dict in products_on_page:
+            # Using product ID for project_demand is more robust
+            projection_data = manager.project_demand(product_dict['id'])
+            if projection_data: # project_demand returns a dict, might include success status
+                 # Ensure item_name is consistently set from product_name for template
+                if 'product_name' in projection_data and 'item_name' not in projection_data:
+                     projection_data['item_name'] = projection_data['product_name']
+                projection_results_list.append(projection_data)
+            # Optionally, flash a message if a specific projection failed
+            # elif projection_data and not projection_data.get("success", True):
+            #     flash(f"Could not generate projection for {product_dict['name']}: {projection_data.get('message', 'Unknown error')}", "error")
+
+
+    # Fetch filter options for product attributes
+    categories_options = manager.get_all_categories() # Reusing existing method for product categories
+    purchase_locations_options = manager.get_all_purchase_locations() # Reusing existing method
+
+    return render_template(
+        'projections.html',
+        projections=projection_results_list,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        selected_purchase_location=selected_purchase_location,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options,
+        purchase_locations=purchase_locations_options
+        # lookback_days and projection_days can be added if they become configurable
+    )
+
 @app.route('/projections/save_overrides', methods=['POST'])
-def save_overrides_view(): return "" # Placeholder
+def save_overrides_view():
+    if request.method == 'POST':
+        overrides_to_save = []
+        for key, value in request.form.items():
+            if key.startswith('overrides['):
+                try:
+                    # Extract product_id from 'overrides[<product_id>]'
+                    start_index = key.find('[') + 1
+                    end_index = key.find(']')
+                    product_id_str = key[start_index:end_index]
+                    product_id = int(product_id_str)
+
+                    # Value is the override rate string
+                    # Empty string will be handled by manager as None/NULL
+                    rate_str = value.strip()
+
+                    overrides_to_save.append({
+                        'product_id': product_id,
+                        'override_rate': rate_str if rate_str else None
+                    })
+                except (ValueError, IndexError) as e:
+                    flash(f"Error parsing override data for key {key}: {e}", 'error')
+                    # Continue to process other valid entries
+
+        if not overrides_to_save and not request.form:
+             flash("No override data submitted.", 'info')
+        elif overrides_to_save:
+            result = manager.save_consumption_overrides(overrides_to_save)
+            if result.get("success"):
+                flash(result.get("message", "Consumption overrides saved successfully."), 'success')
+            else:
+                flash(result.get("message", "Failed to save consumption overrides."), 'error')
+        elif not overrides_to_save and request.form: # request.form was not empty, but parsing failed for all
+            flash("Submitted override data was not in the expected format.", "error")
+
+
+    return redirect(url_for('projections_view'))
+
 @app.route('/shopping_list')
-def shopping_list_view(): return "" # Placeholder
+def shopping_list_view():
+    store_filter = request.args.get('store', '').strip()
+    search_term = request.args.get('search', '').strip()
+
+    # Get shopping list items from the manager
+    # The manager.get_shopping_list_items method should handle None or empty strings for filters
+    shopping_list_items = manager.get_shopping_list_items(
+        store_filter=store_filter if store_filter else None,
+        search_term=search_term if search_term else None
+    )
+
+    # Pass the items and current filter values to the template
+    return render_template('shopping_list.html',
+                           items=shopping_list_items,
+                           current_store_filter=store_filter,
+                           current_search_term=search_term)
+
+# --- Garden & Harvest Routes ---
 @app.route('/garden', methods=['GET'])
-def garden_list_view(): return "" # Placeholder
+def garden_list_view():
+    # Basic implementation: Get all items, sort by plant_date by default
+    sort_by = request.args.get('sort_by', 'plant_date')
+    sort_order = request.args.get('sort_order', 'ASC').upper()
+    status_filter = request.args.get('status_filter', '').strip()
+
+    # Pagination
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 10)) # Default 10 items per page
+        if per_page < 1: per_page = 10
+    except ValueError:
+        per_page = 10
+
+    filters = {}
+    if status_filter:
+        # This filters by the *stored* status.
+        # For dynamic status filtering, logic would need to be in Python after fetching all items,
+        # or a more complex SQL query if dynamic status could be expressed in SQL.
+        filters['status'] = status_filter
+
+    # The get_all_production_items method should handle pagination and sorting.
+    # It also calculates dynamic status and yield.
+    # For now, total count for pagination is not implemented for production_items, so pass None for page/per_page
+    # to fetch all and then manually paginate if needed, or add count method to manager.
+    # For simplicity in this step, fetching all. Pagination can be added fully later.
+    all_items_raw = manager.get_all_production_items(
+        filters=filters if filters else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=None, # Fetch all for now
+        per_page=None # Fetch all for now
+    )
+
+    # Manual pagination for now
+    total_items = len(all_items_raw)
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    if page > total_pages and total_pages > 0: page = total_pages
+
+    start_index = (page - 1) * per_page
+    end_index = start_index + per_page
+    paginated_items = all_items_raw[start_index:end_index]
+
+    return render_template('garden_list.html',
+                           items=paginated_items,
+                           sort_by=sort_by,
+                           sort_order=sort_order,
+                           status_filter=status_filter,
+                           all_status_options=['Growing', 'Harvesting', 'Finished'], # For filter dropdown
+                           current_page=page,
+                           total_pages=total_pages,
+                           per_page=per_page)
+
 @app.route('/garden/add', methods=['GET', 'POST'])
-def add_production_item_view(): return "" # Placeholder
+def add_production_item_view():
+    all_db_products = manager.get_all_products(page=None, per_page=None) # Get all products for dropdown
+
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        associated_product_id_str = request.form.get('associated_product_id')
+        plant_date_str = request.form.get('plant_date')
+        time_to_harvest_days_str = request.form.get('time_to_harvest_days')
+        expected_harvest_period_days_str = request.form.get('expected_harvest_period_days')
+        expected_yield_total_str = request.form.get('expected_yield_total')
+        status = request.form.get('status', 'Growing').strip()
+
+        errors = []
+        if not name: errors.append("Item name is required.")
+        if not plant_date_str: errors.append("Plant date is required.")
+        else:
+            try:
+                date.fromisoformat(plant_date_str)
+            except ValueError:
+                errors.append("Invalid plant date format. Use YYYY-MM-DD.")
+
+        associated_product_id = None
+        if associated_product_id_str and associated_product_id_str != "None" and associated_product_id_str != "": # Handle "None" string from dropdown
+            try:
+                associated_product_id = int(associated_product_id_str)
+            except ValueError:
+                errors.append("Invalid associated product ID.")
+
+        time_to_harvest_days = None
+        if time_to_harvest_days_str:
+            try:
+                time_to_harvest_days = int(time_to_harvest_days_str)
+                if time_to_harvest_days < 0: errors.append("Time to harvest must be non-negative.")
+            except ValueError:
+                errors.append("Time to harvest must be a whole number.")
+        else: errors.append("Time to harvest is required.")
+
+        expected_harvest_period_days = None
+        if expected_harvest_period_days_str:
+            try:
+                expected_harvest_period_days = int(expected_harvest_period_days_str)
+                if expected_harvest_period_days <= 0: errors.append("Expected harvest period must be positive.")
+            except ValueError:
+                errors.append("Expected harvest period must be a whole number.")
+        else: errors.append("Expected harvest period is required.")
+
+        expected_yield_total = None
+        if expected_yield_total_str:
+            try:
+                expected_yield_total = float(expected_yield_total_str)
+                if expected_yield_total < 0: errors.append("Expected yield must be non-negative.")
+            except ValueError:
+                errors.append("Expected yield must be a valid number.")
+        else: errors.append("Expected total yield is required.")
+
+        if status not in ['Growing', 'Harvesting', 'Finished']:
+            errors.append("Invalid status selected.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            return render_template('garden_edit.html', item=request.form, products=all_db_products, form_action_label='Add', current_page='garden_add')
+
+        result = manager.add_production_item(
+            name=name,
+            associated_product_id=associated_product_id, # This can be None
+            plant_date_str=plant_date_str,
+            time_to_harvest_days=time_to_harvest_days,
+            expected_harvest_period_days=expected_harvest_period_days,
+            expected_yield_total=expected_yield_total,
+            status=status
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('garden_list_view'))
+        else:
+            flash(result.get("message", "An error occurred adding the production item."), 'error')
+            return render_template('garden_edit.html', item=request.form, products=all_db_products, form_action_label='Add', current_page='garden_add')
+
+    return render_template('garden_edit.html', item={}, products=all_db_products, form_action_label='Add', current_page='garden_add')
+
 @app.route('/garden/<int:item_id>/edit', methods=['GET', 'POST'])
-def edit_production_item_view(item_id): return "" # Placeholder
+def edit_production_item_view(item_id):
+    production_item = manager.get_production_item(item_id) # This should already return a dict
+    if not production_item:
+        flash(f"Production item with ID {item_id} not found.", 'error')
+        return redirect(url_for('garden_list_view'))
+
+    all_db_products = manager.get_all_products(page=None, per_page=None)
+
+    if request.method == 'POST':
+        # Create a mutable copy of the form data for modification
+        data_to_update = request.form.to_dict()
+
+        errors = []
+        if not data_to_update.get('name', '').strip(): errors.append("Item name is required.")
+
+        plant_date_str = data_to_update.get('plant_date')
+        if not plant_date_str: errors.append("Plant date is required.")
+        else:
+            try:
+                date.fromisoformat(plant_date_str)
+            except ValueError:
+                errors.append("Invalid plant date format. Use YYYY-MM-DD.")
+
+        assoc_prod_id_str = data_to_update.get('associated_product_id')
+        if assoc_prod_id_str and assoc_prod_id_str != "None" and assoc_prod_id_str != "":
+            try:
+                data_to_update['associated_product_id'] = int(assoc_prod_id_str)
+            except ValueError:
+                errors.append("Invalid associated product ID.")
+        else:
+            data_to_update['associated_product_id'] = None # Ensure it's None if empty or "None"
+
+        time_harvest_str = data_to_update.get('time_to_harvest_days')
+        if time_harvest_str:
+            try:
+                data_to_update['time_to_harvest_days'] = int(time_harvest_str)
+                if data_to_update['time_to_harvest_days'] < 0: errors.append("Time to harvest must be non-negative.")
+            except ValueError:
+                errors.append("Time to harvest must be a whole number.")
+        else: errors.append("Time to harvest is required.")
+
+        exp_harvest_period_str = data_to_update.get('expected_harvest_period_days')
+        if exp_harvest_period_str:
+            try:
+                data_to_update['expected_harvest_period_days'] = int(exp_harvest_period_str)
+                if data_to_update['expected_harvest_period_days'] <= 0: errors.append("Expected harvest period must be positive.")
+            except ValueError:
+                errors.append("Expected harvest period must be a whole number.")
+        else: errors.append("Expected harvest period is required.")
+
+        exp_yield_total_str = data_to_update.get('expected_yield_total')
+        if exp_yield_total_str:
+            try:
+                data_to_update['expected_yield_total'] = float(exp_yield_total_str)
+                if data_to_update['expected_yield_total'] < 0: errors.append("Expected yield must be non-negative.")
+            except ValueError:
+                errors.append("Expected yield must be a valid number.")
+        else: errors.append("Expected total yield is required.")
+
+        status_str = data_to_update.get('status', '').strip()
+        if status_str not in ['Growing', 'Harvesting', 'Finished']:
+            errors.append("Invalid status selected.")
+            data_to_update['status'] = production_item['status'] # Fallback
+        else:
+            data_to_update['status'] = status_str
+
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Repopulate with submitted data, ensuring original item ID is preserved.
+            # Merge `production_item` (original) with `data_to_update` (submitted form data).
+            # Submitted form data should take precedence for fields that were edited.
+            form_data_repopulate = {**production_item, **data_to_update}
+            return render_template('garden_edit.html', item=form_data_repopulate, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
+
+        # Remove fields from data_to_update that are not part of the production_items table schema
+        # or are not meant to be updated directly this way (e.g., calculated fields if they were in form)
+        # For now, assuming all keys in data_to_update (after cleaning) are valid for update_production_item
+
+        result = manager.update_production_item(item_id, data_to_update)
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('garden_list_view'))
+        else:
+            flash(result.get("message", "An error occurred updating the production item."), 'error')
+            form_data_repopulate = {**production_item, **data_to_update} # Repopulate with submitted data
+            return render_template('garden_edit.html', item=form_data_repopulate, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
+
+    # GET request: Convert production_item (which is a dict) to a compatible structure if needed,
+    # or ensure template handles dict directly.
+    return render_template('garden_edit.html', item=production_item, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
+
 @app.route('/garden/<int:item_id>/harvest', methods=['POST'])
-def record_harvest_view(item_id): return "" # Placeholder
+def record_harvest_view(item_id):
+    actual_harvest_amount_str = request.form.get('actual_harvest_amount')
+    harvest_date_str = request.form.get('harvest_date', date.today().isoformat()) # Default to today
+
+    errors = []
+    actual_harvest_amount = None
+    if actual_harvest_amount_str:
+        try:
+            actual_harvest_amount = float(actual_harvest_amount_str)
+            if actual_harvest_amount <= 0:
+                errors.append("Actual harvest amount must be positive.")
+        except ValueError:
+            errors.append("Actual harvest amount must be a valid number.")
+    else:
+        errors.append("Actual harvest amount is required.")
+
+    if not harvest_date_str:
+        errors.append("Harvest date is required.")
+    else:
+        try:
+            date.fromisoformat(harvest_date_str)
+        except ValueError:
+            errors.append("Invalid harvest date format. Use YYYY-MM-DD.")
+
+    if errors:
+        for error in errors:
+            flash(error, 'error')
+    else:
+        result = manager.record_harvest(
+            production_item_id=item_id,
+            actual_harvest_amount=actual_harvest_amount,
+            harvest_date_str=harvest_date_str
+        )
+        if result.get("success"):
+            flash(result.get("message", "Harvest recorded successfully and stock added to inventory."), 'success')
+        else:
+            flash(result.get("message", "Failed to record harvest."), 'error')
+
+    return redirect(url_for('garden_list_view'))
+
+# --- Product Management Routes ---
 @app.route('/products-links/')
-def products_links_view(): return "" # Placeholder
+def products_links_view():
+    return render_template('products_links.html', title="Products Links")
+
 @app.route('/products', methods=['GET'])
-def list_products_view(): return "" # Placeholder
+def list_products_view():
+    # Retrieve filter parameters
+    search_term = request.args.get('search_term', '').strip()
+    category = request.args.get('category', '').strip()
+    purchase_location = request.args.get('purchase_location', '').strip()
+
+    # Retrieve sorting parameters
+    sort_by = request.args.get('sort_by', 'name').strip()
+    sort_order = request.args.get('sort_order', 'ASC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
+
+    # Retrieve pagination parameters
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20))
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Get products with filtering, sorting, and pagination
+    products = manager.get_all_products(
+        search_term=search_term if search_term else None,
+        category=category if category else None,
+        purchase_location=purchase_location if purchase_location else None,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page
+    )
+
+    # Get total product count for pagination
+    total_products = manager.get_product_count(
+        search_term=search_term if search_term else None,
+        category=category if category else None,
+        purchase_location=purchase_location if purchase_location else None
+    )
+
+    total_pages = (total_products + per_page - 1) // per_page if per_page > 0 else 1
+    if page > total_pages and total_pages > 0 : # If current page is beyond total pages (e.g. after filters change)
+        page = total_pages # Go to last valid page
+        # Re-fetch products for the new valid page
+        products = manager.get_all_products(
+            search_term=search_term if search_term else None,
+            category=category if category else None,
+            purchase_location=purchase_location if purchase_location else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            per_page=per_page
+        )
+
+
+    # Get filter options
+    all_categories = manager.get_all_categories()
+    all_purchase_locations = manager.get_all_purchase_locations()
+
+    return render_template(
+        'list_products.html',
+        products=products,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=category,
+        selected_purchase_location=purchase_location,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=all_categories,
+        purchase_locations=all_purchase_locations
+    )
+
 @app.route('/products/create', methods=['GET', 'POST'])
-def create_product_view(): return "" # Placeholder
+def create_product_view():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        category_id_str = request.form.get('category_id', '').strip()
+        subcategory_id_str = request.form.get('subcategory_id', '').strip() # Can be empty if optional
+        unit_of_measure = request.form.get('unit_of_measure', '').strip()
+        default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
+        par_level_str = request.form.get('par_level', '0').strip()
+        max_holding_amount_str = request.form.get('max_holding_amount', '0').strip()
+        purchase_location = request.form.get('purchase_location', '').strip()
+
+        errors = []
+        if not name: errors.append("Product name is required.")
+        if not unit_of_measure: errors.append("Unit of measure is required.")
+        if not default_expiry_days_str: errors.append("Default expiry days are required.")
+        if not category_id_str: errors.append("Category is required.")
+
+        category_id = None
+        if category_id_str:
+            try:
+                category_id = int(category_id_str)
+            except ValueError:
+                errors.append("Invalid Category ID.")
+
+        subcategory_id = None
+        if subcategory_id_str: # Only attempt conversion if a value is provided
+            try:
+                subcategory_id = int(subcategory_id_str)
+            except ValueError:
+                errors.append("Invalid Subcategory ID.")
+
+        default_expiry_days = None
+        try:
+            default_expiry_days = int(default_expiry_days_str)
+            if default_expiry_days < 0:
+                errors.append("Default expiry days must be a non-negative number.")
+        except ValueError:
+            if default_expiry_days_str: # Error only if it's not empty but invalid
+                 errors.append("Default expiry days must be a valid whole number.")
+
+        par_level = 0.0
+        try:
+            par_level = float(par_level_str)
+            if par_level < 0:
+                errors.append("Par level must be a non-negative number.")
+        except ValueError:
+            if par_level_str and par_level_str != '0': # Error if not empty, not '0', but invalid
+                errors.append("Par level must be a valid number.")
+
+        max_holding_amount = 0.0
+        try:
+            max_holding_amount = float(max_holding_amount_str)
+            if max_holding_amount < 0:
+                errors.append("Max holding amount must be a non-negative number.")
+        except ValueError:
+            if max_holding_amount_str and max_holding_amount_str != '0':
+                errors.append("Max holding amount must be a valid number.")
+
+        # Optional: Validate purchase_location against a predefined list if necessary
+        # For now, allowing free text based on Food_manager.py structure
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Fetch categories again for re-rendering the form with dropdowns
+            all_categories_data = manager.get_all_categories_with_subcategories()
+            return render_template('create_product.html', form_data=request.form, categories_data=all_categories_data)
+
+        result = manager.create_product(
+            name=name,
+            category_id=category_id,
+            subcategory_id=subcategory_id, # Will be None if not provided or empty
+            unit_of_measure=unit_of_measure,
+            default_expiry_days=default_expiry_days,
+            par_level=par_level,
+            max_holding_amount=max_holding_amount,
+            purchase_location=purchase_location if purchase_location else None
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('list_products_view'))
+        else:
+            flash(result.get("message", "An error occurred creating the product."), 'error')
+            all_categories_data = manager.get_all_categories_with_subcategories()
+            return render_template('create_product.html', form_data=request.form, categories_data=all_categories_data)
+
+    # GET request
+    all_categories_data = manager.get_all_categories_with_subcategories()
+    return render_template('create_product.html', form_data={}, categories_data=all_categories_data)
+
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
-def edit_product_view(product_id): return "" # Placeholder
+def edit_product_view(product_id):
+    # product = manager.get_product(product_id) # Fetched in GET, no need to re-fetch before POST processing unless stale data is a concern
+    # For POST, we primarily use form data. The product object is mainly for GET or repopulating form on error.
+
+    all_categories_data = manager.get_all_categories_with_subcategories() # Needed for GET and for POST error repopulation
+
+    if request.method == 'POST':
+        # Fetch product again here if needed to merge with form data upon error,
+        # or rely on product object fetched if this view were structured differently.
+        # For this structure, product is fetched initially for GET.
+        # If POST fails, we use the product object that was passed to the template.
+        product_for_repopulation_on_error = manager.get_product(product_id)
+
+
+        name = request.form.get('name', '').strip()
+        category_id_str = request.form.get('category_id', '').strip()
+        subcategory_id_str = request.form.get('subcategory_id', '').strip() # Optional
+        unit_of_measure = request.form.get('unit_of_measure', '').strip()
+        default_expiry_days_str = request.form.get('default_expiry_days', '').strip()
+        par_level_str = request.form.get('par_level', '0').strip()
+        max_holding_amount_str = request.form.get('max_holding_amount', '0').strip()
+        purchase_location = request.form.get('purchase_location', '').strip()
+
+        errors = []
+        if not name: errors.append("Product name is required.")
+        if not unit_of_measure: errors.append("Unit of measure is required.")
+        if not default_expiry_days_str: errors.append("Default expiry days are required.")
+        if not category_id_str: errors.append("Category is required.")
+
+        category_id = None
+        if category_id_str:
+            try:
+                category_id = int(category_id_str)
+            except ValueError:
+                errors.append("Invalid Category ID.")
+
+        subcategory_id = None
+        if subcategory_id_str: # Optional field
+            try:
+                subcategory_id = int(subcategory_id_str)
+            except ValueError:
+                errors.append("Invalid Subcategory ID.")
+
+        default_expiry_days = None
+        try:
+            default_expiry_days = int(default_expiry_days_str)
+            if default_expiry_days < 0:
+                errors.append("Default expiry days must be a non-negative number.")
+        except ValueError:
+            if default_expiry_days_str:
+                 errors.append("Default expiry days must be a valid whole number.")
+
+        par_level = 0.0
+        try:
+            par_level = float(par_level_str)
+            if par_level < 0:
+                errors.append("Par level must be a non-negative number.")
+        except ValueError:
+            if par_level_str and par_level_str != '0':
+                errors.append("Par level must be a valid number.")
+
+        max_holding_amount = 0.0
+        try:
+            max_holding_amount = float(max_holding_amount_str)
+            if max_holding_amount < 0:
+                errors.append("Max holding amount must be a non-negative number.")
+        except ValueError:
+            if max_holding_amount_str and max_holding_amount_str != '0':
+                errors.append("Max holding amount must be a valid number.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Pass current form data back to template, merge with original product data for safety
+            form_data = request.form.to_dict()
+            # Ensure IDs are integers if they exist for form_data repopulation
+            if category_id_str: form_data['category_id'] = int(category_id_str) # Use the string from form for direct int conversion
+            if subcategory_id_str: form_data['subcategory_id'] = int(subcategory_id_str)
+
+            # Use product_for_repopulation_on_error which is guaranteed to be the state from DB
+            product_data_for_template = {**product_for_repopulation_on_error, **form_data}
+            return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
+
+        # manager.update_product was already updated to expect category_id and subcategory_id
+        result = manager.update_product(
+            product_id=product_id,
+            name=name,
+            category_id=category_id, # This is now an int or None
+            subcategory_id=subcategory_id, # This is now an int or None
+            unit_of_measure=unit_of_measure,
+            default_expiry_days=default_expiry_days,
+            par_level=par_level,
+            max_holding_amount=max_holding_amount,
+            purchase_location=purchase_location if purchase_location else None
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('list_products_view'))
+        else:
+            flash(result.get("message", f"An error occurred updating product ID {product_id}."), 'error')
+            form_data = request.form.to_dict()
+            if category_id_str: form_data['category_id'] = int(category_id_str)
+            if subcategory_id_str: form_data['subcategory_id'] = int(subcategory_id_str)
+            product_data_for_template = {**product_for_repopulation_on_error, **form_data}
+            return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
+
+    # GET request: pass the fetched product data (which includes cat/subcat names and IDs)
+    # and all_categories_data (for dropdowns) to the template.
+    product_display_data = manager.get_product(product_id) # Ensure fresh data for GET display
+    if not product_display_data: # Should be caught by initial check, but good practice
+        flash(f"Product with ID {product_id} not found.", 'error')
+        return redirect(url_for('list_products_view'))
+
+    return render_template('edit_product.html', product=product_display_data, categories_data=all_categories_data)
+
+# --- Inventory Management Routes ---
 @app.route('/inventory/add_stock', methods=['GET', 'POST'])
-def add_inventory_stock_view(): return "" # Placeholder
+def add_inventory_stock_view():
+    if request.method == 'POST':
+        product_id_str = request.form.get('product_id')
+        quantity_added = request.form.get('quantity_added', '').strip()
+        purchase_date_str = request.form.get('purchase_date', '').strip()
+
+        errors = []
+        if not product_id_str:
+            errors.append("Product selection is required.")
+
+        product_id = None
+        if product_id_str:
+            try:
+                product_id = int(product_id_str)
+            except ValueError:
+                errors.append("Invalid product ID.")
+
+        if not quantity_added:
+            errors.append("Quantity added is required.")
+        else:
+            try:
+                # Attempt to parse and validate the quantity.
+                # manager._parse_quantity_string should handle basic conversion.
+                parsed_qty = manager._parse_quantity_string(quantity_added) # This might raise ValueError if not a number
+                if parsed_qty <= 0:
+                    errors.append("Quantity added must be a positive amount.")
+            except ValueError:
+                # This catches errors if quantity_added is not a valid number string
+                errors.append("Quantity added must be a valid number.")
+
+        if not purchase_date_str:
+            purchase_date_str = date.today().isoformat() # Default to today
+        else:
+            try:
+                date.fromisoformat(purchase_date_str) # Validate format
+            except ValueError:
+                errors.append("Invalid purchase date format. Please use YYYY-MM-DD.")
+
+        if errors:
+            for error in errors:
+                flash(error, 'error')
+            # Repopulate products for dropdown
+            products_for_dropdown = manager.get_all_products()
+            return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
+
+        # If validation passes
+        result = manager.add_inventory_stock(
+            product_id=product_id,
+            quantity_str=quantity_added,
+            purchase_date_str=purchase_date_str
+        )
+
+        if result.get("success"):
+            flash(result['message'], 'success')
+            return redirect(url_for('current_inventory_view'))
+        else:
+            flash(result.get("message", "An error occurred adding inventory stock."), 'error')
+            products_for_dropdown = manager.get_all_products() # Repopulate products
+            return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
+
+    # GET request
+    search_name = request.args.get('search_name', '').strip()
+    search_category = request.args.get('search_category', '').strip()
+
+    all_categories = manager.get_all_categories()
+
+    # Prepare arguments for get_all_products, only pass if values exist
+    filter_args = {}
+    if search_name:
+        filter_args['search_term'] = search_name
+    if search_category:
+        filter_args['category'] = search_category
+    # page and per_page are None by default in get_all_products to fetch all if not specified
+    # or if the new template for add_inventory doesn't need pagination for product list yet.
+    # If pagination is needed here, pass page=None, per_page=None to fetch all,
+    # or implement pagination controls for this product list.
+    # For now, assuming we want all (filtered) products in the dropdown.
+    filter_args['page'] = None
+    filter_args['per_page'] = None
+
+
+    products_for_dropdown = manager.get_all_products(**filter_args)
+
+    form_data_get = {'purchase_date': date.today().isoformat()}
+    # If there were validation errors on POST, form_data might be passed from POST.
+    # For a clean GET, it's just the purchase_date.
+    # The template will use request.args for search_name and search_category values.
+
+    return render_template('add_inventory.html',
+                           products=products_for_dropdown,
+                           all_categories=all_categories,
+                           form_data=form_data_get)
+
 @app.route('/inventory/edit', methods=['GET', 'POST'])
-def edit_inventory_view(): return "" # Placeholder
+def edit_inventory_view():
+    products_for_dropdown = manager.get_all_products()
+    selected_product_id = request.args.get('product_id')
+    inventory_batches = []
+    selected_product_name = None
+
+    if selected_product_id:
+        try:
+            # Fetch current and last 3 lines (total 4), ordered by id descending
+            # to get the most recently added batches.
+            inventory_batches = manager.get_inventory_batches_for_product(
+                product_id=int(selected_product_id),
+                limit=4,
+                order_by_id_desc=True
+            )
+            # The method returns them in DESC order of ID (most recent first).
+            # The template iterates as is (most recent first). If oldest of these 4 should be first,
+            # they would need to be reversed here: inventory_batches.reverse()
+
+            selected_product = manager.get_product(int(selected_product_id))
+            if selected_product:
+                selected_product_name = selected_product['name']
+        except ValueError: # Handles error from int(selected_product_id)
+            flash("Invalid product ID format provided.", "error")
+            selected_product_id = None # Reset to avoid further errors
+            inventory_batches = [] # Ensure it's an empty list
+            # selected_product_name remains None or its previous state
+
+    if request.method == 'POST':
+        include_in_projections = request.form.get('include_in_projections') == 'true'
+
+        # selected_product_id is needed for the redirect, try to get it from form if hidden field added,
+        # or from the original GET param if still in context.
+        # For safety, it's better if product_id is part of the form submission.
+        # Let's assume 'product_id' (the one for the dropdown) is also submitted,
+        # or we re-fetch/validate it if necessary.
+        # The current HTML form doesn't explicitly submit the overall 'product_id' for the page,
+        # only 'product_id' for the dropdown selection (which causes a GET).
+        # The `selected_product_id` variable should be available from the GET part of the view if the page reloads.
+        # For the redirect:
+        page_product_id_for_redirect = request.form.get('product_id_for_redirect') # Assuming we add this hidden field
+
+        # Iterate through form data to find batch adjustments
+        i = 0
+        while True:
+            batch_id_str = request.form.get(f'batch_id_{i}')
+            if batch_id_str is None:
+                break # No more batches in the form
+
+            new_quantity_str = request.form.get(f'quantity_{i}')
+            new_purchase_date_str = request.form.get(f'purchase_date_{i}')
+            new_expiry_date_str = request.form.get(f'expiry_date_{i}')
+
+            if not batch_id_str: # Should not happen if form is structured correctly
+                i += 1
+                continue
+
+            try:
+                batch_id = int(batch_id_str)
+                # Call the manager method
+                # NOTE: The `include_in_projections` variable is captured but not yet passed to `adjust_inventory_batch`.
+                # This will be addressed if `adjust_inventory_batch` is updated to use it.
+                result = manager.adjust_inventory_batch(
+                    batch_id=batch_id,
+                    new_quantity_str=new_quantity_str,
+                    new_purchase_date_str=new_purchase_date_str,
+                    new_expiry_date_str=new_expiry_date_str,
+                    include_in_projections=include_in_projections # Ensure this is passed
+                )
+
+                if result.get("success"):
+                    flash(result["message"], 'success')
+                else:
+                    flash(f"Error for batch ID {batch_id}: {result.get('message', 'Unknown error.')}", 'error')
+
+            except ValueError:
+                flash(f"Invalid Batch ID format: {batch_id_str}", "error")
+            except Exception as e: # Catch any other unexpected errors during adjustment
+                flash(f"An unexpected error occurred processing batch ID {batch_id_str}: {e}", "error")
+
+            i += 1
+
+        # If page_product_id_for_redirect was not available, try selected_product_id from GET context
+        redirect_product_id = page_product_id_for_redirect if page_product_id_for_redirect else selected_product_id
+
+        if redirect_product_id:
+            return redirect(url_for('edit_inventory_view', product_id=redirect_product_id))
+        else:
+            # If no product_id is known (e.g., if form submission was manipulated or state lost)
+            # redirect to the plain edit page or current inventory.
+            flash("No product context for redirect, returning to general edit page.", "warning")
+            return redirect(url_for('edit_inventory_view'))
+
+    return render_template('edit_inventory.html',
+                           products=products_for_dropdown,
+                           selected_product_id=selected_product_id,
+                           selected_product_name=selected_product_name,
+                           inventory_batches=inventory_batches)
+
+# --- Category and Subcategory Management Route ---
 @app.route('/manage_categories', methods=['GET', 'POST'])
-def manage_categories_view(): return "" # Placeholder
+def manage_categories_view():
+    if request.method == 'POST':
+        action_type = request.form.get('action_type')
+        if action_type == 'add_category':
+            category_name = request.form.get('category_name', '').strip()
+            if category_name:
+                result = manager.add_category(category_name)
+                if result.get('success'):
+                    flash(result['message'], 'success')
+                else:
+                    flash(result['message'], 'error')
+            else:
+                flash("Category name cannot be empty.", 'error')
+
+        elif action_type == 'add_subcategory':
+            subcategory_name = request.form.get('subcategory_name', '').strip()
+            category_id_str = request.form.get('category_id')
+            if subcategory_name and category_id_str:
+                try:
+                    category_id = int(category_id_str)
+                    result = manager.add_subcategory(subcategory_name, category_id)
+                    if result.get('success'):
+                        flash(result['message'], 'success')
+                    else:
+                        flash(result['message'], 'error')
+                except ValueError:
+                    flash("Invalid Category ID.", 'error')
+            else:
+                flash("Subcategory name and Category ID are required.", 'error')
+        else:
+            flash("Invalid action.", 'error')
+        return redirect(url_for('manage_categories_view'))
+
+    # GET request
+    categories_data = manager.get_all_categories_with_subcategories()
+    return render_template('manage_categories.html', categories_data=categories_data)
+
 @app.route('/product_modal_details/<int:product_id>', methods=['GET'])
-def product_modal_details(product_id): return "" # Placeholder
+def product_modal_details(product_id):
+    product_details = manager.get_product_details(product_id)
+
+    if not product_details:
+        return jsonify({"error": "Product not found"}), 404
+
+    # get_daily_consumption defaults to 30 days
+    daily_consumption = manager.get_daily_consumption(product_id)
+    # get_monthly_consumption defaults to 12 months
+    monthly_consumption = manager.get_monthly_consumption(product_id)
+    # Get daily inventory history (defaults to 30 days)
+    daily_inventory_history = manager.get_daily_inventory_history(product_id)
+
+    # Ensure all date/datetime objects are converted to ISO format strings for JSON serialization
+    # For product_details, this depends on its structure. Assuming it's a dict from DB Row.
+    # For consumption data, the manager methods already format dates as strings.
+
+    # --- New data for modal ---
+    recipes_containing_product = []
+    if product_details.get('name'):
+        recipes_containing_product = recipe_mngr.get_recipes_for_product(product_details['name'])
+
+    inventory_concerns = manager.get_inventory_concerns(product_id)
+
+    # Calculate shopping_list_amount_today
+    shopping_list_amount_today = 0.0 # Default to 0
+    SOBEYS_FREQUENCY_WEEKS = 1
+    COSTCO_FREQUENCY_WEEKS = 3
+
+    par_level = product_details.get('par_level', 0.0)
+    if par_level is None: par_level = 0.0 # Ensure float if None
+    else: par_level = float(par_level)
+
+    purchase_location = product_details.get('purchase_location')
+    current_on_hand_inventory = product_details.get('current_on_hand_inventory', 0.0)
+
+    projection_days_for_item = 0
+    if purchase_location == 'Sobeys':
+        projection_days_for_item = SOBEYS_FREQUENCY_WEEKS * 7
+    elif purchase_location == 'Costco':
+        projection_days_for_item = COSTCO_FREQUENCY_WEEKS * 7
+
+    if par_level > 0 and projection_days_for_item > 0:
+        # Use a distinct variable name for this specific demand projection call
+        demand_projection_for_shopping = manager.project_demand(
+            product_id,
+            lookback_days=30, # Standard lookback
+            projection_days=projection_days_for_item
+        )
+        avg_daily_consumption_for_shopping = 0.0
+        if demand_projection_for_shopping.get("success"):
+            avg_daily_consumption_for_shopping = demand_projection_for_shopping.get('avg_daily_consumption', 0.0)
+
+        target_stock_after_shopping = par_level + (avg_daily_consumption_for_shopping * projection_days_for_item)
+        recommended_purchase_amount = target_stock_after_shopping - current_on_hand_inventory
+        shopping_list_amount_today = max(0, round(recommended_purchase_amount, 2))
+
+    # --- Future Inventory Projection ---
+    # Call the new projection method
+    future_projection_result = manager.get_future_inventory_projection(product_id, projection_days=FUTURE_PROJECTION_HORIZON)
+
+    final_future_projection_data = [] # Default to empty list
+    if isinstance(future_projection_result, dict) and future_projection_result.get("success") is False:
+        app.logger.error(f"Failed to get future inventory projection for product {product_id}: {future_projection_result.get('message')}")
+    elif isinstance(future_projection_result, list):
+        final_future_projection_data = future_projection_result
+
+    # --- Past Actuals Summary ---
+    past_actuals_result = manager.get_past_actual_inventory_summary(product_id, days_past=PAST_ACTUALS_HORIZON)
+
+    final_past_actual_data = [] # Default to empty list
+    if isinstance(past_actuals_result, dict) and past_actuals_result.get("success") is False:
+        app.logger.error(f"Failed to get past actuals summary for product {product_id}: {past_actuals_result.get('message')}")
+    elif isinstance(past_actuals_result, list):
+        final_past_actual_data = past_actuals_result
+
+    data_to_return = {
+        "product_details": product_details,
+        "daily_consumption": daily_consumption, # Historical daily consumption
+        "monthly_consumption": monthly_consumption, # Historical monthly consumption
+        "daily_inventory_history": daily_inventory_history, # Historical daily inventory levels
+        "recipes_containing_product": recipes_containing_product,
+        "inventory_concerns": inventory_concerns,
+        "shopping_list_amount_today": shopping_list_amount_today,
+        "future_projection_data": final_future_projection_data,
+        "past_actual_data": final_past_actual_data # New past actuals data
+        # unit_of_measure, current_on_hand_inventory, nearest_expiry_date are already in product_details
+    }
+    app.logger.debug(f"Data for modal product ID {product_id}: {data_to_return}")
+    return jsonify(data_to_return)
+
+# --- Product Excel Upload Route ---
 @app.route('/upload_products_excel', methods=['GET', 'POST'])
-def upload_products_excel_view(): return "" # Placeholder
+def upload_products_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            overwrite_logic = request.form.get('overwrite_logic_choice', 'skip') # Default to 'skip'
+            try:
+                # Assuming openpyxl is imported in Food_manager.py where it's used
+                result = manager.upload_products_excel(file.stream, overwrite_logic)
+
+                if result.get("errors"):
+                    for error_msg in result["errors"][:10]: # Show up to 10 errors
+                        flash(error_msg, 'error_detail')
+                    if len(result["errors"]) > 10:
+                        flash(f"...and {len(result['errors']) - 10} more errors.", 'error_detail')
+
+                if result.get("added") > 0:
+                    flash(f"Successfully added {result['added']} new products.", 'success')
+                if result.get("updated") > 0:
+                    flash(f"Successfully updated {result['updated']} existing products.", 'success')
+                if result.get("skipped") > 0:
+                    flash(f"{result['skipped']} products were skipped (duplicates, 'skip' logic chosen).", 'info')
+
+                if not result.get("errors") and result.get("added") == 0 and result.get("updated") == 0 and result.get("skipped") == 0:
+                     flash("No products were added, updated, or skipped. File might be empty or data already matches existing entries (and skip logic was chosen).", 'info')
+
+                if result.get("errors"):
+                     flash("Product upload completed with errors. Please check messages above.", 'warning')
+                     return redirect(url_for('upload_products_excel_view'))
+                else:
+                    return redirect(url_for('list_products_view'))
+
+            except Exception as e:
+                app.logger.error(f"Error processing product Excel upload: {e}", exc_info=True)
+                flash(f"An unexpected error occurred during product upload: {str(e)}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    # GET request
+    return render_template('upload_products_excel.html', title="Upload Products from Excel")
+
 @app.route('/upload_historical_excel', methods=['GET', 'POST'])
-def upload_historical_excel_view(): return "" # Placeholder
+def upload_historical_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                # The manager method 'upload_historical_inventory_excel' handles openpyxl
+                result = manager.upload_historical_inventory_excel(file.stream)
+
+                errors = result.get("errors", [])
+                added_count = result.get("added", 0)
+
+                if errors:
+                    flash(f"Historical data upload completed with {len(errors)} errors:", 'error')
+                    for error_msg in errors[:10]: # Show up to 10 errors
+                        flash(error_msg, 'error_detail')
+                    if len(errors) > 10:
+                        flash(f"...and {len(errors) - 10} more errors.", 'error_detail')
+
+                if added_count > 0:
+                    flash(f"Successfully added {added_count} historical consumption records.", 'success')
+
+                if not errors and added_count == 0:
+                     flash("No new historical records were added. File might be empty, data might be invalid, or headers incorrect.", 'info')
+
+                if errors:
+                     return redirect(url_for('upload_historical_excel_view')) # Stay on page if errors
+                else:
+                    return redirect(url_for('historical_inventory_view')) # Go to historical view on full success
+
+            except Exception as e:
+                app.logger.error(f"Error processing historical inventory Excel upload: {e}", exc_info=True)
+                flash(f"An unexpected error occurred during historical data upload: {str(e)}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    # GET request
+    return render_template('upload_historical_excel.html', title="Upload Historical Inventory from Excel")
+
 @app.route('/upload_production_items_excel', methods=['GET', 'POST'])
-def upload_production_items_excel_view(): return "" # Placeholder
+def upload_production_items_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                result = manager.upload_production_items_excel(file.stream)
+
+                errors = result.get("errors", [])
+                added_count = result.get("added", 0)
+                warnings = result.get("warnings", [])
+
+
+                if warnings:
+                    flash(f"Production item upload completed with {len(warnings)} warnings:", 'warning')
+                    for warn_msg in warnings[:5]: # Show up to 5 warnings
+                        flash(warn_msg, 'warning_detail')
+
+                if errors:
+                    flash(f"Production item upload completed with {len(errors)} errors:", 'error')
+                    for error_msg in errors[:10]: # Show up to 10 errors
+                        flash(error_msg, 'error_detail')
+                    if len(errors) > 10:
+                        flash(f"...and {len(errors) - 10} more errors.", 'error_detail')
+
+                if added_count > 0:
+                    flash(f"Successfully added {added_count} production items.", 'success')
+
+                if not errors and not warnings and added_count == 0 :
+                     flash("No new production items were added. File might be empty or data invalid.", 'info')
+
+                if errors: # If there were actual errors (not just warnings)
+                     return redirect(url_for('upload_production_items_excel_view'))
+                else: # Success or warnings only
+                    return redirect(url_for('garden_list_view'))
+
+            except Exception as e:
+                app.logger.error(f"Error processing production items Excel upload: {e}", exc_info=True)
+                flash(f"An unexpected error occurred during production items upload: {str(e)}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    # GET request
+    return render_template('upload_production_items_excel.html', title="Upload Production Items from Excel")
+
+# --- Data Export Route ---
 @app.route('/export_data', methods=['GET', 'POST'])
-def export_data_view(): return "" # Placeholder
+def export_data_view():
+    if request.method == 'POST':
+        selected_table = request.form.get('selected_table')
+        # export_start_date = request.form.get('export_start_date') # For future use
+        # export_end_date = request.form.get('export_end_date')     # For future use
+
+        if selected_table == "products":
+            try:
+                products_data = manager.get_all_products_export()
+                if not products_data:
+                    flash("No product data found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Products Export"
+
+                # Write headers (keys from the first product dictionary)
+                headers = list(products_data[0].keys())
+                ws.append(headers)
+
+                # Write data rows
+                for product_row in products_data:
+                    row_values = [product_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                # Save to a BytesIO object
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0) # Rewind the stream to the beginning
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='products_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+
+            except Exception as e:
+                app.logger.error(f"Error exporting product data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting product data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "inventory_batches":
+            export_start_date = request.form.get('export_start_date')
+            export_end_date = request.form.get('export_end_date')
+            try:
+                batches_data = manager.get_all_inventory_batches_export(
+                    start_date_str=export_start_date if export_start_date else None,
+                    end_date_str=export_end_date if export_end_date else None
+                )
+                if not batches_data:
+                    flash("No inventory batch data found for the selected criteria.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Inventory Batches Export"
+
+                headers = list(batches_data[0].keys())
+                ws.append(headers)
+
+                for batch_row in batches_data:
+                    row_values = [batch_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='inventory_batches_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting inventory batch data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting inventory batch data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "historical_inventory":
+            export_start_date = request.form.get('export_start_date')
+            export_end_date = request.form.get('export_end_date')
+            try:
+                historical_data = manager.get_historical_inventory(
+                    export_all=True,
+                    export_start_date_str=export_start_date if export_start_date else None,
+                    export_end_date_str=export_end_date if export_end_date else None
+                )
+                if not historical_data:
+                    flash("No historical inventory data found for the selected criteria.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Historical Inventory Export"
+
+                headers = list(historical_data[0].keys())
+                ws.append(headers)
+
+                for data_row in historical_data:
+                    row_values = [data_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='historical_inventory_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting historical inventory data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting historical inventory data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "recipes":
+            try:
+                # Call get_all_recipes with export_all=True to get only header data
+                recipes_data = recipe_mngr.get_all_recipes(export_all=True)
+
+                if not recipes_data:
+                    flash("No recipes found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Recipes Export"
+
+                # Headers will be based on the recipe header fields (e.g., id, name, description)
+                # Ingredients will be excluded as per the modified get_all_recipes for export_all=True
+                headers = list(recipes_data[0].keys())
+                ws.append(headers)
+
+                for recipe_row in recipes_data:
+                    # Ensure only header data is accessed; 'ingredients' key should be absent
+                    row_values = [recipe_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='recipes_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting recipes data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting recipes data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "recipe_ingredients":
+            try:
+                ingredients_data = recipe_mngr.get_all_recipe_ingredients_export()
+                if not ingredients_data:
+                    flash("No recipe ingredients found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Recipe Ingredients Export"
+
+                headers = list(ingredients_data[0].keys())
+                ws.append(headers)
+
+                for ingredient_row in ingredients_data:
+                    row_values = [ingredient_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='recipe_ingredients_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting recipe ingredients data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting recipe ingredients data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "production_items":
+            try:
+                production_data = manager.get_all_production_items_export()
+                if not production_data:
+                    flash("No production items (garden) found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Production Items Export"
+
+                headers = list(production_data[0].keys())
+                ws.append(headers)
+
+                for item_row in production_data:
+                    row_values = [item_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='production_items_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting production items data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting production items data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "categories":
+            try:
+                categories_data = manager.get_all_categories_export()
+                if not categories_data:
+                    flash("No categories found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Categories Export"
+
+                headers = list(categories_data[0].keys())
+                ws.append(headers)
+
+                for category_row in categories_data:
+                    row_values = [category_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='categories_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting categories data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting categories data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "subcategories":
+            try:
+                subcategories_data = manager.get_all_subcategories_export()
+                if not subcategories_data:
+                    flash("No subcategories found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Subcategories Export"
+
+                headers = list(subcategories_data[0].keys())
+                ws.append(headers)
+
+                for subcategory_row in subcategories_data:
+                    row_values = [subcategory_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='subcategories_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting subcategories data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting subcategories data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "subcategories":
+            try:
+                subcategories_data = manager.get_all_subcategories_export()
+                if not subcategories_data:
+                    flash("No subcategories found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Subcategories Export"
+
+                headers = list(subcategories_data[0].keys())
+                ws.append(headers)
+
+                for subcategory_row in subcategories_data:
+                    row_values = [subcategory_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='subcategories_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting subcategories data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting subcategories data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+        else:
+            flash(f"Export functionality for '{selected_table}' is not yet implemented.", "warning")
+            return redirect(url_for('export_data_view'))
+
+    # GET request
+    return render_template('export_data.html', title="Export Data")
 
 if __name__ == '__main__':
+    # Debug mode should be False in a production environment
+    # Host '0.0.0.0' makes it accessible from network, useful for some environments
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
-[end of app.py]
