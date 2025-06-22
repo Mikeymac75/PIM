@@ -728,3 +728,17 @@ tr.override-active td {
         font-size: 1.3em; /* Smaller title on mobile */
     }
 }
+
+/* Clearfix for header container to wrap floated children */
+header .container::after {
+  content: "";
+  clear: both;
+  display: table;
+}
+
+/* Clearfix for header UL to wrap floated LI elements */
+header ul::after {
+  content: "";
+  clear: both;
+  display: table;
+}

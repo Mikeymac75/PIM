@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Recipes from Excel - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Upload Recipes from Excel</h1>
+{% endblock %}
+
+{% block content %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flashes">
+        {% for category, message in messages %}
+          <li class="{{ category }}">{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <div class="excel-instructions">
+        <h3>Instructions for Excel File Format (Recipes):</h3>
+        <p>Please ensure your Excel file (<code>.xlsx</code> format) has the following columns in the first sheet. The first row should be the header.</p>
+        <ul>
+            <li><strong>Recipe Name</strong>: (Required) The name of the recipe.</li>
+            <li><strong>Description</strong>: (Optional) A brief description of the recipe.</li>
+            <li><strong>Instructions</strong>: (Optional) Detailed cooking instructions.</li>
+            <li><strong>Output Product Name</strong>: (Optional) If the recipe produces a specific inventory item, enter its name here. The product must already exist in the system.</li>
+            <li><strong>Output Yield</strong>: (Optional, but Required if 'Output Product Name' is provided) The quantity of the output product produced by one batch of the recipe.</li>
+            <li><strong>Ingredient 1 Name</strong>: (Required if any ingredient in this numbered set is provided) Name of the first ingredient. Must match an existing product name in the inventory system.</li>
+            <li><strong>Ingredient 1 Quantity</strong>: (Required if 'Ingredient 1 Name' is provided) Quantity of the first ingredient (e.g., "2", "0.5", "100g").</li>
+            <li><strong>Ingredient 1 Notes</strong>: (Optional) Any notes for the first ingredient (e.g., "chopped", "unsalted").</li>
+            <li><strong>Ingredient 2 Name</strong>: (Optional) Name of the second ingredient.</li>
+            <li><strong>Ingredient 2 Quantity</strong>: (Required if 'Ingredient 2 Name' is provided) Quantity of the second ingredient.</li>
+            <li><strong>Ingredient 2 Notes</strong>: (Optional) Notes for the second ingredient.</li>
+            <li>... (Continue this pattern for more ingredients, e.g., up to Ingredient 15 Name, Ingredient 15 Quantity, Ingredient 15 Notes)</li>
+        </ul>
+        <p>Each row after the header represents a single recipe. If a recipe has fewer ingredients than the maximum number of ingredient columns, leave the subsequent ingredient columns empty for that recipe's row.</p>
+    </div>
+
+    <form method="POST" action="{{ url_for('upload_recipes_excel_view') }}" enctype="multipart/form-data" style="margin-top: 20px;">
+        <div class="form-group">
+            <label for="excel_file">Choose Excel File (.xlsx):</label>
+            <input type="file" id="excel_file" name="excel_file" class="form-control-file" accept=".xlsx" required>
+        </div>
+        <button type="submit" class="button"><i class="fas fa-upload"></i> Upload and Process Recipes</button>
+    </form>
+
+    <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
+{% endblock %}

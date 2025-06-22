@@ -15,6 +15,7 @@ class RecipeManager:
         if self.conn and self.db_filepath == ":memory:":
             return self.conn
         conn = sqlite3.connect(self.db_filepath)
+        conn.execute("PRAGMA foreign_keys = ON;") # Enforce foreign key constraints
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -68,10 +69,9 @@ class RecipeManager:
                 ''')
                 conn.commit()
         except sqlite3.Error as e:
-            # It's good practice to raise or log this error.
-            # For now, printing to console.
-            print(f"RecipeManager Database initialization error: {e}")
-            # raise sqlite3.Error(f"RecipeManager Database initialization error: {e}")
+            # Raise an exception to indicate failure during initialization
+            # The print statement about column addition can remain for CLI visibility or be logged.
+            raise sqlite3.Error(f"RecipeManager Database initialization error: {e}")
 
     def add_recipe(self, recipe_data):
         """
@@ -100,14 +100,14 @@ class RecipeManager:
                     cursor.execute('''
                         INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
                         VALUES (?, ?, ?, ?)
-                    ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity'), ingredient.get('notes')))
+                    ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity_required'), ingredient.get('notes')))
 
                 conn.commit()
                 return {"success": True, "message": "Recipe added successfully.", "recipe_id": recipe_id}
         except sqlite3.IntegrityError:
-            return {"success": False, "message": f"Recipe name '{recipe_data['name']}' already exists."}
+            return {"success": False, "message": f"Recipe name '{recipe_data['name']}' already exists.", "error_details": f"IntegrityError: Unique constraint failed for name '{recipe_data['name']}'."}
         except sqlite3.Error as e:
-            return {"success": False, "message": f"Database error adding recipe: {e}"}
+            return {"success": False, "message": f"Database error adding recipe: {e}", "error_details": str(e), "error_type": "DBError"}
 
     def get_recipe_by_id(self, recipe_id):
         """Retrieves a complete recipe (details and ingredients) by its ID."""
@@ -129,11 +129,20 @@ class RecipeManager:
                         FROM recipe_ingredients
                         WHERE recipe_id = ?
                     ''', (recipe_id,))
-                    ingredients = [dict(row) for row in cursor.fetchall()]
+                    ingredients = []
+                    for row in cursor.fetchall():
+                        ingredients.append({
+                            'id': row['id'],
+                            'item_name': row['item_name'],
+                            'quantity_required': row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'notes': row['notes']
+                        })
                     recipe['ingredients'] = ingredients
+                return {"success": True, "data": recipe, "message": "Recipe retrieved successfully."}
+            else:
+                return {"success": False, "message": f"Recipe with ID {recipe_id} not found.", "data": None, "error_type": "NotFound"}
         except sqlite3.Error as e:
-            print(f"Database error getting recipe by ID {recipe_id}: {e}")
-        return recipe
+            return {"success": False, "message": f"Database error getting recipe by ID {recipe_id}: {e}", "error_details": str(e), "data": None, "error_type": "DBError"}
 
     def get_recipe_by_name(self, recipe_name):
         """Retrieves a complete recipe (details and ingredients) by its name."""
@@ -156,50 +165,74 @@ class RecipeManager:
                         FROM recipe_ingredients
                         WHERE recipe_id = ?
                     ''', (recipe['id'],)) # Use the id from the fetched recipe_row
-                    ingredients = [dict(row) for row in cursor.fetchall()]
+                    ingredients = []
+                    # The SELECT for ingredients in get_recipe_by_name is:
+                    # SELECT id, item_name, quantity, notes FROM recipe_ingredients
+                    for row in cursor.fetchall():
+                        ingredients.append({
+                            'id': row['id'],
+                            'item_name': row['item_name'],
+                            'quantity_required': row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'notes': row['notes']
+                        })
                     recipe['ingredients'] = ingredients
+                return {"success": True, "data": recipe, "message": "Recipe retrieved successfully."}
+            else:
+                return {"success": False, "message": f"Recipe with name '{recipe_name}' not found.", "data": None, "error_type": "NotFound"}
         except sqlite3.Error as e:
-            print(f"Database error getting recipe by name '{recipe_name}': {e}")
-        return recipe
+            return {"success": False, "message": f"Database error getting recipe by name '{recipe_name}': {e}", "error_details": str(e), "data": None, "error_type": "DBError"}
 
-    def get_all_recipes(self, page=1, per_page=10, sort_by='name', sort_order='ASC'):
-        """Retrieves all recipes with details and ingredients, with pagination and sorting."""
+    def get_all_recipes(self, page=1, per_page=10, sort_by='name', sort_order='ASC', export_all=False):
+        """
+        Retrieves recipes. If export_all is True, fetches all recipes without ingredients and pagination.
+        Otherwise, fetches paginated recipes with ingredients.
+        """
         recipes_list = []
 
-        # Validate sort_by and sort_order
-        valid_sort_columns = {'name', 'description'} # Add more if needed, like output_product_id
+        valid_sort_columns = {'name', 'description'}
         sort_column = sort_by if sort_by in valid_sort_columns else 'name'
         sort_order_str = 'DESC' if sort_order.upper() == 'DESC' else 'ASC'
 
-        offset = (page - 1) * per_page
+        query = f'''
+            SELECT r.id, r.name, r.description, r.instructions, r.output_product_id, r.output_yield
+            FROM recipes r
+            ORDER BY r.{sort_column} {sort_order_str}
+        '''
+        params = []
+
+        if not export_all:
+            offset = (page - 1) * per_page
+            query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
 
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Get paginated recipes
-                query = f'''
-                    SELECT r.id, r.name, r.description, r.instructions, r.output_product_id, r.output_yield
-                    FROM recipes r
-                    ORDER BY r.{sort_column} {sort_order_str}
-                    LIMIT ? OFFSET ?
-                '''
-                cursor.execute(query, (per_page, offset))
+                cursor.execute(query, tuple(params))
                 recipe_rows = cursor.fetchall()
 
                 for recipe_row in recipe_rows:
                     recipe = dict(recipe_row)
-                    # Fetch ingredients for each recipe
-                    cursor.execute('''
-                        SELECT id, item_name, quantity, notes
-                        FROM recipe_ingredients
-                        WHERE recipe_id = ?
-                    ''', (recipe['id'],))
-                    ingredients = [dict(ing_row) for ing_row in cursor.fetchall()]
-                    recipe['ingredients'] = ingredients
+                    if not export_all: # Fetch ingredients only if not exporting all (i.e., for regular app display)
+                        cursor.execute('''
+                            SELECT id, item_name, quantity, notes
+                            FROM recipe_ingredients
+                            WHERE recipe_id = ?
+                        ''', (recipe['id'],))
+                        ingredients = []
+                        for ing_row in cursor.fetchall():
+                            ingredients.append({
+                                'id': ing_row['id'],
+                                'item_name': ing_row['item_name'],
+                                'quantity_required': ing_row['quantity'],
+                                'notes': ing_row['notes']
+                            })
+                        recipe['ingredients'] = ingredients
+                    # If export_all is True, recipe dict will not have 'ingredients' key.
                     recipes_list.append(recipe)
+            return {"success": True, "data": recipes_list, "message": "Recipes retrieved successfully."}
         except sqlite3.Error as e:
-            print(f"Database error getting all recipes: {e}")
-        return recipes_list
+            return {"success": False, "message": f"Database error getting all recipes: {e}", "error_details": str(e), "data": [], "error_type": "DBError"}
 
     def get_all_recipes_count(self):
         """Gets the total number of recipes."""
@@ -208,10 +241,10 @@ class RecipeManager:
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) as count FROM recipes")
                 result = cursor.fetchone()
-                return result['count'] if result else 0
+                count = result['count'] if result else 0
+                return {"success": True, "data": count, "message": "Recipe count retrieved successfully."}
         except sqlite3.Error as e:
-            print(f"Database error getting recipe count: {e}")
-            return 0
+            return {"success": False, "message": f"Database error getting recipe count: {e}", "error_details": str(e), "data": 0, "error_type": "DBError"}
 
     def update_recipe(self, recipe_id, recipe_data):
         """
@@ -268,7 +301,7 @@ class RecipeManager:
                         cursor.execute('''
                             INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
                             VALUES (?, ?, ?, ?)
-                        ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity'), ingredient.get('notes')))
+                        ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity_required'), ingredient.get('notes')))
 
                 conn.commit()
                 if cursor.rowcount == 0 and not ('ingredients' in recipe_data and recipe_data['ingredients']):
@@ -283,9 +316,9 @@ class RecipeManager:
 
                 return {"success": True, "message": f"Recipe ID {recipe_id} updated successfully."}
         except sqlite3.IntegrityError as e: # e.g. unique constraint on name
-            return {"success": False, "message": f"Error updating recipe (e.g., name conflict): {e}"}
+            return {"success": False, "message": f"Error updating recipe (e.g., name conflict): {e}", "error_details": str(e), "error_type": "IntegrityError"}
         except sqlite3.Error as e:
-            return {"success": False, "message": f"Database error updating recipe: {e}"}
+            return {"success": False, "message": f"Database error updating recipe: {e}", "error_details": str(e), "error_type": "DBError"}
 
     def delete_recipe(self, recipe_id):
         """Deletes a recipe and its associated ingredients."""
@@ -298,10 +331,10 @@ class RecipeManager:
                 cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
                 conn.commit()
                 if cursor.rowcount == 0: # Check if the recipe deletion affected any row
-                    return {"success": False, "message": f"Recipe with ID {recipe_id} not found."}
+                    return {"success": False, "message": f"Recipe with ID {recipe_id} not found.", "error_type": "NotFound"}
                 return {"success": True, "message": f"Recipe ID {recipe_id} and its ingredients deleted successfully."}
         except sqlite3.Error as e:
-            return {"success": False, "message": f"Database error deleting recipe: {e}"}
+            return {"success": False, "message": f"Database error deleting recipe: {e}", "error_details": str(e), "error_type": "DBError"}
 
     def get_recipes_for_product(self, product_name):
         """
@@ -328,10 +361,39 @@ class RecipeManager:
                 rows = cursor.fetchall()
                 for row in rows:
                     recipes_found.append({'id': row['recipe_id'], 'name': row['name']})
-            return recipes_found
+            return {"success": True, "data": recipes_found, "message": "Recipes for product retrieved successfully."}
         except sqlite3.Error as e:
-            print(f"Database error getting recipes for product '{product_name}': {e}")
-            return [] # Return empty list on error
+            return {"success": False, "message": f"Database error getting recipes for product '{product_name}': {e}", "error_details": str(e), "data": [], "error_type": "DBError"}
+
+    def get_all_recipe_ingredients_export(self):
+        """
+        Retrieves all recipe ingredients for data export.
+        Includes recipe_name for context.
+        Orders by recipe_name and then by item_name.
+        """
+        items = []
+        query = """
+            SELECT
+                ri.id AS ingredient_id,
+                ri.recipe_id,
+                r.name AS recipe_name,
+                ri.item_name,
+                ri.quantity,
+                ri.notes
+            FROM recipe_ingredients ri
+            JOIN recipes r ON ri.recipe_id = r.id
+            ORDER BY recipe_name ASC, ri.item_name ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+            return {"success": True, "data": items, "message": "Recipe ingredients for export retrieved successfully."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error fetching all recipe ingredients for export: {e}", "error_details": str(e), "data": [], "error_type": "DBError"}
 
 # Example Usage (can be removed or commented out later)
 if __name__ == '__main__':

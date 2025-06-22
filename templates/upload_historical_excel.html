@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Historical Inventory - {{ super() }}{% endblock %}
+
+{% block page_header %}
+    <h2>Upload Historical Inventory from Excel</h2>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header">
+            <h4>Instructions for Excel File Format</h4>
+        </div>
+        <div class="card-body">
+            <p>Please ensure your Excel file (.xlsx) has a header row with the following column names (case-insensitive, order does not matter). The first sheet in the Excel file will be processed.</p>
+            <h5>Expected Columns:</h5>
+            <ul>
+                <li><strong>product_name</strong> (Required): Name of the product. Must match an existing product in the system.</li>
+                <li><strong>quantity_consumed_this_time</strong> (Required): The amount of the product consumed in this historical entry. Must be a positive number.</li>
+                <li><strong>consumed_date</strong> (Required): The date the consumption occurred, in YYYY-MM-DD format.</li>
+                <li><strong>original_quantity_string</strong> (Optional): The original quantity string of the batch from which this item was consumed (e.g., "1 kg", "12 units"). Text format.</li>
+                <li><strong>purchase_date</strong> (Optional): The purchase date of the batch from which this item was consumed, in YYYY-MM-DD format.</li>
+                <li><strong>expiry_date</strong> (Optional): The expiry date of the batch from which this item was consumed, in YYYY-MM-DD format.</li>
+            </ul>
+            <p><strong>Note:</strong> This upload process appends new historical records. It does not update or delete existing historical entries.</p>
+        </div>
+    </div>
+
+    <div class="form-container mt-3 mb-3">
+        <form method="POST" action="{{ url_for('upload_historical_excel_view') }}" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="excel_file">Select Excel File (.xlsx):</label>
+                <input type="file" name="excel_file" id="excel_file" class="form-control-file" accept=".xlsx" required>
+            </div>
+
+            <div class="form-group">
+                <button type="submit" class="btn btn-primary"><i class="fas fa-upload"></i> Upload Historical Data</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

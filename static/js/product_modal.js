@@ -112,12 +112,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Render Charts
-            if (dailyConsumptionChartCanvas) {
-                 renderDailyChart(data.daily_consumption || [], data.daily_inventory_history || []);
-            }
+            // The daily chart will now be handled by updateProjectionDisplay
+            // if (dailyConsumptionChartCanvas) {
+            //      renderDailyChart(data.daily_consumption || [], data.daily_inventory_history || []);
+            // }
             if (monthlyConsumptionChartCanvas) {
-                renderMonthlyChart(data.monthly_consumption || []);
+                renderMonthlyChart(data.monthly_consumption || []); // Keep monthly historical chart
             }
+
+            // New: Update display with projection data (chart and depletion date)
+            // Pass both past actuals and future projections
+            updateProjectionDisplay(data.past_actual_data || [], data.future_projection_data || []);
+
 
             productDetailModal.style.display = 'block';
         } catch (error) {
@@ -162,64 +168,163 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // renderDailyChart function
-    function renderDailyChart(dailyData, dailyInventoryHistory) {
+    // This function now handles both past actuals and future projection data for the daily chart
+    // and also displays the depletion date based on future data.
+    function updateProjectionDisplay(pastActualData, futureProjectionData) {
+        const depletionDateElement = document.getElementById('productDepletionDateInfo'); // Assuming this element exists
+        const chartCanvas = dailyConsumptionChartCanvas; // Use the existing canvas
+
+        // --- Depletion Date (uses only futureProjectionData) ---
+        if (depletionDateElement) {
+            if (!futureProjectionData || !Array.isArray(futureProjectionData) || futureProjectionData.length === 0) {
+                depletionDateElement.textContent = 'Future projection data for depletion not available.';
+            } else {
+                let depletionDateFound = false;
+                for (const item of futureProjectionData) {
+                    if (item.depletion_date_reached === true) {
+                        const depletionDate = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
+                        depletionDateElement.textContent = `Projected to deplete on: ${depletionDate.toLocaleDateString()}`;
+                        depletionDateFound = true;
+                        break;
+                    }
+                }
+                if (!depletionDateFound) {
+                    depletionDateElement.textContent = `Inventory not expected to deplete in the next ${futureProjectionData.length} days.`;
+                }
+            }
+        }
+
+        // --- Chart Data Preparation (7 days past + 7 days future) ---
+        // Validate data for the chart
+        const pastDataValid = Array.isArray(pastActualData) && pastActualData.length > 0; // Should be 7 ideally
+        const futureDataValid = Array.isArray(futureProjectionData) && futureProjectionData.length > 0;
+
+        if (!pastDataValid || !futureDataValid) {
+            if (dailyChartInstance) {
+                dailyChartInstance.destroy();
+                dailyChartInstance = null;
+            }
+            if (chartCanvas) {
+                const ctx = chartCanvas.getContext('2d');
+                ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+                ctx.textAlign = 'center';
+                ctx.fillText('Past or Future data not sufficient for combined chart.', chartCanvas.width / 2, chartCanvas.height / 2);
+            }
+            return;
+        }
+
+        const sevenDayFuture = futureProjectionData.slice(0, 7);
+        // Assuming pastActualData is already the last 7 days from the backend
+        const combinedData = pastActualData.concat(sevenDayFuture);
+
+        const chartLabels = combinedData.map(item => {
+            const dateObj = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
+            return `${dateObj.getMonth() + 1}-${dateObj.getDate()}`; // Format as MM-DD
+        });
+
+        const inventoryLineData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_ending_inventory : item.projected_ending_inventory
+        );
+        const consumptionLineData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_consumption : item.consumption
+        );
+        const shrinkLineData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_shrink : item.shrink // actual_shrink is currently 0
+        );
+        const harvestBarData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_harvest : item.harvest // actual_harvest is currently 0
+        );
+
+        renderCombinedChart(chartLabels, inventoryLineData, consumptionLineData, shrinkLineData, harvestBarData);
+    }
+
+    // Renamed and refactored to render the combined 14-day view
+    function renderCombinedChart(labels, inventoryData, consumptionData, shrinkData, harvestData) {
         if (!dailyConsumptionChartCanvas) return;
         const ctx = dailyConsumptionChartCanvas.getContext('2d');
-
-        // Use inventory history labels as the primary source for chart labels
-        // Format date labels as MM-DD
-        const chartLabels = dailyInventoryHistory.map(item => {
-            const parts = item.inventory_date.split('-'); // "YYYY-MM-DD"
-            return parts[1] + '-' + parts[2]; // "MM-DD"
-        });
-
-        // Map consumption data to the new chartLabels format if necessary,
-        // or ensure dailyData also uses MM-DD if direct matching is needed.
-        // For now, we assume dailyData.consumption_date is still YYYY-MM-DD
-        // and we need to match it with the full date from dailyInventoryHistory
-        // before formatting for the label.
-        // So, consumptionDataValues mapping needs to use the *original* full date from dailyInventoryHistory
-        // for finding matches in dailyData, but the chart itself uses the formatted labels.
-
-        const consumptionDataValues = dailyInventoryHistory.map(historyItem => {
-            // historyItem.inventory_date is YYYY-MM-DD from the source
-            const consItem = dailyData.find(item => item.consumption_date === historyItem.inventory_date);
-            return consItem ? consItem.total_quantity_consumed : 0;
-        });
-
-        const inventoryDataValues = dailyInventoryHistory.map(item => item.quantity_on_hand);
 
         if (dailyChartInstance) {
             dailyChartInstance.destroy();
         }
 
-        const maxConsumption = Math.max(...consumptionDataValues, 0);
-        const maxInventory = Math.max(...inventoryDataValues, 0);
-        const suggestedMaxY = Math.max(maxConsumption, maxInventory) + 1;
+        const maxInventory = Math.max(...inventoryData, 0);
+        const maxOthers = Math.max(...consumptionData, ...shrinkData, ...harvestData, 0);
+        const suggestedMaxY = Math.max(maxInventory, maxOthers) * 1.1 || 10; // 10% buffer or 10 if all zero
+
+
+        // Optional: Add a plugin for a vertical line at "today"
+        const todayLinePlugin = {
+            id: 'todayLine',
+            afterDraw: (chart) => {
+                if (chart.data.labels.length > 7) { // Only draw if there's enough data for past/future
+                    const ctxPlugin = chart.ctx;
+                    const xAxis = chart.scales.x;
+                    const yAxis = chart.scales.y;
+                    // Position the line between the 7th and 8th label (index 6.5)
+                    const xPos = xAxis.getPixelForValue(6.5);
+
+                    ctxPlugin.save();
+                    ctxPlugin.beginPath();
+                    ctxPlugin.moveTo(xPos, yAxis.top);
+                    ctxPlugin.lineTo(xPos, yAxis.bottom);
+                    ctxPlugin.lineWidth = 1;
+                    ctxPlugin.strokeStyle = 'rgba(128, 128, 128, 0.5)'; // Grey color for the line
+                    ctxPlugin.stroke();
+
+                    // Add "Today" text
+                    ctxPlugin.textAlign = 'center';
+                    ctxPlugin.fillStyle = 'rgba(128, 128, 128, 0.8)';
+                    ctxPlugin.fillText("Today", xPos, yAxis.top + 10); // Adjust y for text position
+                    ctxPlugin.restore();
+                }
+            }
+        };
+
 
         dailyChartInstance = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: chartLabels,
+                labels: labels,
                 datasets: [
                     {
-                        label: 'Quantity Consumed',
-                        data: consumptionDataValues,
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        label: 'Projected Inventory',
+                        data: inventoryData,
+                        borderColor: 'rgb(54, 162, 235)',  // Blue
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
                         tension: 0.1,
                         fill: true,
                         yAxisID: 'y',
+                        type: 'line'
                     },
                     {
-                        label: 'Current On-Hand Inventory',
-                        data: inventoryDataValues,
-                        borderColor: 'rgb(255, 99, 132)',
+                        label: 'Projected Consumption',
+                        data: consumptionData,
+                        borderColor: 'rgb(255, 159, 64)', // Orange
+                        backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                        tension: 0.1,
+                        fill: false, // Better as a line without fill if overlapping with inventory
+                        yAxisID: 'y',
+                        type: 'line' // Or 'bar'
+                    },
+                    {
+                        label: 'Projected Shrink',
+                        data: shrinkData,
+                        borderColor: 'rgb(255, 99, 132)',   // Red
                         backgroundColor: 'rgba(255, 99, 132, 0.2)',
                         tension: 0.1,
-                        fill: true,
+                        fill: false,
                         yAxisID: 'y',
+                        type: 'line' // Or 'bar'
+                    },
+                    {
+                        label: 'Projected Harvest',
+                        data: harvestData,
+                        borderColor: 'rgb(75, 192, 75)',    // Green
+                        backgroundColor: 'rgba(75, 192, 75, 0.2)',
+                        tension: 0.1,
+                        fill: false,
+                        yAxisID: 'y',
+                        type: 'bar' // Bar might be good for discrete daily harvest amounts
                     }
                 ]
             },
@@ -228,8 +333,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     y: {
                         beginAtZero: true,
                         suggestedMax: suggestedMaxY,
-                        ticks: {
-                            maxTicksLimit: 8
+                        title: {
+                            display: true,
+                            text: 'Quantity'
+                        }
+                    },
+                    x: {
+                         title: {
+                            display: true,
+                            text: 'Date (7 Days Past / 7 Days Future)'
                         }
                     }
                 },
@@ -237,9 +349,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { display: true },
-                    title: { display: false } // No separate title, using h4 above canvas
+                    title: { display: true, text: 'Inventory Actuals & Projection (Past 7 / Future 7 Days)' },
+                    todayLine: todayLinePlugin // Register the custom plugin if used
                 }
-            }
+            },
+            plugins: [todayLinePlugin] // Register plugin instance
         });
     }
 

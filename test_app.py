@@ -513,5 +513,127 @@ class TestRecipeProduction(unittest.TestCase):
         self.assertAlmostEqual(final_milk_qty, initial_milk_qty - 0.1)
 
 
+class TestAppRecipeAddEditOutput(unittest.TestCase):
+
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['SECRET_KEY'] = 'test_recipe_output_secret'
+
+        self.app_context = app.app_context()
+        self.app_context.push()
+        self.client = app.test_client()
+
+        # Use in-memory SQLite for both managers, sharing the same connection
+        app.manager.db_filepath = ":memory:"
+        app.recipe_mngr.db_filepath = ":memory:"
+
+        # Explicitly close any existing connections if they exist from other tests or contexts
+        if hasattr(app.manager, 'conn') and app.manager.conn:
+            try:
+                app.manager.close_connection()
+            except Exception as e:
+                print(f"Error closing existing app.manager connection in setUp: {e}")
+
+        # app.recipe_mngr might share app.manager.conn, so closing manager's might be enough
+        # but check recipe_mngr's connection too if it could be independent
+        if hasattr(app.recipe_mngr, 'conn') and app.recipe_mngr.conn and app.recipe_mngr.conn != app.manager.conn:
+             try:
+                app.recipe_mngr.close_connection()
+             except Exception as e:
+                print(f"Error closing existing app.recipe_mngr connection in setUp: {e}")
+
+
+        app.manager.conn = sqlite3.connect(":memory:")
+        app.manager.conn.row_factory = sqlite3.Row
+        app.recipe_mngr.conn = app.manager.conn # Share the connection
+
+        app.manager._initialize_db()
+        app.recipe_mngr._initialize_db()
+
+        # Minimal category setup for product creation
+        cat_info = app.manager.add_category("Test Category for Output")
+        self.test_category_id = cat_info['category_id']
+
+        # Create a dummy product to be used as output_product_id
+        output_prod_data = app.manager.create_product(
+            name="Test Output Product Item",
+            category_id=self.test_category_id,
+            unit_of_measure="units",
+            default_expiry_days=1
+        )
+        self.test_output_product_id = output_prod_data['product_id']
+
+    def tearDown(self):
+        if app.manager.conn:
+            app.manager.conn.close()
+            app.manager.conn = None
+        # app.recipe_mngr.conn is the same, so it's already closed.
+        # If it were different, it would need its own close() call.
+
+        self.app_context.pop()
+
+    def test_add_recipe_with_output(self):
+        from flask import url_for
+
+        recipe_name = "Super Output Recipe"
+        output_yield_val = 10.5
+
+        form_data = {
+            'recipe_name': recipe_name,
+            'description': 'A recipe that produces something.',
+            'ingredient_1_name': 'Input Item A',
+            'ingredient_1_quantity': '2.0',
+            # Add more ingredients if your view/manager requires more than one, or handles empty ones
+            'output_product_id': str(self.test_output_product_id),
+            'output_yield': str(output_yield_val)
+        }
+
+        response = self.client.post(url_for('add_recipe_view'), data=form_data, follow_redirects=False) # Test redirect separately
+        self.assertEqual(response.status_code, 302) # Expect a redirect to recipes_list_view
+
+        retrieved_recipe = app.recipe_mngr.get_recipe_by_name(recipe_name)
+        self.assertIsNotNone(retrieved_recipe)
+        self.assertEqual(retrieved_recipe['output_product_id'], self.test_output_product_id)
+        self.assertAlmostEqual(retrieved_recipe['output_yield'], output_yield_val)
+
+    def test_edit_recipe_with_output(self):
+        from flask import url_for
+
+        # 1. Add a recipe without output initially
+        initial_recipe_data = {
+            "name": "RecipeToEditForOutput",
+            "ingredients": [{"item_name": "SomeItem", "quantity_required": 1.0}]
+            # No output_product_id or output_yield initially
+        }
+        add_res = app.recipe_mngr.add_recipe(initial_recipe_data)
+        self.assertTrue(add_res['success'])
+        recipe_id_to_edit = add_res['recipe_id']
+
+        # 2. Prepare form data to edit this recipe, adding output
+        new_recipe_name = "RecipeNowWithOutput"
+        new_output_yield_val = 25.0
+
+        form_data_edit = {
+            'recipe_name': new_recipe_name,
+            'description': 'Updated description, now with output.',
+            'ingredient_1_name': 'SomeItem', # Keep existing or change as needed
+            'ingredient_1_quantity': '1.5',
+            # Ensure all required fields for the form are present
+            'output_product_id': str(self.test_output_product_id),
+            'output_yield': str(new_output_yield_val)
+        }
+
+        response = self.client.post(url_for('edit_recipe_view', recipe_id=recipe_id_to_edit), data=form_data_edit, follow_redirects=False)
+        self.assertEqual(response.status_code, 302) # Expect redirect to recipe_detail_view
+
+        # 3. Fetch and verify
+        retrieved_recipe = app.recipe_mngr.get_recipe_by_id(recipe_id_to_edit)
+        self.assertIsNotNone(retrieved_recipe)
+        self.assertEqual(retrieved_recipe['name'], new_recipe_name) # Name should be updated
+        self.assertEqual(retrieved_recipe['output_product_id'], self.test_output_product_id)
+        self.assertAlmostEqual(retrieved_recipe['output_yield'], new_output_yield_val)
+
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
