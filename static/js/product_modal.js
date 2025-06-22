@@ -112,12 +112,17 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Render Charts
-            if (dailyConsumptionChartCanvas) {
-                 renderDailyChart(data.daily_consumption || [], data.daily_inventory_history || []);
-            }
+            // The daily chart will now be handled by updateProjectionDisplay
+            // if (dailyConsumptionChartCanvas) {
+            //      renderDailyChart(data.daily_consumption || [], data.daily_inventory_history || []);
+            // }
             if (monthlyConsumptionChartCanvas) {
-                renderMonthlyChart(data.monthly_consumption || []);
+                renderMonthlyChart(data.monthly_consumption || []); // Keep monthly historical chart
             }
+
+            // New: Update display with projection data (chart and depletion date)
+            updateProjectionDisplay(data.future_projection_data || []);
+
 
             productDetailModal.style.display = 'block';
         } catch (error) {
@@ -162,64 +167,121 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // renderDailyChart function
-    function renderDailyChart(dailyData, dailyInventoryHistory) {
+    // This function will now handle the new projection data for the daily chart
+    // and also display the depletion date.
+    function updateProjectionDisplay(futureProjectionData) {
+        const depletionDateElement = document.getElementById('productDepletionDateInfo'); // Assuming this element exists
+
+        if (!futureProjectionData || !Array.isArray(futureProjectionData) || futureProjectionData.length === 0) {
+            if (dailyChartInstance) {
+                dailyChartInstance.destroy();
+                dailyChartInstance = null;
+            }
+            if (dailyConsumptionChartCanvas) {
+                 // Optional: Display a message on the canvas itself, or hide it
+                const ctx = dailyConsumptionChartCanvas.getContext('2d');
+                ctx.clearRect(0, 0, dailyConsumptionChartCanvas.width, dailyConsumptionChartCanvas.height);
+                ctx.textAlign = 'center';
+                ctx.fillText('Future projection data not available.', dailyConsumptionChartCanvas.width / 2, dailyConsumptionChartCanvas.height / 2);
+            }
+            if (depletionDateElement) {
+                depletionDateElement.textContent = 'Future projection data not available.';
+            }
+            return;
+        }
+
+        // Display Depletion Date
+        let depletionDateFound = false;
+        if (depletionDateElement) {
+            for (const item of futureProjectionData) {
+                if (item.depletion_date_reached === true) {
+                    const depletionDate = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
+                    depletionDateElement.textContent = `Projected to deplete on: ${depletionDate.toLocaleDateString()}`;
+                    depletionDateFound = true;
+                    break;
+                }
+            }
+            if (!depletionDateFound) {
+                depletionDateElement.textContent = `Inventory not expected to deplete in the next ${futureProjectionData.length} days.`;
+            }
+        }
+
+
+        // Graph Data Preparation (7-Day Window)
+        const sevenDayProjection = futureProjectionData.slice(0, 7);
+
+        const chartLabels = sevenDayProjection.map(item => {
+            const date = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
+            return `${date.getMonth() + 1}-${date.getDate()}`; // Format as MM-DD
+        });
+
+        const projectedInventoryData = sevenDayProjection.map(item => item.projected_ending_inventory);
+        const consumptionData = sevenDayProjection.map(item => item.consumption);
+        const shrinkData = sevenDayProjection.map(item => item.shrink);
+        const harvestData = sevenDayProjection.map(item => item.harvest);
+
+        renderFutureProjectionChart(chartLabels, projectedInventoryData, consumptionData, shrinkData, harvestData);
+    }
+
+
+    // Renamed and refactored from renderDailyChart
+    function renderFutureProjectionChart(labels, inventoryData, consumptionData, shrinkData, harvestData) {
         if (!dailyConsumptionChartCanvas) return;
         const ctx = dailyConsumptionChartCanvas.getContext('2d');
-
-        // Use inventory history labels as the primary source for chart labels
-        // Format date labels as MM-DD
-        const chartLabels = dailyInventoryHistory.map(item => {
-            const parts = item.inventory_date.split('-'); // "YYYY-MM-DD"
-            return parts[1] + '-' + parts[2]; // "MM-DD"
-        });
-
-        // Map consumption data to the new chartLabels format if necessary,
-        // or ensure dailyData also uses MM-DD if direct matching is needed.
-        // For now, we assume dailyData.consumption_date is still YYYY-MM-DD
-        // and we need to match it with the full date from dailyInventoryHistory
-        // before formatting for the label.
-        // So, consumptionDataValues mapping needs to use the *original* full date from dailyInventoryHistory
-        // for finding matches in dailyData, but the chart itself uses the formatted labels.
-
-        const consumptionDataValues = dailyInventoryHistory.map(historyItem => {
-            // historyItem.inventory_date is YYYY-MM-DD from the source
-            const consItem = dailyData.find(item => item.consumption_date === historyItem.inventory_date);
-            return consItem ? consItem.total_quantity_consumed : 0;
-        });
-
-        const inventoryDataValues = dailyInventoryHistory.map(item => item.quantity_on_hand);
 
         if (dailyChartInstance) {
             dailyChartInstance.destroy();
         }
 
-        const maxConsumption = Math.max(...consumptionDataValues, 0);
-        const maxInventory = Math.max(...inventoryDataValues, 0);
-        const suggestedMaxY = Math.max(maxConsumption, maxInventory) + 1;
+        // Determine suggestedMax for y-axis
+        const maxInventory = Math.max(...inventoryData, 0);
+        const maxOthers = Math.max(...consumptionData, ...shrinkData, ...harvestData, 0);
+        const suggestedMaxY = Math.max(maxInventory, maxOthers) + Math.max(maxInventory, maxOthers)*0.1; // Add 10% buffer or a fixed amount
 
         dailyChartInstance = new Chart(ctx, {
-            type: 'line',
+            type: 'line', // Base type, individual datasets can override
             data: {
-                labels: chartLabels,
+                labels: labels,
                 datasets: [
                     {
-                        label: 'Quantity Consumed',
-                        data: consumptionDataValues,
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        label: 'Projected Inventory',
+                        data: inventoryData,
+                        borderColor: 'rgb(54, 162, 235)',  // Blue
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
                         tension: 0.1,
                         fill: true,
                         yAxisID: 'y',
+                        type: 'line'
                     },
                     {
-                        label: 'Current On-Hand Inventory',
-                        data: inventoryDataValues,
-                        borderColor: 'rgb(255, 99, 132)',
+                        label: 'Projected Consumption',
+                        data: consumptionData,
+                        borderColor: 'rgb(255, 159, 64)', // Orange
+                        backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                        tension: 0.1,
+                        fill: false, // Better as a line without fill if overlapping with inventory
+                        yAxisID: 'y',
+                        type: 'line' // Or 'bar'
+                    },
+                    {
+                        label: 'Projected Shrink',
+                        data: shrinkData,
+                        borderColor: 'rgb(255, 99, 132)',   // Red
                         backgroundColor: 'rgba(255, 99, 132, 0.2)',
                         tension: 0.1,
-                        fill: true,
+                        fill: false,
                         yAxisID: 'y',
+                        type: 'line' // Or 'bar'
+                    },
+                    {
+                        label: 'Projected Harvest',
+                        data: harvestData,
+                        borderColor: 'rgb(75, 192, 75)',    // Green
+                        backgroundColor: 'rgba(75, 192, 75, 0.2)',
+                        tension: 0.1,
+                        fill: false,
+                        yAxisID: 'y',
+                        type: 'bar' // Bar might be good for discrete daily harvest amounts
                     }
                 ]
             },
@@ -227,9 +289,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 scales: {
                     y: {
                         beginAtZero: true,
-                        suggestedMax: suggestedMaxY,
-                        ticks: {
-                            maxTicksLimit: 8
+                        suggestedMax: suggestedMaxY > 0 ? suggestedMaxY : 10, // Ensure a minimum height for y-axis if all data is 0
+                        title: {
+                            display: true,
+                            text: 'Quantity'
+                        }
+                    },
+                    x: {
+                         title: {
+                            display: true,
+                            text: 'Date (Next 7 Days)'
                         }
                     }
                 },
@@ -237,7 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { display: true },
-                    title: { display: false } // No separate title, using h4 above canvas
+                    title: { display: true, text: '7-Day Inventory Projection' }
                 }
             }
         });
