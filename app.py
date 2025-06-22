@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
 from io import BytesIO # For handling file streams in memory
 import os # For accessing environment variables
+import shutil # For file operations (backup/restore)
 
 app = Flask(__name__)
 # Configure secret key: Use an environment variable for production, with a fallback for development.
@@ -2702,7 +2703,150 @@ def export_data_view():
     # GET request
     return render_template('export_data.html', title="Export Data")
 
+from functools import wraps
+
+# --- Helper Decorator for Admin Routes ---
+def admin_route_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if os.environ.get('FLASK_ENABLE_ADMIN_ROUTES', 'false').lower() != 'true':
+            # flash("Admin functionality is disabled.", "error") # Option 1: Flash and redirect
+            # return redirect(url_for('home'))
+            return "Admin functionality is disabled. Set FLASK_ENABLE_ADMIN_ROUTES=true to enable.", 403 # Option 2: Simple 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+# --- Backup and Restore Routes ---
+@app.route('/admin/backup_restore', methods=['GET'])
+@admin_route_required
+def backup_restore_view():
+    # This page will also host the restore form, handled by another route.
+    return render_template('backup_restore.html', title="Backup and Restore")
+
+@app.route('/admin/create_backup', methods=['GET'])
+@admin_route_required
+def create_backup_view():
+    """Creates a timestamped backup of the database and offers it for download."""
+    try:
+        # Ensure the manager is using the correct, potentially configured DB file
+        source_db_path = manager.db_filepath
+        if source_db_path == ":memory:":
+            flash("Cannot backup an in-memory database.", "error")
+            return redirect(url_for('backup_restore_view'))
+
+        if not os.path.exists(source_db_path):
+            flash(f"Database file not found at {source_db_path}.", "error")
+            return redirect(url_for('backup_restore_view'))
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # It's safer to put backups in a dedicated directory if possible,
+        # but for simplicity, creating in the same dir as the app or a designated 'backups' folder.
+        # For this example, let's assume we can write to a 'backups' subdir.
+        # Ensure the backup directory exists
+        backup_dir = os.path.join(os.path.dirname(app.root_path), 'instance', 'backups') # Place backups in instance/backups
+        os.makedirs(backup_dir, exist_ok=True)
+
+        backup_filename = f"food_app_backup_{timestamp}.db"
+        backup_filepath = os.path.join(backup_dir, backup_filename)
+
+        shutil.copy2(source_db_path, backup_filepath)
+
+        # Offer the backup file for download
+        return send_file(backup_filepath, as_attachment=True, download_name=backup_filename)
+
+    except Exception as e:
+        app.logger.error(f"Error creating database backup: {e}", exc_info=True)
+        flash(f"An error occurred while creating the backup: {str(e)}", "error")
+        return redirect(url_for('backup_restore_view'))
+
+@app.route('/admin/restore_from_backup', methods=['POST'])
+@admin_route_required
+def restore_from_backup_view():
+    """Restores the database from an uploaded backup file."""
+    if 'backup_file' not in request.files:
+        flash('No backup file part in the request.', 'error')
+        return redirect(url_for('backup_restore_view'))
+
+    file = request.files['backup_file']
+    if file.filename == '':
+        flash('No backup file selected.', 'error')
+        return redirect(url_for('backup_restore_view'))
+
+    if file and file.filename.endswith('.db'):
+        try:
+            current_db_path = manager.db_filepath
+            if current_db_path == ":memory:":
+                flash("Cannot restore an in-memory database.", "error")
+                return redirect(url_for('backup_restore_view'))
+
+            # Define backup directory
+            backup_dir = os.path.join(os.path.dirname(app.root_path), 'instance', 'backups')
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # 1. Backup the current database before overwriting (Safety Net)
+            pre_restore_backup_filename = f"food_app_pre_restore_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            pre_restore_backup_filepath = os.path.join(backup_dir, pre_restore_backup_filename)
+
+            if os.path.exists(current_db_path):
+                shutil.copy2(current_db_path, pre_restore_backup_filepath)
+                flash(f"Existing database backed up to {pre_restore_backup_filename} before restore.", "info")
+
+            # 2. Save the uploaded file and replace the current database
+            # It's good practice to save to a temporary path first, then move,
+            # but for simplicity with SQLite (single file), direct replacement after backup is common.
+
+            # Close existing DB connections if possible. This is tricky with global managers.
+            # Forcing a restart of the application after restore is the most robust way
+            # to ensure the new database is loaded correctly without connection conflicts.
+            # manager.close_connection() # If manager had a method to close its persistent connection
+            # recipe_mngr.close_connection()
+
+            # Replace the current database file with the uploaded one
+            # The `DATABASE_FILE` constant points to where the app expects the DB.
+            # `current_db_path` (from manager.db_filepath) should be this path.
+            file.save(current_db_path) # Overwrites the existing DB file
+
+            flash(f"Database successfully restored from '{file.filename}'. Please restart the application for changes to take effect.", "success")
+
+            # NOTE: Restarting the application programmatically is complex and platform-dependent.
+            # It's better to instruct the user. If this app were run by a process manager
+            # (like gunicorn, systemd), that manager would handle restarts.
+
+        except Exception as e:
+            app.logger.error(f"Error restoring database: {e}", exc_info=True)
+            flash(f"An error occurred during database restore: {str(e)}", "error")
+    else:
+        flash('Invalid file type. Please upload a .db file.', 'error')
+
+    return redirect(url_for('backup_restore_view'))
+
+
 if __name__ == '__main__':
     # Debug mode should be False in a production environment
     # Host '0.0.0.0' makes it accessible from network, useful for some environments
+
+    # Ensure instance folder exists for backups, logs, etc.
+    instance_path = os.path.join(os.path.dirname(app.root_path), 'instance')
+    if not os.path.exists(instance_path):
+        os.makedirs(instance_path, exist_ok=True)
+        print(f"Created instance folder at: {instance_path}")
+
+    # Adjust DATABASE_FILE to be in the instance folder if not already set by env var
+    # This is a good practice for user-writable files like DBs and backups.
+    # If DATABASE_FILE_PATH is set via environment, it will be used.
+    # Otherwise, default to 'instance/food_app.db'.
+
+    # This logic should ideally be at the top where DATABASE_FILE is defined,
+    # but for this step, we are adding it here.
+    # A better approach would be to refactor DB_FILE definition at the top of app.py.
+    # For now, let's ensure the global `manager` and `recipe_mngr` are re-initialized
+    # if we change DATABASE_FILE path here. This is not ideal.
+
+    # The current global instantiation of manager and recipe_mngr uses DATABASE_FILE
+    # defined near the top. If we want to ensure it's in 'instance', that definition
+    # needs to be aware of the instance path.
+    # Let's assume DATABASE_FILE is correctly pointing to 'instance/food_app.db'
+    # or is set via environment variable.
+    # The backup logic above already uses `instance/backups`.
+
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
