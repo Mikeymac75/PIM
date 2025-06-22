@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Production Items from Excel - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+<h2>Upload Production (Garden) Items from Excel</h2>
+{% endblock %}
+
+{% block content %}
+<div class="instructions">
+    <h3>Instructions for Excel File Format:</h3>
+    <p>Please ensure your Excel file (.xlsx) has the following columns in the first sheet. The order of columns matters, and the first row should be headers exactly matching these names (e.g., <code>name</code>, <code>associated_product_name</code>, etc.).</p>
+    <ul>
+        <li><strong>name</strong> (Required): The specific name for this production batch (e.g., "Tomato Batch Spring 2024", "Basil Pot 3"). Text format.</li>
+        <li><strong>associated_product_name</strong> (Optional): If this production item yields a specific product already defined in your 'Products' list (e.g., "Tomatoes", "Basil Leaves"), enter its name here. If the product name is provided but not found, the association will be skipped. Text format.</li>
+        <li><strong>plant_date</strong> (Required): The date the item was planted or started. Format: YYYY-MM-DD.</li>
+        <li><strong>time_to_harvest_days</strong> (Required): Estimated number of days from planting until the first harvest can occur. Integer (e.g., 60).</li>
+        <li><strong>expected_harvest_period_days</strong> (Required): Estimated number of days over which harvesting can occur. Integer (e.g., 30).</li>
+        <li><strong>expected_yield_total</strong> (Required): The total expected yield from this production item over its entire harvest period, in the unit of the associated product (if any) or a general unit if no product is associated. Number (e.g., 5.5).</li>
+        <li><strong>status</strong> (Optional): The current status of the item. Must be one of "Growing", "Harvesting", or "Finished". If left blank, it will default to "Growing". Text format.</li>
+    </ul>
+    <p><strong>Important:</strong></p>
+    <ul>
+        <li>Data validation is performed. Rows with missing required fields or incorrect data types will be skipped.</li>
+        <li>If `associated_product_name` is given, it must match an existing product name in your system for the link to be made.</li>
+    </ul>
+</div>
+
+<form method="POST" action="{{ url_for('upload_production_items_excel_view') }}" enctype="multipart/form-data" class="form-styled">
+    <div class="form-group">
+        <label for="excel_file">Excel File (.xlsx):</label>
+        <input type="file" id="excel_file" name="excel_file" accept=".xlsx" required>
+    </div>
+    <div class="form-group">
+        <button type="submit" class="button">Upload Production Items</button>
+    </div>
+</form>
+{% endblock %}

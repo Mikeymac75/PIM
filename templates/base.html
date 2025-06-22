@@ -51,11 +51,15 @@
                         </div>
                     </li>
 
-                    <li class="dropdown {% if request.endpoint in ['upload_excel_view', 'upload_recipes_excel_view'] %}current{% endif %}">
-                        <a href="#" class="dropbtn"><i class="fas fa-file-excel"></i> Upload Excel <i class="fas fa-caret-down"></i></a>
+                    <li class="dropdown {% if request.endpoint in ['upload_excel_view', 'upload_recipes_excel_view', 'export_data_view', 'upload_products_excel_view', 'upload_historical_excel_view', 'upload_production_items_excel_view'] %}current{% endif %}">
+                        <a href="#" class="dropbtn"><i class="fas fa-file-excel"></i> Excel Upload/Export <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('upload_excel_view') }}"><i class="fas fa-file-invoice"></i> Upload Product Inventory</a>
+                            <a href="{{ url_for('upload_products_excel_view') }}"><i class="fas fa-box-open"></i> Upload Products</a>
                             <a href="{{ url_for('upload_recipes_excel_view') }}"><i class="fas fa-utensils"></i> Upload Recipes from Excel</a>
+                            <a href="{{ url_for('upload_historical_excel_view') }}"><i class="fas fa-history"></i> Upload Historical Inv.</a>
+                            <a href="{{ url_for('upload_production_items_excel_view') }}"><i class="fas fa-leaf"></i> Upload Production Items</a>
+                            <a href="{{ url_for('export_data_view') }}"><i class="fas fa-file-download"></i> Export Data to Excel</a>
                         </div>
                     </li>
                     <li class="{% if request.endpoint == 'garden_list_view' or request.endpoint == 'add_production_item_view' or request.endpoint == 'edit_production_item_view' %}current{% endif %}"><a href="{{ url_for('garden_list_view') }}"><i class="fas fa-leaf"></i> Garden & Harvest</a></li>

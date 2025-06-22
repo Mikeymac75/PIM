@@ -336,6 +336,452 @@ class InventoryManager:
             print(f"Database error retrieving categories with subcategories: {e}")
             return [] # Return empty list on error
 
+    def get_all_categories_export(self):
+        """
+        Retrieves all categories (id, name) for data export.
+        Orders by name.
+        """
+        items = []
+        query = "SELECT id, name FROM categories ORDER BY name ASC"
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all categories for export: {e}")
+        return items
+
+    def get_all_subcategories_export(self):
+        """
+        Retrieves all subcategories for data export.
+        Includes category_name for context.
+        Orders by category_name and then by subcategory name.
+        """
+        items = []
+        query = """
+            SELECT
+                s.id,
+                s.name,
+                s.category_id,
+                c.name AS category_name
+            FROM subcategories s
+            JOIN categories c ON s.category_id = c.id
+            ORDER BY category_name ASC, s.name ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all subcategories for export: {e}")
+        return items
+
+    def upload_products_excel(self, file_stream, overwrite_logic_choice):
+        """
+        Uploads products from an Excel file stream.
+        - file_stream: The stream of the uploaded Excel file.
+        - overwrite_logic_choice: "skip" or "overwrite" for handling duplicates.
+        Returns a dictionary with counts of added, updated, skipped products, and errors.
+        """
+        import openpyxl # Ensure openpyxl is imported
+
+        results = {"added": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            workbook = openpyxl.load_workbook(file_stream)
+            sheet = workbook.active
+        except Exception as e:
+            results["errors"].append(f"Error reading Excel file: {str(e)}")
+            return results
+
+        header_row_values = [cell.value for cell in sheet[1]]
+        header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
+
+        required_headers = ['name', 'category_name', 'unit_of_measure', 'default_expiry_days']
+        missing_headers = [req_h for req_h in required_headers if req_h not in header_map]
+        if missing_headers:
+            results["errors"].append(f"Missing required columns in Excel: {', '.join(missing_headers)}. Please check headers.")
+            return results
+
+        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            row_error_prefix = f"Row {row_idx}: "
+
+            # Helper to get cell value by header name, returns None if header missing or cell empty
+            def get_cell_val(header_key, default=None):
+                col_idx = header_map.get(header_key.lower())
+                if col_idx is not None and len(row) > col_idx and row[col_idx] is not None:
+                    return str(row[col_idx]).strip()
+                return default
+
+            name = get_cell_val('name')
+            category_name_str = get_cell_val('category_name')
+            subcategory_name_str = get_cell_val('subcategory_name') # Optional
+            unit_of_measure = get_cell_val('unit_of_measure')
+            default_expiry_days_str = get_cell_val('default_expiry_days')
+            par_level_str = get_cell_val('par_level', "0") # Default to "0"
+            max_holding_amount_str = get_cell_val('max_holding_amount', "0") # Default to "0"
+            purchase_location = get_cell_val('purchase_location') # Optional
+
+            # --- Validation ---
+            if not name:
+                results["errors"].append(f"{row_error_prefix}Product name is required.")
+                continue
+            if not category_name_str:
+                results["errors"].append(f"{row_error_prefix}Category name is required for product '{name}'.")
+                continue
+            if not unit_of_measure:
+                results["errors"].append(f"{row_error_prefix}Unit of measure is required for product '{name}'.")
+                continue
+            if not default_expiry_days_str:
+                results["errors"].append(f"{row_error_prefix}Default expiry days are required for product '{name}'.")
+                continue
+
+            default_expiry_days = None
+            try:
+                default_expiry_days = int(default_expiry_days_str)
+                if default_expiry_days < 0:
+                    results["errors"].append(f"{row_error_prefix}Default expiry days for '{name}' must be non-negative.")
+                    continue
+            except ValueError:
+                results["errors"].append(f"{row_error_prefix}Default expiry days for '{name}' must be a whole number.")
+                continue
+
+            par_level = 0.0
+            try:
+                par_level = float(par_level_str) if par_level_str else 0.0
+                if par_level < 0:
+                    results["errors"].append(f"{row_error_prefix}Par level for '{name}' must be non-negative.")
+                    continue
+            except ValueError:
+                results["errors"].append(f"{row_error_prefix}Par level for '{name}' must be a valid number.")
+                continue
+
+            max_holding_amount = 0.0
+            try:
+                max_holding_amount = float(max_holding_amount_str) if max_holding_amount_str else 0.0
+                if max_holding_amount < 0:
+                    results["errors"].append(f"{row_error_prefix}Max holding amount for '{name}' must be non-negative.")
+                    continue
+            except ValueError:
+                results["errors"].append(f"{row_error_prefix}Max holding amount for '{name}' must be a valid number.")
+                continue
+
+            # --- Category/Subcategory Resolution ---
+            category_obj = self.get_category_by_name(category_name_str)
+            if not category_obj:
+                results["errors"].append(f"{row_error_prefix}Category '{category_name_str}' for product '{name}' not found. Please create it first.")
+                continue
+            category_id = category_obj['id']
+
+            subcategory_id = None
+            if subcategory_name_str:
+                subcategory_obj = self.get_subcategory_by_name_and_category_id(subcategory_name_str, category_id)
+                if not subcategory_obj:
+                    results["errors"].append(f"{row_error_prefix}Subcategory '{subcategory_name_str}' under category '{category_name_str}' for product '{name}' not found. Please create it first.")
+                    continue
+                subcategory_id = subcategory_obj['id']
+
+            # --- Product Existence Check & Action ---
+            existing_product = self.get_product_by_name(name)
+
+            product_data_dict = {
+                "name": name,
+                "category_id": category_id,
+                "subcategory_id": subcategory_id,
+                "unit_of_measure": unit_of_measure,
+                "default_expiry_days": default_expiry_days,
+                "par_level": par_level,
+                "max_holding_amount": max_holding_amount,
+                "purchase_location": purchase_location if purchase_location else None
+            }
+
+            if existing_product:
+                if overwrite_logic_choice == "overwrite":
+                    update_result = self.update_product(product_id=existing_product['id'], **product_data_dict)
+                    if update_result.get("success"):
+                        results["updated"] += 1
+                    else:
+                        results["errors"].append(f"{row_error_prefix}Error updating product '{name}': {update_result.get('message')}")
+                else: # skip
+                    results["skipped"] += 1
+            else: # Product does not exist, create new
+                create_result = self.create_product(**product_data_dict)
+                if create_result.get("success"):
+                    results["added"] += 1
+                else:
+                    results["errors"].append(f"{row_error_prefix}Error creating product '{name}': {create_result.get('message')}")
+
+        return results
+
+    def upload_historical_inventory_excel(self, file_stream):
+        """
+        Uploads historical inventory consumption data from an Excel file stream.
+        - file_stream: The stream of the uploaded Excel file.
+        Returns a dictionary with counts of added records and errors.
+        """
+        import openpyxl # Ensure openpyxl is imported
+        from datetime import datetime # For date parsing and validation
+
+        results = {"added": 0, "errors": []}
+
+        try:
+            workbook = openpyxl.load_workbook(file_stream)
+            sheet = workbook.active
+        except Exception as e:
+            results["errors"].append(f"Error reading Excel file: {str(e)}")
+            return results
+
+        header_row_values = [cell.value for cell in sheet[1]]
+        # Normalize headers: convert to string, strip whitespace, lowercase
+        header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
+
+        required_headers = ['product_name', 'quantity_consumed_this_time', 'consumed_date']
+        missing_headers = [req_h for req_h in required_headers if req_h.lower() not in header_map]
+
+        if missing_headers:
+            results["errors"].append(f"Missing required columns in Excel: {', '.join(missing_headers)}. Please check headers (product_name, quantity_consumed_this_time, consumed_date).")
+            return results
+
+        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            row_error_prefix = f"Row {row_idx}: "
+
+            def get_cell_val(header_key, default=None):
+                col_idx = header_map.get(header_key.lower()) # Use lowercased key
+                if col_idx is not None and len(row) > col_idx and row[col_idx] is not None:
+                    # Convert to string and strip for consistency, handle potential non-string values from Excel
+                    return str(row[col_idx]).strip()
+                return default
+
+            product_name_str = get_cell_val('product_name')
+            quantity_consumed_str = get_cell_val('quantity_consumed_this_time')
+            consumed_date_str = get_cell_val('consumed_date')
+            original_quantity_str = get_cell_val('original_quantity_string') # Optional
+            purchase_date_str = get_cell_val('purchase_date') # Optional
+            expiry_date_str = get_cell_val('expiry_date') # Optional
+
+            # --- Validation ---
+            current_row_errors = []
+            if not product_name_str:
+                current_row_errors.append("Product name is required.")
+            if not quantity_consumed_str:
+                current_row_errors.append("Quantity consumed is required.")
+            if not consumed_date_str:
+                current_row_errors.append("Consumed date is required.")
+
+            if current_row_errors: # Check after gathering all missing required fields
+                results["errors"].extend([f"{row_error_prefix}{err}" for err in current_row_errors])
+                continue # Skip to next row
+
+            # Validate quantity_consumed_this_time
+            quantity_consumed_numeric = None
+            try:
+                quantity_consumed_numeric = float(quantity_consumed_str)
+                if quantity_consumed_numeric <= 0:
+                    current_row_errors.append("Quantity consumed must be a positive number.")
+            except ValueError:
+                current_row_errors.append("Quantity consumed must be a valid number.")
+
+            # Validate consumed_date
+            consumed_date_obj = None
+            try:
+                consumed_date_obj = datetime.strptime(consumed_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                current_row_errors.append("Consumed date must be in YYYY-MM-DD format.")
+
+            # Validate optional purchase_date
+            purchase_date_obj = None
+            if purchase_date_str:
+                try:
+                    purchase_date_obj = datetime.strptime(purchase_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    current_row_errors.append("Purchase date, if provided, must be in YYYY-MM-DD format.")
+
+            # Validate optional expiry_date
+            expiry_date_obj = None
+            if expiry_date_str:
+                try:
+                    expiry_date_obj = datetime.strptime(expiry_date_str, '%Y-%m-%d').date()
+                except ValueError:
+                    current_row_errors.append("Expiry date, if provided, must be in YYYY-MM-DD format.")
+
+            if current_row_errors:
+                results["errors"].extend([f"{row_error_prefix}{err}" for err in current_row_errors])
+                continue
+
+            # --- Product Resolution ---
+            product_info = self.get_product_by_name(product_name_str)
+            if not product_info:
+                results["errors"].append(f"{row_error_prefix}Product '{product_name_str}' not found in the database. Please add it first or check for typos.")
+                continue
+
+            product_id_to_use = product_info['id']
+            # Use canonical product name from DB for consistency in historical_items
+            product_name_canonical = product_info['name']
+
+            # --- Database Insertion ---
+            try:
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO historical_items
+                        (product_id, name, quantity_consumed_this_time, consumed_date,
+                         original_quantity_string, purchase_date, expiry_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (product_id_to_use, product_name_canonical, quantity_consumed_numeric,
+                          consumed_date_obj.isoformat() if consumed_date_obj else None,
+                          original_quantity_str if original_quantity_str else None,
+                          purchase_date_obj.isoformat() if purchase_date_obj else None,
+                          expiry_date_obj.isoformat() if expiry_date_obj else None))
+                    conn.commit()
+                    results["added"] += 1
+            except sqlite3.Error as e:
+                results["errors"].append(f"{row_error_prefix}Database error inserting record for '{product_name_canonical}': {e}")
+            except Exception as e_general: # Catch any other unexpected error during DB operation
+                results["errors"].append(f"{row_error_prefix}Unexpected error inserting record for '{product_name_canonical}': {e_general}")
+
+        return results
+
+    def upload_production_items_excel(self, file_stream):
+        """
+        Uploads production (garden) items from an Excel file stream.
+        - file_stream: The stream of the uploaded Excel file.
+        Returns a dictionary with counts of added records and errors.
+        """
+        import openpyxl
+        from datetime import datetime
+
+        results = {"added": 0, "errors": []}
+
+        try:
+            workbook = openpyxl.load_workbook(file_stream)
+            sheet = workbook.active
+        except Exception as e:
+            results["errors"].append(f"Error reading Excel file: {str(e)}")
+            return results
+
+        header_row_values = [cell.value for cell in sheet[1]]
+        header_map = {str(h).strip().lower(): idx for idx, h in enumerate(header_row_values) if h}
+
+        required_headers = ['name', 'plant_date', 'time_to_harvest_days',
+                            'expected_harvest_period_days', 'expected_yield_total']
+        missing_headers = [req_h for req_h in required_headers if req_h.lower() not in header_map]
+
+        if missing_headers:
+            results["errors"].append(f"Missing required columns in Excel: {', '.join(missing_headers)}.")
+            return results
+
+        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            row_error_prefix = f"Row {row_idx}: "
+
+            def get_cell_val(header_key, default=None):
+                col_idx = header_map.get(header_key.lower())
+                if col_idx is not None and len(row) > col_idx and row[col_idx] is not None:
+                    return str(row[col_idx]).strip()
+                return default
+
+            name_str = get_cell_val('name')
+            associated_product_name_str = get_cell_val('associated_product_name') # Optional
+            plant_date_str = get_cell_val('plant_date')
+            time_to_harvest_days_str = get_cell_val('time_to_harvest_days')
+            expected_harvest_period_days_str = get_cell_val('expected_harvest_period_days')
+            expected_yield_total_str = get_cell_val('expected_yield_total')
+            status_str = get_cell_val('status', 'Growing') # Default to 'Growing'
+
+            current_row_errors = []
+            if not name_str:
+                current_row_errors.append("Name is required.")
+            if not plant_date_str:
+                current_row_errors.append("Plant date is required.")
+            if not time_to_harvest_days_str:
+                current_row_errors.append("Time to harvest days is required.")
+            if not expected_harvest_period_days_str:
+                current_row_errors.append("Expected harvest period days is required.")
+            if not expected_yield_total_str:
+                current_row_errors.append("Expected yield total is required.")
+
+            if current_row_errors:
+                results["errors"].extend([f"{row_error_prefix}{err}" for err in current_row_errors])
+                continue
+
+            # --- Further Validation ---
+            plant_date_obj = None
+            try:
+                plant_date_obj = datetime.strptime(plant_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                current_row_errors.append("Plant date must be in YYYY-MM-DD format.")
+
+            time_to_harvest_days_int = None
+            try:
+                time_to_harvest_days_int = int(time_to_harvest_days_str)
+                if time_to_harvest_days_int < 0:
+                    current_row_errors.append("Time to harvest days must be non-negative.")
+            except ValueError:
+                current_row_errors.append("Time to harvest days must be a whole number.")
+
+            expected_harvest_period_days_int = None
+            try:
+                expected_harvest_period_days_int = int(expected_harvest_period_days_str)
+                if expected_harvest_period_days_int <= 0: # Typically should be positive
+                    current_row_errors.append("Expected harvest period days must be positive.")
+            except ValueError:
+                current_row_errors.append("Expected harvest period days must be a whole number.")
+
+            expected_yield_total_float = None
+            try:
+                expected_yield_total_float = float(expected_yield_total_str)
+                if expected_yield_total_float < 0:
+                     current_row_errors.append("Expected yield total must be non-negative.")
+            except ValueError:
+                current_row_errors.append("Expected yield total must be a valid number.")
+
+            valid_statuses = ["Growing", "Harvesting", "Finished"]
+            if status_str and status_str not in valid_statuses: # status_str defaults to 'Growing' if empty
+                current_row_errors.append(f"Status must be one of {', '.join(valid_statuses)}.")
+
+            if current_row_errors:
+                results["errors"].extend([f"{row_error_prefix}{err}" for err in current_row_errors])
+                continue
+
+            # --- Associated Product Resolution ---
+            associated_product_id = None
+            if associated_product_name_str:
+                product_info = self.get_product_by_name(associated_product_name_str)
+                if product_info:
+                    associated_product_id = product_info['id']
+                else:
+                    # Log a warning, but proceed with associated_product_id = None
+                    warning_msg = f"{row_error_prefix}Associated product '{associated_product_name_str}' not found. Production item '{name_str}' will be added without product association."
+                    if "warnings" not in results: results["warnings"] = [] # Ensure warnings list exists
+                    results["warnings"].append(warning_msg)
+                    # Not adding to results["errors"] as per instruction "treat associated_product_id as None"
+
+            # --- Call add_production_item ---
+            # Ensure plant_date_obj is used for the string representation if valid
+            final_plant_date_str = plant_date_obj.isoformat() if plant_date_obj else plant_date_str
+
+            add_result = self.add_production_item(
+                name=name_str,
+                associated_product_id=associated_product_id,
+                plant_date_str=final_plant_date_str,
+                time_to_harvest_days=time_to_harvest_days_int,
+                expected_harvest_period_days=expected_harvest_period_days_int,
+                expected_yield_total=expected_yield_total_float,
+                status=status_str if status_str else "Growing" # Ensure default if somehow became empty
+            )
+
+            if add_result.get("success"):
+                results["added"] += 1
+            else:
+                results["errors"].append(f"{row_error_prefix}Failed to add production item '{name_str}': {add_result.get('message', 'Unknown error')}")
+
+        return results
+
     def get_category_by_name(self, name):
         """Retrieves a category by its name (case-insensitive)."""
         if not name or not isinstance(name, str) or not name.strip():
@@ -602,6 +1048,32 @@ class InventoryManager:
         # For now, status updates are via update_production_item or dynamic calculation.
 
         return stock_result
+
+    def get_all_production_items_export(self):
+        """
+        Retrieves all production items for data export.
+        Includes associated_product_name for context.
+        Orders by plant_date and then by name.
+        """
+        items = []
+        query = """
+            SELECT
+                pi.*,
+                p.name AS associated_product_name
+            FROM production_items pi
+            LEFT JOIN products p ON pi.associated_product_id = p.id
+            ORDER BY pi.plant_date ASC, pi.name ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all production items for export: {e}")
+        return items
 
     # --- Product Management Methods ---
     def create_product(self, name, category_id, subcategory_id, unit_of_measure, default_expiry_days,
@@ -1036,6 +1508,93 @@ class InventoryManager:
                     items.append(dict(row))
         except sqlite3.Error as e:
             print(f"Database error fetching all products with filters: {e}")
+        return items
+
+    def get_all_products_export(self):
+        """
+        Retrieves all products from the products table for data export.
+        Includes category and subcategory names. No pagination.
+        Selects specific fields relevant for export.
+        """
+        items = []
+        query = """
+            SELECT
+                p.id,
+                p.name,
+                p.unit_of_measure,
+                p.default_expiry_days,
+                p.par_level,
+                p.max_holding_amount,
+                p.purchase_location,
+                c.name AS category_name,
+                s.name AS subcategory_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories s ON p.subcategory_id = s.id
+            ORDER BY p.name ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all products for export: {e}")
+        return items
+
+    def get_all_inventory_batches_export(self, start_date_str=None, end_date_str=None):
+        """
+        Retrieves all inventory batches for data export, optionally filtered by purchase date.
+        Includes product_name for context.
+        Orders by purchase_date and then by id.
+        """
+        items = []
+        params = []
+
+        query = """
+            SELECT
+                ii.*,
+                p.name AS product_name
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+        """
+
+        where_clauses = []
+        if start_date_str and start_date_str.strip():
+            try:
+                date.fromisoformat(start_date_str.strip()) # Validate date format
+                where_clauses.append("ii.purchase_date >= ?")
+                params.append(start_date_str.strip())
+            except ValueError:
+                print(f"Warning: Invalid start_date_str format '{start_date_str}'. It will be ignored.")
+                # Optionally, raise an error or return an empty list with an error message
+                # For now, just ignoring the invalid date string for the query
+
+        if end_date_str and end_date_str.strip():
+            try:
+                date.fromisoformat(end_date_str.strip()) # Validate date format
+                where_clauses.append("ii.purchase_date <= ?")
+                params.append(end_date_str.strip())
+            except ValueError:
+                print(f"Warning: Invalid end_date_str format '{end_date_str}'. It will be ignored.")
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        query += " ORDER BY ii.purchase_date ASC, ii.id ASC"
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all inventory batches for export: {e}")
+            # Consider raising the error or returning a specific error indicator
         return items
 
     def get_product_count(self, search_term=None, category=None, purchase_location=None):
@@ -1857,7 +2416,8 @@ class InventoryManager:
     def get_historical_inventory(self, search_term=None, category=None,
                                  consumed_start_date=None, consumed_end_date=None,
                                  sort_by='consumed_date', sort_order='DESC',
-                                 page=1, per_page=10):
+                                 page=1, per_page=10,
+                                 export_all=False, export_start_date_str=None, export_end_date_str=None):
         """
         Retrieves items from historical inventory, joined with product details,
         with filtering, sorting, and pagination.
@@ -1896,12 +2456,36 @@ class InventoryManager:
             # This will only include items that have a linked product and category
             where_clauses.append("c.name IS NOT NULL AND LOWER(c.name) = ?")
             params.append(category.lower())
-        if consumed_start_date:
+        # Date filtering: Prioritize export dates if export_all is True
+        final_start_date = None
+        final_end_date = None
+
+        if export_all:
+            if export_start_date_str and export_start_date_str.strip():
+                try:
+                    date.fromisoformat(export_start_date_str.strip()) # Validate
+                    final_start_date = export_start_date_str.strip()
+                except ValueError:
+                    print(f"Warning: Invalid export_start_date_str format '{export_start_date_str}'. It will be ignored.")
+            if export_end_date_str and export_end_date_str.strip():
+                try:
+                    date.fromisoformat(export_end_date_str.strip()) # Validate
+                    final_end_date = export_end_date_str.strip()
+                except ValueError:
+                    print(f"Warning: Invalid export_end_date_str format '{export_end_date_str}'. It will be ignored.")
+        else:
+            # Use regular pagination/filter dates if not exporting all
+            if consumed_start_date and consumed_start_date.strip():
+                final_start_date = consumed_start_date
+            if consumed_end_date and consumed_end_date.strip():
+                final_end_date = consumed_end_date
+
+        if final_start_date:
             where_clauses.append("hi.consumed_date >= ?")
-            params.append(consumed_start_date)
-        if consumed_end_date:
+            params.append(final_start_date)
+        if final_end_date:
             where_clauses.append("hi.consumed_date <= ?")
-            params.append(consumed_end_date)
+            params.append(final_end_date)
 
         if where_clauses:
             base_query += " WHERE " + " AND ".join(where_clauses)
@@ -1923,14 +2507,15 @@ class InventoryManager:
 
         base_query += f" ORDER BY {sort_column} {sort_order_upper}, hi.id {sort_order_upper}"
 
-        # Pagination
-        if page is not None and per_page is not None and page > 0 and per_page > 0:
-            offset = (page - 1) * per_page
-            base_query += " LIMIT ? OFFSET ?"
-            params.extend([per_page, offset])
-        elif per_page is not None and per_page > 0:
-            base_query += " LIMIT ?"
-            params.append(per_page)
+        # Pagination (skip if export_all is True)
+        if not export_all:
+            if page is not None and per_page is not None and page > 0 and per_page > 0:
+                offset = (page - 1) * per_page
+                base_query += " LIMIT ? OFFSET ?"
+                params.extend([per_page, offset])
+            elif per_page is not None and per_page > 0: # Only per_page is specified
+                base_query += " LIMIT ?"
+                params.append(per_page)
 
         try:
             with self._get_db_connection() as conn:
