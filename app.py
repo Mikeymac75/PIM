@@ -15,6 +15,7 @@ ALLOWED_EXTENSIONS = {'xlsx'}
 
 # Define constants for application
 FUTURE_PROJECTION_HORIZON = 60 # Days for future inventory projection
+PAST_ACTUALS_HORIZON = 7       # Days for past actuals summary
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -2184,16 +2185,19 @@ def product_modal_details(product_id):
     future_projection_result = manager.get_future_inventory_projection(product_id, projection_days=FUTURE_PROJECTION_HORIZON)
 
     final_future_projection_data = [] # Default to empty list
-    # Handle if projection itself failed (e.g. product not found by that method, though unlikely if product_details succeeded)
     if isinstance(future_projection_result, dict) and future_projection_result.get("success") is False:
         app.logger.error(f"Failed to get future inventory projection for product {product_id}: {future_projection_result.get('message')}")
-        # Depending on how critical this is, you might return an error JSON response:
-        # return jsonify({"error": f"Projection data not available: {future_projection_result.get('message')}"}), 500
-        # For now, we'll allow the modal to load with empty projection data if this specific part fails.
     elif isinstance(future_projection_result, list):
         final_future_projection_data = future_projection_result
-    # else: future_projection_result was not a list (unexpected), final_future_projection_data remains empty.
 
+    # --- Past Actuals Summary ---
+    past_actuals_result = manager.get_past_actual_inventory_summary(product_id, days_past=PAST_ACTUALS_HORIZON)
+
+    final_past_actual_data = [] # Default to empty list
+    if isinstance(past_actuals_result, dict) and past_actuals_result.get("success") is False:
+        app.logger.error(f"Failed to get past actuals summary for product {product_id}: {past_actuals_result.get('message')}")
+    elif isinstance(past_actuals_result, list):
+        final_past_actual_data = past_actuals_result
 
     data_to_return = {
         "product_details": product_details,
@@ -2203,7 +2207,8 @@ def product_modal_details(product_id):
         "recipes_containing_product": recipes_containing_product,
         "inventory_concerns": inventory_concerns,
         "shopping_list_amount_today": shopping_list_amount_today,
-        "future_projection_data": final_future_projection_data # New comprehensive projection data
+        "future_projection_data": final_future_projection_data,
+        "past_actual_data": final_past_actual_data # New past actuals data
         # unit_of_measure, current_on_hand_inventory, nearest_expiry_date are already in product_details
     }
     app.logger.debug(f"Data for modal product ID {product_id}: {data_to_return}")

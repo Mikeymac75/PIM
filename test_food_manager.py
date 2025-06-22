@@ -842,6 +842,159 @@ class TestFutureInventoryProjection(unittest.TestCase):
         self.assertFalse(projection.get('success'))
         self.assertIn("Product with ID 999 not found", projection.get('message', ''))
 
+    # --- Tests for get_past_actual_inventory_summary ---
+
+    def _assert_common_past_summary_structure(self, summary_list, expected_days):
+        self.assertIsInstance(summary_list, list, "Summary should be a list.")
+        self.assertEqual(len(summary_list), expected_days)
+        if expected_days > 0:
+            for item in summary_list:
+                self.assertIn('date', item)
+                self.assertIsInstance(item['date'], str)
+                self.assertIn('actual_ending_inventory', item)
+                self.assertIn('actual_consumption', item)
+                self.assertIn('actual_shrink', item)
+                self.assertEqual(item['actual_shrink'], 0) # Currently always 0
+                self.assertIn('actual_harvest', item)
+                self.assertEqual(item['actual_harvest'], 0) # Currently always 0
+            # Check date order (ascending)
+            for i in range(len(summary_list) - 1):
+                self.assertTrue(summary_list[i]['date'] < summary_list[i+1]['date'])
+
+
+    def test_get_past_summary_basic(self):
+        days_past = 7
+        today = date.today()
+
+        # Add inventory: 10 units purchased 5 days ago, 5 units purchased 2 days ago
+        self.manager.add_inventory_stock(self.apple_product_id, "10", (today - timedelta(days=5)).isoformat())
+        self.manager.add_inventory_stock(self.apple_product_id, "5", (today - timedelta(days=2)).isoformat())
+
+        # Add consumption: 1 unit consumed each day for the past 7 days
+        # _add_historical_consumption adds records from days_ago_end to days_ago_start (inclusive)
+        # For past 7 days ending yesterday: days_ago_start=1, days_ago_end=7
+        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=days_past, quantity_per_day=1)
+
+        summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
+        self._assert_common_past_summary_structure(summary, days_past)
+
+        # Example verification for a couple of days
+        # Day -7 (oldest entry, summary[0]):
+        # Inventory history for (today - 7 days)
+        # Consumption for (today - 7 days) should be 1
+        date_7_days_ago = (today - timedelta(days=7)).isoformat()
+        day_minus_7_summary = next((s for s in summary if s['date'] == date_7_days_ago), None)
+        self.assertIsNotNone(day_minus_7_summary)
+        self.assertEqual(day_minus_7_summary['actual_consumption'], 1)
+        # Inventory for day_minus_7_summary['actual_ending_inventory'] will be based on get_daily_inventory_history.
+        # If this is the first day of the 7-day window, and stock was added 5 days ago, inv should be 0.
+        # Let's check a more recent day.
+
+        # Day -1 (yesterday, summary[6]):
+        date_yesterday = (today - timedelta(days=1)).isoformat()
+        yesterday_summary = next((s for s in summary if s['date'] == date_yesterday), None)
+        self.assertIsNotNone(yesterday_summary)
+        self.assertEqual(yesterday_summary['actual_consumption'], 1)
+
+        # To verify actual_ending_inventory, we can compare with get_daily_inventory_history
+        # This tests if get_past_actual_inventory_summary correctly incorporates it.
+        daily_hist = self.manager.get_daily_inventory_history(self.apple_product_id, days=days_past)
+        daily_hist_map = {item['inventory_date']: item['quantity_on_hand'] for item in daily_hist}
+
+        self.assertEqual(yesterday_summary['actual_ending_inventory'], daily_hist_map.get(date_yesterday, 0))
+
+        # Check a day where stock was added
+        date_2_days_ago = (today - timedelta(days=2)).isoformat() # Stock added on this day
+        day_minus_2_summary = next((s for s in summary if s['date'] == date_2_days_ago), None)
+        self.assertIsNotNone(day_minus_2_summary)
+        self.assertEqual(day_minus_2_summary['actual_consumption'], 1)
+        self.assertEqual(day_minus_2_summary['actual_ending_inventory'], daily_hist_map.get(date_2_days_ago, 0))
+
+
+    def test_get_past_summary_no_consumption(self):
+        days_past = 7
+        today = date.today()
+        self.manager.add_inventory_stock(self.apple_product_id, "10", (today - timedelta(days=3)).isoformat())
+
+        summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
+        self._assert_common_past_summary_structure(summary, days_past)
+
+        for item in summary:
+            self.assertEqual(item['actual_consumption'], 0)
+
+        # Check inventory for a day
+        date_3_days_ago = (today - timedelta(days=3)).isoformat()
+        day_summary = next((s for s in summary if s['date'] == date_3_days_ago), None)
+        self.assertIsNotNone(day_summary)
+        # Inventory should be 10 as it was just added and no consumption
+        self.assertEqual(day_summary['actual_ending_inventory'], 10)
+
+
+    def test_get_past_summary_no_inventory_history(self):
+        days_past = 7
+        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=days_past, quantity_per_day=2)
+
+        summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
+        self._assert_common_past_summary_structure(summary, days_past)
+
+        for item in summary:
+            self.assertEqual(item['actual_ending_inventory'], 0)
+            self.assertEqual(item['actual_consumption'], 2) # Consumption should still be reported
+
+    def test_get_past_summary_partial_history(self):
+        days_past = 7
+        today = date.today()
+        # Add inventory for a specific day in the past
+        self.manager.add_inventory_stock(self.apple_product_id, "5", (today - timedelta(days=4)).isoformat()) # 4 days ago
+        # Add consumption for only 2 days
+        self._add_historical_consumption(self.apple_product_id, days_ago_start=3, days_ago_end=4, quantity_per_day=1) # 3 and 4 days ago
+
+        summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
+        self._assert_common_past_summary_structure(summary, days_past)
+
+        date_4_days_ago_str = (today - timedelta(days=4)).isoformat()
+        date_3_days_ago_str = (today - timedelta(days=3)).isoformat()
+        date_2_days_ago_str = (today - timedelta(days=2)).isoformat()
+
+        summary_map = {item['date']: item for item in summary}
+
+        self.assertEqual(summary_map[date_4_days_ago_str]['actual_consumption'], 1)
+        # Inventory on day -4: 5 units added, 1 consumed = 4.
+        # (Depends on exact timing of get_daily_inventory_history - it reports end of day stock)
+        # If consumption is logged on day -4, and stock also added on day -4,
+        # get_daily_inventory_history should show stock after consumption.
+        # Let's verify against get_daily_inventory_history directly for that day.
+        hist_day_4 = self.manager.get_daily_inventory_history(self.apple_product_id, days=4)
+        val_day_4_hist = next((h['quantity_on_hand'] for h in hist_day_4 if h['inventory_date'] == date_4_days_ago_str),0)
+        self.assertEqual(summary_map[date_4_days_ago_str]['actual_ending_inventory'], val_day_4_hist)
+
+
+        self.assertEqual(summary_map[date_3_days_ago_str]['actual_consumption'], 1)
+
+        self.assertEqual(summary_map[date_2_days_ago_str]['actual_consumption'], 0) # No consumption added for this day
+        # Inventory for day -2 should be whatever was left from day -3
+        hist_day_2 = self.manager.get_daily_inventory_history(self.apple_product_id, days=2)
+        val_day_2_hist = next((h['quantity_on_hand'] for h in hist_day_2 if h['inventory_date'] == date_2_days_ago_str),0)
+        self.assertEqual(summary_map[date_2_days_ago_str]['actual_ending_inventory'], val_day_2_hist)
+
+
+    def test_get_past_summary_product_not_found(self):
+        summary = self.manager.get_past_actual_inventory_summary(999, 7)
+        self.assertIsInstance(summary, dict)
+        self.assertFalse(summary.get('success'))
+        self.assertIn("Product with ID 999 not found", summary.get('message', ''))
+
+    def test_get_past_summary_invalid_days_past(self):
+        summary_zero_days = self.manager.get_past_actual_inventory_summary(self.apple_product_id, 0)
+        self.assertIsInstance(summary_zero_days, dict)
+        self.assertFalse(summary_zero_days.get('success'))
+        self.assertEqual(summary_zero_days.get('message'), "days_past must be a positive integer.")
+
+        summary_negative_days = self.manager.get_past_actual_inventory_summary(self.apple_product_id, -1)
+        self.assertIsInstance(summary_negative_days, dict)
+        self.assertFalse(summary_negative_days.get('success'))
+        self.assertEqual(summary_negative_days.get('message'), "days_past must be a positive integer.")
+
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
