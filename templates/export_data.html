@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Export Data - {{ super() }}{% endblock %}
+
+{% block page_header %}
+    <h2>Export Data to Excel</h2>
+{% endblock %}
+
+{% block content %}
+<div class="form-container">
+    <form method="POST" action="{{ url_for('export_data_view') }}">
+        <div class="form-group">
+            <label for="selected_table">Select Data to Export:</label>
+            <select name="selected_table" id="selected_table" class="form-control">
+                <option value="products">Products</option>
+                <option value="inventory_batches">Inventory Batches</option>
+                <option value="historical_inventory">Historical Inventory</option>
+                <option value="recipes">Recipes</option>
+                <option value="recipe_ingredients">Recipe Ingredients</option>
+                <option value="production_items">Production Items (Garden)</option>
+                <option value="categories">Categories</option>
+                <option value="subcategories">Subcategories</option>
+            </select>
+        </div>
+
+        <div id="date_filters" style="display:none;">
+            <div class="form-group">
+                <label for="export_start_date">Start Date:</label>
+                <input type="date" name="export_start_date" id="export_start_date" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="export_end_date">End Date:</label>
+                <input type="date" name="export_end_date" id="export_end_date" class="form-control">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <button type="submit" class="btn btn-primary"><i class="fas fa-file-excel"></i> Export to Excel</button>
+        </div>
+    </form>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const selectedTable = document.getElementById('selected_table');
+    const dateFiltersDiv = document.getElementById('date_filters');
+    const startDateInput = document.getElementById('export_start_date');
+    const endDateInput = document.getElementById('export_end_date');
+
+    function toggleDateFilters() {
+        const currentValue = selectedTable.value;
+        if (currentValue === 'inventory_batches' || currentValue === 'historical_inventory') {
+            dateFiltersDiv.style.display = 'block';
+        } else {
+            dateFiltersDiv.style.display = 'none';
+            // Optional: Clear date inputs when hidden
+            // startDateInput.value = '';
+            // endDateInput.value = '';
+        }
+    }
+
+    selectedTable.addEventListener('change', toggleDateFilters);
+
+    // Initial check in case the page is reloaded with a value already selected
+    toggleDateFilters();
+});
+</script>
+{% endblock %}

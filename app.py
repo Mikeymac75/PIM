@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from Food_manager import InventoryManager
 from RecipeManager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
+from io import BytesIO # For handling file streams in memory
 import os # For accessing environment variables
 
 app = Flask(__name__)
@@ -2213,6 +2214,493 @@ def product_modal_details(product_id):
     }
     app.logger.debug(f"Data for modal product ID {product_id}: {data_to_return}")
     return jsonify(data_to_return)
+
+# --- Product Excel Upload Route ---
+@app.route('/upload_products_excel', methods=['GET', 'POST'])
+def upload_products_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            overwrite_logic = request.form.get('overwrite_logic_choice', 'skip') # Default to 'skip'
+            try:
+                # Assuming openpyxl is imported in Food_manager.py where it's used
+                result = manager.upload_products_excel(file.stream, overwrite_logic)
+
+                if result.get("errors"):
+                    for error_msg in result["errors"][:10]: # Show up to 10 errors
+                        flash(error_msg, 'error_detail')
+                    if len(result["errors"]) > 10:
+                        flash(f"...and {len(result['errors']) - 10} more errors.", 'error_detail')
+
+                if result.get("added") > 0:
+                    flash(f"Successfully added {result['added']} new products.", 'success')
+                if result.get("updated") > 0:
+                    flash(f"Successfully updated {result['updated']} existing products.", 'success')
+                if result.get("skipped") > 0:
+                    flash(f"{result['skipped']} products were skipped (duplicates, 'skip' logic chosen).", 'info')
+
+                if not result.get("errors") and result.get("added") == 0 and result.get("updated") == 0 and result.get("skipped") == 0:
+                     flash("No products were added, updated, or skipped. File might be empty or data already matches existing entries (and skip logic was chosen).", 'info')
+
+                if result.get("errors"):
+                     flash("Product upload completed with errors. Please check messages above.", 'warning')
+                     return redirect(url_for('upload_products_excel_view'))
+                else:
+                    return redirect(url_for('list_products_view'))
+
+            except Exception as e:
+                app.logger.error(f"Error processing product Excel upload: {e}", exc_info=True)
+                flash(f"An unexpected error occurred during product upload: {str(e)}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    # GET request
+    return render_template('upload_products_excel.html', title="Upload Products from Excel")
+
+@app.route('/upload_historical_excel', methods=['GET', 'POST'])
+def upload_historical_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                # The manager method 'upload_historical_inventory_excel' handles openpyxl
+                result = manager.upload_historical_inventory_excel(file.stream)
+
+                errors = result.get("errors", [])
+                added_count = result.get("added", 0)
+
+                if errors:
+                    flash(f"Historical data upload completed with {len(errors)} errors:", 'error')
+                    for error_msg in errors[:10]: # Show up to 10 errors
+                        flash(error_msg, 'error_detail')
+                    if len(errors) > 10:
+                        flash(f"...and {len(errors) - 10} more errors.", 'error_detail')
+
+                if added_count > 0:
+                    flash(f"Successfully added {added_count} historical consumption records.", 'success')
+
+                if not errors and added_count == 0:
+                     flash("No new historical records were added. File might be empty, data might be invalid, or headers incorrect.", 'info')
+
+                if errors:
+                     return redirect(url_for('upload_historical_excel_view')) # Stay on page if errors
+                else:
+                    return redirect(url_for('historical_inventory_view')) # Go to historical view on full success
+
+            except Exception as e:
+                app.logger.error(f"Error processing historical inventory Excel upload: {e}", exc_info=True)
+                flash(f"An unexpected error occurred during historical data upload: {str(e)}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    # GET request
+    return render_template('upload_historical_excel.html', title="Upload Historical Inventory from Excel")
+
+@app.route('/upload_production_items_excel', methods=['GET', 'POST'])
+def upload_production_items_excel_view():
+    if request.method == 'POST':
+        if 'excel_file' not in request.files:
+            flash('No file part in the request.', 'error')
+            return redirect(request.url)
+
+        file = request.files['excel_file']
+        if file.filename == '':
+            flash('No selected file.', 'error')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            try:
+                result = manager.upload_production_items_excel(file.stream)
+
+                errors = result.get("errors", [])
+                added_count = result.get("added", 0)
+                warnings = result.get("warnings", [])
+
+
+                if warnings:
+                    flash(f"Production item upload completed with {len(warnings)} warnings:", 'warning')
+                    for warn_msg in warnings[:5]: # Show up to 5 warnings
+                        flash(warn_msg, 'warning_detail')
+
+                if errors:
+                    flash(f"Production item upload completed with {len(errors)} errors:", 'error')
+                    for error_msg in errors[:10]: # Show up to 10 errors
+                        flash(error_msg, 'error_detail')
+                    if len(errors) > 10:
+                        flash(f"...and {len(errors) - 10} more errors.", 'error_detail')
+
+                if added_count > 0:
+                    flash(f"Successfully added {added_count} production items.", 'success')
+
+                if not errors and not warnings and added_count == 0 :
+                     flash("No new production items were added. File might be empty or data invalid.", 'info')
+
+                if errors: # If there were actual errors (not just warnings)
+                     return redirect(url_for('upload_production_items_excel_view'))
+                else: # Success or warnings only
+                    return redirect(url_for('garden_list_view'))
+
+            except Exception as e:
+                app.logger.error(f"Error processing production items Excel upload: {e}", exc_info=True)
+                flash(f"An unexpected error occurred during production items upload: {str(e)}", 'error')
+                return redirect(request.url)
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
+            return redirect(request.url)
+
+    # GET request
+    return render_template('upload_production_items_excel.html', title="Upload Production Items from Excel")
+
+# --- Data Export Route ---
+@app.route('/export_data', methods=['GET', 'POST'])
+def export_data_view():
+    if request.method == 'POST':
+        selected_table = request.form.get('selected_table')
+        # export_start_date = request.form.get('export_start_date') # For future use
+        # export_end_date = request.form.get('export_end_date')     # For future use
+
+        if selected_table == "products":
+            try:
+                products_data = manager.get_all_products_export()
+                if not products_data:
+                    flash("No product data found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Products Export"
+
+                # Write headers (keys from the first product dictionary)
+                headers = list(products_data[0].keys())
+                ws.append(headers)
+
+                # Write data rows
+                for product_row in products_data:
+                    row_values = [product_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                # Save to a BytesIO object
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0) # Rewind the stream to the beginning
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='products_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+
+            except Exception as e:
+                app.logger.error(f"Error exporting product data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting product data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "inventory_batches":
+            export_start_date = request.form.get('export_start_date')
+            export_end_date = request.form.get('export_end_date')
+            try:
+                batches_data = manager.get_all_inventory_batches_export(
+                    start_date_str=export_start_date if export_start_date else None,
+                    end_date_str=export_end_date if export_end_date else None
+                )
+                if not batches_data:
+                    flash("No inventory batch data found for the selected criteria.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Inventory Batches Export"
+
+                headers = list(batches_data[0].keys())
+                ws.append(headers)
+
+                for batch_row in batches_data:
+                    row_values = [batch_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='inventory_batches_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting inventory batch data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting inventory batch data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "historical_inventory":
+            export_start_date = request.form.get('export_start_date')
+            export_end_date = request.form.get('export_end_date')
+            try:
+                historical_data = manager.get_historical_inventory(
+                    export_all=True,
+                    export_start_date_str=export_start_date if export_start_date else None,
+                    export_end_date_str=export_end_date if export_end_date else None
+                )
+                if not historical_data:
+                    flash("No historical inventory data found for the selected criteria.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Historical Inventory Export"
+
+                headers = list(historical_data[0].keys())
+                ws.append(headers)
+
+                for data_row in historical_data:
+                    row_values = [data_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='historical_inventory_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting historical inventory data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting historical inventory data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "recipes":
+            try:
+                # Call get_all_recipes with export_all=True to get only header data
+                recipes_data = recipe_mngr.get_all_recipes(export_all=True)
+
+                if not recipes_data:
+                    flash("No recipes found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Recipes Export"
+
+                # Headers will be based on the recipe header fields (e.g., id, name, description)
+                # Ingredients will be excluded as per the modified get_all_recipes for export_all=True
+                headers = list(recipes_data[0].keys())
+                ws.append(headers)
+
+                for recipe_row in recipes_data:
+                    # Ensure only header data is accessed; 'ingredients' key should be absent
+                    row_values = [recipe_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='recipes_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting recipes data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting recipes data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "recipe_ingredients":
+            try:
+                ingredients_data = recipe_mngr.get_all_recipe_ingredients_export()
+                if not ingredients_data:
+                    flash("No recipe ingredients found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Recipe Ingredients Export"
+
+                headers = list(ingredients_data[0].keys())
+                ws.append(headers)
+
+                for ingredient_row in ingredients_data:
+                    row_values = [ingredient_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='recipe_ingredients_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting recipe ingredients data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting recipe ingredients data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "production_items":
+            try:
+                production_data = manager.get_all_production_items_export()
+                if not production_data:
+                    flash("No production items (garden) found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Production Items Export"
+
+                headers = list(production_data[0].keys())
+                ws.append(headers)
+
+                for item_row in production_data:
+                    row_values = [item_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='production_items_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting production items data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting production items data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "categories":
+            try:
+                categories_data = manager.get_all_categories_export()
+                if not categories_data:
+                    flash("No categories found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Categories Export"
+
+                headers = list(categories_data[0].keys())
+                ws.append(headers)
+
+                for category_row in categories_data:
+                    row_values = [category_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='categories_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting categories data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting categories data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "subcategories":
+            try:
+                subcategories_data = manager.get_all_subcategories_export()
+                if not subcategories_data:
+                    flash("No subcategories found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Subcategories Export"
+
+                headers = list(subcategories_data[0].keys())
+                ws.append(headers)
+
+                for subcategory_row in subcategories_data:
+                    row_values = [subcategory_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='subcategories_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting subcategories data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting subcategories data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+
+        elif selected_table == "subcategories":
+            try:
+                subcategories_data = manager.get_all_subcategories_export()
+                if not subcategories_data:
+                    flash("No subcategories found to export.", "info")
+                    return redirect(url_for('export_data_view'))
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Subcategories Export"
+
+                headers = list(subcategories_data[0].keys())
+                ws.append(headers)
+
+                for subcategory_row in subcategories_data:
+                    row_values = [subcategory_row.get(header) for header in headers]
+                    ws.append(row_values)
+
+                excel_stream = BytesIO()
+                wb.save(excel_stream)
+                excel_stream.seek(0)
+
+                return send_file(
+                    excel_stream,
+                    as_attachment=True,
+                    download_name='subcategories_export.xlsx',
+                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+            except Exception as e:
+                app.logger.error(f"Error exporting subcategories data: {e}", exc_info=True)
+                flash(f"An error occurred while exporting subcategories data: {str(e)}", "error")
+                return redirect(url_for('export_data_view'))
+        else:
+            flash(f"Export functionality for '{selected_table}' is not yet implemented.", "warning")
+            return redirect(url_for('export_data_view'))
+
+    # GET request
+    return render_template('export_data.html', title="Export Data")
 
 if __name__ == '__main__':
     # Debug mode should be False in a production environment

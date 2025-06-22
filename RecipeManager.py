@@ -178,49 +178,53 @@ class RecipeManager:
             print(f"Database error getting recipe by name '{recipe_name}': {e}")
         return recipe
 
-    def get_all_recipes(self, page=1, per_page=10, sort_by='name', sort_order='ASC'):
-        """Retrieves all recipes with details and ingredients, with pagination and sorting."""
+    def get_all_recipes(self, page=1, per_page=10, sort_by='name', sort_order='ASC', export_all=False):
+        """
+        Retrieves recipes. If export_all is True, fetches all recipes without ingredients and pagination.
+        Otherwise, fetches paginated recipes with ingredients.
+        """
         recipes_list = []
 
-        # Validate sort_by and sort_order
-        valid_sort_columns = {'name', 'description'} # Add more if needed, like output_product_id
+        valid_sort_columns = {'name', 'description'}
         sort_column = sort_by if sort_by in valid_sort_columns else 'name'
         sort_order_str = 'DESC' if sort_order.upper() == 'DESC' else 'ASC'
 
-        offset = (page - 1) * per_page
+        query = f'''
+            SELECT r.id, r.name, r.description, r.instructions, r.output_product_id, r.output_yield
+            FROM recipes r
+            ORDER BY r.{sort_column} {sort_order_str}
+        '''
+        params = []
+
+        if not export_all:
+            offset = (page - 1) * per_page
+            query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
 
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Get paginated recipes
-                query = f'''
-                    SELECT r.id, r.name, r.description, r.instructions, r.output_product_id, r.output_yield
-                    FROM recipes r
-                    ORDER BY r.{sort_column} {sort_order_str}
-                    LIMIT ? OFFSET ?
-                '''
-                cursor.execute(query, (per_page, offset))
+                cursor.execute(query, tuple(params))
                 recipe_rows = cursor.fetchall()
 
                 for recipe_row in recipe_rows:
                     recipe = dict(recipe_row)
-                    # Fetch ingredients for each recipe
-                    cursor.execute('''
-                        SELECT id, item_name, quantity, notes
-                        FROM recipe_ingredients
-                        WHERE recipe_id = ?
-                    ''', (recipe['id'],))
-                    ingredients = []
-                    # The SELECT for ingredients in get_all_recipes is:
-                    # SELECT id, item_name, quantity, notes FROM recipe_ingredients
-                    for ing_row in cursor.fetchall():
-                        ingredients.append({
-                            'id': ing_row['id'],
-                            'item_name': ing_row['item_name'],
-                            'quantity_required': ing_row['quantity'], # Aliasing 'quantity' to 'quantity_required'
-                            'notes': ing_row['notes']
-                        })
-                    recipe['ingredients'] = ingredients
+                    if not export_all: # Fetch ingredients only if not exporting all (i.e., for regular app display)
+                        cursor.execute('''
+                            SELECT id, item_name, quantity, notes
+                            FROM recipe_ingredients
+                            WHERE recipe_id = ?
+                        ''', (recipe['id'],))
+                        ingredients = []
+                        for ing_row in cursor.fetchall():
+                            ingredients.append({
+                                'id': ing_row['id'],
+                                'item_name': ing_row['item_name'],
+                                'quantity_required': ing_row['quantity'],
+                                'notes': ing_row['notes']
+                            })
+                        recipe['ingredients'] = ingredients
+                    # If export_all is True, recipe dict will not have 'ingredients' key.
                     recipes_list.append(recipe)
         except sqlite3.Error as e:
             print(f"Database error getting all recipes: {e}")
@@ -357,6 +361,36 @@ class RecipeManager:
         except sqlite3.Error as e:
             print(f"Database error getting recipes for product '{product_name}': {e}")
             return [] # Return empty list on error
+
+    def get_all_recipe_ingredients_export(self):
+        """
+        Retrieves all recipe ingredients for data export.
+        Includes recipe_name for context.
+        Orders by recipe_name and then by item_name.
+        """
+        items = []
+        query = """
+            SELECT
+                ri.id AS ingredient_id,
+                ri.recipe_id,
+                r.name AS recipe_name,
+                ri.item_name,
+                ri.quantity,
+                ri.notes
+            FROM recipe_ingredients ri
+            JOIN recipes r ON ri.recipe_id = r.id
+            ORDER BY recipe_name ASC, ri.item_name ASC
+        """
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row in rows:
+                    items.append(dict(row))
+        except sqlite3.Error as e:
+            print(f"Database error fetching all recipe ingredients for export: {e}")
+        return items
 
 # Example Usage (can be removed or commented out later)
 if __name__ == '__main__':
