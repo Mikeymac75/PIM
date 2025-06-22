@@ -121,7 +121,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // New: Update display with projection data (chart and depletion date)
-            updateProjectionDisplay(data.future_projection_data || []);
+            // Pass both past actuals and future projections
+            updateProjectionDisplay(data.past_actual_data || [], data.future_projection_data || []);
 
 
             productDetailModal.style.display = 'block';
@@ -167,65 +168,78 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // This function will now handle the new projection data for the daily chart
-    // and also display the depletion date.
-    function updateProjectionDisplay(futureProjectionData) {
+    // This function now handles both past actuals and future projection data for the daily chart
+    // and also displays the depletion date based on future data.
+    function updateProjectionDisplay(pastActualData, futureProjectionData) {
         const depletionDateElement = document.getElementById('productDepletionDateInfo'); // Assuming this element exists
+        const chartCanvas = dailyConsumptionChartCanvas; // Use the existing canvas
 
-        if (!futureProjectionData || !Array.isArray(futureProjectionData) || futureProjectionData.length === 0) {
+        // --- Depletion Date (uses only futureProjectionData) ---
+        if (depletionDateElement) {
+            if (!futureProjectionData || !Array.isArray(futureProjectionData) || futureProjectionData.length === 0) {
+                depletionDateElement.textContent = 'Future projection data for depletion not available.';
+            } else {
+                let depletionDateFound = false;
+                for (const item of futureProjectionData) {
+                    if (item.depletion_date_reached === true) {
+                        const depletionDate = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
+                        depletionDateElement.textContent = `Projected to deplete on: ${depletionDate.toLocaleDateString()}`;
+                        depletionDateFound = true;
+                        break;
+                    }
+                }
+                if (!depletionDateFound) {
+                    depletionDateElement.textContent = `Inventory not expected to deplete in the next ${futureProjectionData.length} days.`;
+                }
+            }
+        }
+
+        // --- Chart Data Preparation (7 days past + 7 days future) ---
+        // Validate data for the chart
+        const pastDataValid = Array.isArray(pastActualData) && pastActualData.length > 0; // Should be 7 ideally
+        const futureDataValid = Array.isArray(futureProjectionData) && futureProjectionData.length > 0;
+
+        if (!pastDataValid || !futureDataValid) {
             if (dailyChartInstance) {
                 dailyChartInstance.destroy();
                 dailyChartInstance = null;
             }
-            if (dailyConsumptionChartCanvas) {
-                 // Optional: Display a message on the canvas itself, or hide it
-                const ctx = dailyConsumptionChartCanvas.getContext('2d');
-                ctx.clearRect(0, 0, dailyConsumptionChartCanvas.width, dailyConsumptionChartCanvas.height);
+            if (chartCanvas) {
+                const ctx = chartCanvas.getContext('2d');
+                ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
                 ctx.textAlign = 'center';
-                ctx.fillText('Future projection data not available.', dailyConsumptionChartCanvas.width / 2, dailyConsumptionChartCanvas.height / 2);
-            }
-            if (depletionDateElement) {
-                depletionDateElement.textContent = 'Future projection data not available.';
+                ctx.fillText('Past or Future data not sufficient for combined chart.', chartCanvas.width / 2, chartCanvas.height / 2);
             }
             return;
         }
 
-        // Display Depletion Date
-        let depletionDateFound = false;
-        if (depletionDateElement) {
-            for (const item of futureProjectionData) {
-                if (item.depletion_date_reached === true) {
-                    const depletionDate = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
-                    depletionDateElement.textContent = `Projected to deplete on: ${depletionDate.toLocaleDateString()}`;
-                    depletionDateFound = true;
-                    break;
-                }
-            }
-            if (!depletionDateFound) {
-                depletionDateElement.textContent = `Inventory not expected to deplete in the next ${futureProjectionData.length} days.`;
-            }
-        }
+        const sevenDayFuture = futureProjectionData.slice(0, 7);
+        // Assuming pastActualData is already the last 7 days from the backend
+        const combinedData = pastActualData.concat(sevenDayFuture);
 
-
-        // Graph Data Preparation (7-Day Window)
-        const sevenDayProjection = futureProjectionData.slice(0, 7);
-
-        const chartLabels = sevenDayProjection.map(item => {
-            const date = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
-            return `${date.getMonth() + 1}-${date.getDate()}`; // Format as MM-DD
+        const chartLabels = combinedData.map(item => {
+            const dateObj = new Date(item.date + 'T00:00:00'); // Ensure date is parsed as local
+            return `${dateObj.getMonth() + 1}-${dateObj.getDate()}`; // Format as MM-DD
         });
 
-        const projectedInventoryData = sevenDayProjection.map(item => item.projected_ending_inventory);
-        const consumptionData = sevenDayProjection.map(item => item.consumption);
-        const shrinkData = sevenDayProjection.map(item => item.shrink);
-        const harvestData = sevenDayProjection.map(item => item.harvest);
+        const inventoryLineData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_ending_inventory : item.projected_ending_inventory
+        );
+        const consumptionLineData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_consumption : item.consumption
+        );
+        const shrinkLineData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_shrink : item.shrink // actual_shrink is currently 0
+        );
+        const harvestBarData = combinedData.map((item, index) =>
+            index < pastActualData.length ? item.actual_harvest : item.harvest // actual_harvest is currently 0
+        );
 
-        renderFutureProjectionChart(chartLabels, projectedInventoryData, consumptionData, shrinkData, harvestData);
+        renderCombinedChart(chartLabels, inventoryLineData, consumptionLineData, shrinkLineData, harvestBarData);
     }
 
-
-    // Renamed and refactored from renderDailyChart
-    function renderFutureProjectionChart(labels, inventoryData, consumptionData, shrinkData, harvestData) {
+    // Renamed and refactored to render the combined 14-day view
+    function renderCombinedChart(labels, inventoryData, consumptionData, shrinkData, harvestData) {
         if (!dailyConsumptionChartCanvas) return;
         const ctx = dailyConsumptionChartCanvas.getContext('2d');
 
@@ -233,13 +247,42 @@ document.addEventListener('DOMContentLoaded', () => {
             dailyChartInstance.destroy();
         }
 
-        // Determine suggestedMax for y-axis
         const maxInventory = Math.max(...inventoryData, 0);
         const maxOthers = Math.max(...consumptionData, ...shrinkData, ...harvestData, 0);
-        const suggestedMaxY = Math.max(maxInventory, maxOthers) + Math.max(maxInventory, maxOthers)*0.1; // Add 10% buffer or a fixed amount
+        const suggestedMaxY = Math.max(maxInventory, maxOthers) * 1.1 || 10; // 10% buffer or 10 if all zero
+
+
+        // Optional: Add a plugin for a vertical line at "today"
+        const todayLinePlugin = {
+            id: 'todayLine',
+            afterDraw: (chart) => {
+                if (chart.data.labels.length > 7) { // Only draw if there's enough data for past/future
+                    const ctxPlugin = chart.ctx;
+                    const xAxis = chart.scales.x;
+                    const yAxis = chart.scales.y;
+                    // Position the line between the 7th and 8th label (index 6.5)
+                    const xPos = xAxis.getPixelForValue(6.5);
+
+                    ctxPlugin.save();
+                    ctxPlugin.beginPath();
+                    ctxPlugin.moveTo(xPos, yAxis.top);
+                    ctxPlugin.lineTo(xPos, yAxis.bottom);
+                    ctxPlugin.lineWidth = 1;
+                    ctxPlugin.strokeStyle = 'rgba(128, 128, 128, 0.5)'; // Grey color for the line
+                    ctxPlugin.stroke();
+
+                    // Add "Today" text
+                    ctxPlugin.textAlign = 'center';
+                    ctxPlugin.fillStyle = 'rgba(128, 128, 128, 0.8)';
+                    ctxPlugin.fillText("Today", xPos, yAxis.top + 10); // Adjust y for text position
+                    ctxPlugin.restore();
+                }
+            }
+        };
+
 
         dailyChartInstance = new Chart(ctx, {
-            type: 'line', // Base type, individual datasets can override
+            type: 'line',
             data: {
                 labels: labels,
                 datasets: [
@@ -289,7 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 scales: {
                     y: {
                         beginAtZero: true,
-                        suggestedMax: suggestedMaxY > 0 ? suggestedMaxY : 10, // Ensure a minimum height for y-axis if all data is 0
+                        suggestedMax: suggestedMaxY,
                         title: {
                             display: true,
                             text: 'Quantity'
@@ -298,7 +341,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     x: {
                          title: {
                             display: true,
-                            text: 'Date (Next 7 Days)'
+                            text: 'Date (7 Days Past / 7 Days Future)'
                         }
                     }
                 },
@@ -306,9 +349,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { display: true },
-                    title: { display: true, text: '7-Day Inventory Projection' }
+                    title: { display: true, text: 'Inventory Actuals & Projection (Past 7 / Future 7 Days)' },
+                    todayLine: todayLinePlugin // Register the custom plugin if used
                 }
-            }
+            },
+            plugins: [todayLinePlugin] // Register plugin instance
         });
     }
 
