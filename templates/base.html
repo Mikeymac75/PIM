@@ -29,11 +29,12 @@
                     </li>
 
                     <!-- Inventory & Usage Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['log_purchase_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view'] %}current{% endif %}">
+                    <li class="dropdown {% if request.endpoint in ['log_purchase_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view', 'inventory_batches_view'] %}current{% endif %}">
                         <a href="{{ url_for('inventory_usage_links_view') }}" class="dropbtn"><i class="fas fa-warehouse"></i> Inventory & Usage <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('log_purchase_view') }}"><i class="fas fa-receipt"></i> Log Purchase</a>
                             <a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a>
+                            <a href="{{ url_for('inventory_batches_view') }}"><i class="fas fa-layer-group"></i> Inventory Batches</a>
                             <a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a>
                             <a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a>
                             <a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a>
