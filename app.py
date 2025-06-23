@@ -1666,9 +1666,16 @@ def list_products_view():
     all_categories = manager.get_all_categories()
     all_purchase_locations = manager.get_all_purchase_locations()
 
+    # Enhance products with their weighted average cost
+    products_with_wac = []
+    for product in products:
+        product_dict = dict(product) # Convert from sqlite3.Row if necessary
+        product_dict['weighted_average_cost'] = manager.get_weighted_average_cost(product_dict['id'])
+        products_with_wac.append(product_dict)
+
     return render_template(
         'list_products.html',
-        products=products,
+        products=products_with_wac, # Pass the enhanced list
         current_page=page,
         total_pages=total_pages,
         per_page=per_page,
