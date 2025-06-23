@@ -1080,6 +1080,144 @@ class TestFutureInventoryProjection(unittest.TestCase):
         self.assertFalse(summary_negative_days.get('success'))
         self.assertEqual(summary_negative_days.get('message'), "days_past must be a positive integer.")
 
+# --- Tests for get_inventory_batches_with_cost ---
+class TestInventoryBatchesWithCost(unittest.TestCase):
+    def setUp(self):
+        self.manager = InventoryManager(db_filepath=":memory:")
+        # Add categories
+        self.cat1_id = self.manager.add_category("Cat1")['category_id']
+        self.cat2_id = self.manager.add_category("Cat2")['category_id']
+
+        # Add products
+        self.prod1_id = self.manager.create_product("Product A", self.cat1_id, None, "kg", 10, purchase_location="Store X")['product_id']
+        self.prod2_id = self.manager.create_product("Product B", self.cat2_id, None, "pcs", 5, purchase_location="Store Y")['product_id']
+        self.prod3_id = self.manager.create_product("Product C", self.cat1_id, None, "ltr", 7, purchase_location="Store X")['product_id'] # No inventory
+
+        # Add inventory batches (these call add_inventory_stock which uses product's default expiry)
+        # Product A batches
+        self.manager.log_purchase(self.prod1_id, "2024-01-01", 10.0, 1.00, "Vendor 1") # Batch A1, expires 2024-01-11
+        self.manager.log_purchase(self.prod1_id, "2024-01-05", 5.0, 1.10, "Vendor 2")  # Batch A2, expires 2024-01-15
+
+        # Product B batches
+        self.manager.log_purchase(self.prod2_id, "2024-01-02", 20.0, 0.50, "Vendor 3") # Batch B1, expires 2024-01-07
+        # Batch B2 - will have no direct cost entry on its purchase date
+        self.manager.add_inventory_stock(self.prod2_id, "15", "2024-01-08") # expires 2024-01-13
+
+        # Batch with zero quantity - should be filtered out
+        zero_qty_batch_res = self.manager.add_inventory_stock(self.prod1_id, "0", "2024-01-03")
+        # Update its quantity to 0 directly if add_inventory_stock prevents 0 qty string.
+        # Assuming add_inventory_stock allows "0" and it translates to 0.
+        # If not, we might need to consume it or adjust it to 0.
+        # For simplicity, let's ensure the quantity is indeed 0.
+        if zero_qty_batch_res.get('success'):
+            conn = self.manager._get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE inventory_items SET quantity = '0' WHERE id = ?", (zero_qty_batch_res['stock_item_id'],))
+            conn.commit()
+            conn.close()
+
+
+    def tearDown(self):
+        if self.manager and hasattr(self.manager, 'conn') and self.manager.conn:
+            self.manager.close_connection()
+
+    def test_get_batches_basic_retrieval_and_costing(self):
+        batches = self.manager.get_inventory_batches_with_cost(page=1, per_page=10)
+        self.assertEqual(len(batches), 4) # 2 for A, 2 for B. Zero qty batch for A is excluded.
+
+        # Product A, Batch 1 (purchased 2024-01-01)
+        batch_a1 = next((b for b in batches if b['product_id'] == self.prod1_id and b['purchase_date'] == "2024-01-01"), None)
+        self.assertIsNotNone(batch_a1)
+        self.assertEqual(batch_a1['product_name'], "Product A")
+        self.assertEqual(float(batch_a1['quantity']), 10.0)
+        self.assertEqual(batch_a1['cost_per_unit'], 1.00)
+        self.assertEqual(batch_a1['vendor'], "Vendor 1")
+
+        # Product A, Batch 2 (purchased 2024-01-05)
+        batch_a2 = next((b for b in batches if b['product_id'] == self.prod1_id and b['purchase_date'] == "2024-01-05"), None)
+        self.assertIsNotNone(batch_a2)
+        self.assertEqual(float(batch_a2['quantity']), 5.0)
+        self.assertEqual(batch_a2['cost_per_unit'], 1.10)
+        self.assertEqual(batch_a2['vendor'], "Vendor 2")
+
+        # Product B, Batch 1 (purchased 2024-01-02)
+        batch_b1 = next((b for b in batches if b['product_id'] == self.prod2_id and b['purchase_date'] == "2024-01-02"), None)
+        self.assertIsNotNone(batch_b1)
+        self.assertEqual(float(batch_b1['quantity']), 20.0)
+        self.assertEqual(batch_b1['cost_per_unit'], 0.50)
+        self.assertEqual(batch_b1['vendor'], "Vendor 3")
+
+        # Product B, Batch 2 (purchased 2024-01-08) - No direct cost entry
+        batch_b2 = next((b for b in batches if b['product_id'] == self.prod2_id and b['purchase_date'] == "2024-01-08"), None)
+        self.assertIsNotNone(batch_b2)
+        self.assertEqual(float(batch_b2['quantity']), 15.0)
+        self.assertIsNone(batch_b2['cost_per_unit']) # No PurchaseLog on this date for this product
+        self.assertIsNone(batch_b2['vendor'])
+
+
+    def test_get_batches_count(self):
+        count = self.manager.get_inventory_batches_with_cost_count()
+        self.assertEqual(count, 4) # Excludes zero quantity batch
+
+    def test_get_batches_filter_search_term(self):
+        batches = self.manager.get_inventory_batches_with_cost(search_term="Product A", page=1, per_page=10)
+        self.assertEqual(len(batches), 2)
+        self.assertTrue(all(b['product_name'] == "Product A" for b in batches))
+        count = self.manager.get_inventory_batches_with_cost_count(search_term="Product A")
+        self.assertEqual(count, 2)
+
+    def test_get_batches_filter_category(self):
+        batches = self.manager.get_inventory_batches_with_cost(category="Cat2", page=1, per_page=10)
+        self.assertEqual(len(batches), 2) # Product B batches
+        self.assertTrue(all(b['category_name'] == "Cat2" for b in batches))
+        count = self.manager.get_inventory_batches_with_cost_count(category="Cat2")
+        self.assertEqual(count, 2)
+
+    def test_get_batches_filter_purchase_date(self):
+        batches = self.manager.get_inventory_batches_with_cost(start_purchase_date="2024-01-05", end_purchase_date="2024-01-08", page=1, per_page=10)
+        self.assertEqual(len(batches), 2) # Prod A (01-05), Prod B (01-08)
+        dates = sorted([b['purchase_date'] for b in batches])
+        self.assertListEqual(dates, ["2024-01-05", "2024-01-08"])
+        count = self.manager.get_inventory_batches_with_cost_count(start_purchase_date="2024-01-05", end_purchase_date="2024-01-08")
+        self.assertEqual(count, 2)
+
+    def test_get_batches_filter_expiry_date(self):
+        # Prod A1 expires 2024-01-11, Prod A2 expires 2024-01-15
+        # Prod B1 expires 2024-01-07, Prod B2 expires 2024-01-13
+        batches = self.manager.get_inventory_batches_with_cost(start_expiry_date="2024-01-10", end_expiry_date="2024-01-14", page=1, per_page=10)
+        self.assertEqual(len(batches), 2) # Prod A1 (01-11), Prod B2 (01-13)
+        exp_dates = sorted([b['expiry_date'] for b in batches])
+        self.assertListEqual(exp_dates, ["2024-01-11", "2024-01-13"])
+
+    def test_get_batches_sorting(self):
+        # Sort by product name DESC
+        batches_name_desc = self.manager.get_inventory_batches_with_cost(sort_by='product_name', sort_order='DESC', page=1, per_page=10)
+        self.assertEqual(batches_name_desc[0]['product_name'], "Product B")
+        self.assertEqual(batches_name_desc[1]['product_name'], "Product B")
+        self.assertEqual(batches_name_desc[2]['product_name'], "Product A")
+        self.assertEqual(batches_name_desc[3]['product_name'], "Product A")
+
+        # Sort by quantity ASC
+        batches_qty_asc = self.manager.get_inventory_batches_with_cost(sort_by='quantity', sort_order='ASC', page=1, per_page=10)
+        self.assertEqual(float(batches_qty_asc[0]['quantity']), 5.0)  # Prod A2
+        self.assertEqual(float(batches_qty_asc[1]['quantity']), 10.0) # Prod A1
+        self.assertEqual(float(batches_qty_asc[2]['quantity']), 15.0) # Prod B2
+        self.assertEqual(float(batches_qty_asc[3]['quantity']), 20.0) # Prod B1
+
+    def test_get_batches_pagination(self):
+        batches_page1 = self.manager.get_inventory_batches_with_cost(sort_by='product_name', sort_order='ASC', page=1, per_page=2)
+        self.assertEqual(len(batches_page1), 2)
+        self.assertEqual(batches_page1[0]['product_name'], "Product A") # Assuming A1 comes before A2
+        self.assertEqual(batches_page1[1]['product_name'], "Product A")
+
+        batches_page2 = self.manager.get_inventory_batches_with_cost(sort_by='product_name', sort_order='ASC', page=2, per_page=2)
+        self.assertEqual(len(batches_page2), 2)
+        self.assertEqual(batches_page2[0]['product_name'], "Product B")
+        self.assertEqual(batches_page2[1]['product_name'], "Product B")
+
+        count = self.manager.get_inventory_batches_with_cost_count()
+        self.assertEqual(count, 4)
+
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

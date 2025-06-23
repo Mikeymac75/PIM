@@ -241,6 +241,121 @@ def historical_inventory_view():
         categories=categories_options
     )
 
+@app.route('/inventory/batches')
+def inventory_batches_view():
+    # This is a placeholder. Implementation will be added in subsequent steps.
+    # For now, it will render a simple template.
+    # Actual data fetching and processing will be added later.
+
+    # Placeholder for filter and sort parameters (to be implemented)
+    search_term = request.args.get('search_term', '').strip()
+    selected_category = request.args.get('category', '').strip()
+    # Add other filters as needed (e.g., purchase_location, date ranges)
+
+    sort_by = request.args.get('sort_by', 'product_name').strip() # Default sort
+    sort_order = request.args.get('sort_order', 'ASC').strip().upper()
+    if sort_order not in ['ASC', 'DESC']:
+        sort_order = 'ASC'
+
+    try:
+        page = int(request.args.get('page', 1))
+        if page < 1: page = 1
+    except ValueError:
+        page = 1
+
+    try:
+        per_page = int(request.args.get('per_page', 20))
+        if per_page < 1: per_page = 1
+    except ValueError:
+        per_page = 20
+
+    # Placeholder: Fetch data using a new manager method (to be created)
+    # inventory_batches_data = manager.get_inventory_batches_with_cost(
+    #     search_term=search_term if search_term else None,
+    #     category=selected_category if selected_category else None,
+    #     sort_by=sort_by,
+    #     sort_order=sort_order,
+    #     page=page,
+    #     per_page=per_page
+    # )
+    # total_items = manager.get_inventory_batches_with_cost_count(
+    #     search_term=search_term if search_term else None,
+    #     category=selected_category if selected_category else None,
+    # )
+
+    # For now, passing empty data
+    # inventory_batches_data = []
+    # total_items = 0
+
+    # Date filters
+    start_purchase_date = request.args.get('start_purchase_date', '').strip()
+    end_purchase_date = request.args.get('end_purchase_date', '').strip()
+    start_expiry_date = request.args.get('start_expiry_date', '').strip()
+    end_expiry_date = request.args.get('end_expiry_date', '').strip()
+
+    # Fetch data using the new manager method
+    inventory_batches_data = manager.get_inventory_batches_with_cost(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        # purchase_location=selected_purchase_location if selected_purchase_location else None, # Add if filter is implemented
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page,
+        start_purchase_date=start_purchase_date if start_purchase_date else None,
+        end_purchase_date=end_purchase_date if end_purchase_date else None,
+        start_expiry_date=start_expiry_date if start_expiry_date else None,
+        end_expiry_date=end_expiry_date if end_expiry_date else None
+    )
+    total_items = manager.get_inventory_batches_with_cost_count(
+        search_term=search_term if search_term else None,
+        category=selected_category if selected_category else None,
+        # purchase_location=selected_purchase_location if selected_purchase_location else None, # Add if filter is implemented
+        start_purchase_date=start_purchase_date if start_purchase_date else None,
+        end_purchase_date=end_purchase_date if end_purchase_date else None,
+        start_expiry_date=start_expiry_date if start_expiry_date else None,
+        end_expiry_date=end_expiry_date if end_expiry_date else None
+    )
+
+    total_pages = (total_items + per_page - 1) // per_page if per_page > 0 else 1
+    if page > total_pages and total_pages > 0: # Adjust page if out of bounds after filtering
+        page = total_pages
+        # Refetch data for the new valid page might be needed if strict item count per page is critical
+        # For now, we accept that the last page might show fewer items if filters change total_items significantly
+        # Or, if page was adjusted, re-fetch:
+        inventory_batches_data = manager.get_inventory_batches_with_cost(
+            search_term=search_term if search_term else None,
+            category=selected_category if selected_category else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page, # Use adjusted page
+            per_page=per_page,
+            start_purchase_date=start_purchase_date if start_purchase_date else None,
+            end_purchase_date=end_purchase_date if end_purchase_date else None,
+            start_expiry_date=start_expiry_date if start_expiry_date else None,
+            end_expiry_date=end_expiry_date if end_expiry_date else None
+        )
+
+
+    # Fetch filter options
+    categories_options = manager.get_all_categories() # Use existing method to get all category names
+    # purchase_locations_options = manager.get_all_purchase_locations() # Add if filter is implemented
+
+
+    return render_template(
+        'inventory_batches.html',
+        items=inventory_batches_data,
+        current_page=page,
+        total_pages=total_pages,
+        per_page=per_page,
+        search_term=search_term,
+        selected_category=selected_category,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        categories=categories_options,
+        title="Inventory Batches"
+    )
+
 @app.route('/inventory/consume', methods=['GET', 'POST'])
 def consume_item_view():
     item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
