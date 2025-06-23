@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">{{ title }}</h1>
+{% endblock %}
+
+{% block content %}
+
+{# Filter Bar - Similar to historical_inventory.html and current_inventory.html #}
+<form method="GET" action="{{ url_for('inventory_batches_view') }}" class="filter-form">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="search_term">Search Product:</label>
+            <input type="text" name="search_term" id="search_term" value="{{ search_term or '' }}" placeholder="Product name...">
+        </div>
+        <div class="form-group">
+            <label for="category">Category:</label>
+            <select name="category" id="category">
+                <option value="" {% if not selected_category %}selected{% endif %}>All Categories</option>
+                {% for cat_name in categories %} {# Assuming categories is a list of names #}
+                <option value="{{ cat_name }}" {% if cat_name == selected_category %}selected{% endif %}>{{ cat_name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {# Add Purchase Location filter if desired, similar to current_inventory #}
+        {# <div class="form-group">
+            <label for="purchase_location">Purchase Location (Product):</label>
+            <select name="purchase_location" id="purchase_location">
+                <option value="" {% if not selected_purchase_location %}selected{% endif %}>All Locations</option>
+                {% for loc in purchase_locations_options %}
+                <option value="{{ loc }}" {% if loc == selected_purchase_location %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+            </select>
+        </div> #}
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="start_purchase_date">Purchase Date From:</label>
+            <input type="date" name="start_purchase_date" id="start_purchase_date" value="{{ request.args.get('start_purchase_date', '') }}">
+        </div>
+        <div class="form-group">
+            <label for="end_purchase_date">Purchase Date To:</label>
+            <input type="date" name="end_purchase_date" id="end_purchase_date" value="{{ request.args.get('end_purchase_date', '') }}">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label for="start_expiry_date">Expiry Date From:</label>
+            <input type="date" name="start_expiry_date" id="start_expiry_date" value="{{ request.args.get('start_expiry_date', '') }}">
+        </div>
+        <div class="form-group">
+            <label for="end_expiry_date">Expiry Date To:</label>
+            <input type="date" name="end_expiry_date" id="end_expiry_date" value="{{ request.args.get('end_expiry_date', '') }}">
+        </div>
+    </div>
+
+    {# Hidden fields for sort order and pagination #}
+    <input type="hidden" name="sort_by" value="{{ sort_by or 'product_name' }}">
+    <input type="hidden" name="sort_order" value="{{ sort_order or 'ASC' }}">
+    <input type="hidden" name="page" value="{{ current_page or 1 }}">
+    <input type="hidden" name="per_page" value="{{ per_page or 20 }}">
+
+    <div class="form-actions">
+        <button type="submit" class="button"><i class="fas fa-filter"></i> Filter</button>
+        <a href="{{ url_for('inventory_batches_view') }}" class="button button-secondary"><i class="fas fa-times-circle"></i> Clear Filters</a>
+    </div>
+</form>
+
+    {% if items %}
+    <div class="table-responsive-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    {# Helper macro for sortable headers (can be copied from current_inventory.html or historical_inventory.html if not in base) #}
+                    {% macro sortable_header(column_key, display_name, current_sort_by, current_sort_order, current_filters) %}
+                        {% set new_sort_order = 'DESC' if current_sort_by == column_key and current_sort_order == 'ASC' else 'ASC' %}
+                        {% set updated_filters = dict(current_filters, sort_by=column_key, sort_order=new_sort_order) %}
+                        <th>
+                            <a href="{{ url_for('inventory_batches_view', **updated_filters) }}">
+                                {{ display_name }}
+                                {% if current_sort_by == column_key %}
+                                    <i class="fas fa-sort-{{ 'up' if current_sort_order == 'ASC' else 'down' }}"></i>
+                                {% else %}
+                                    <i class="fas fa-sort"></i>
+                                {% endif %}
+                            </a>
+                        </th>
+                    {% endmacro %}
+
+                    {% set current_filters = {
+                        'search_term': search_term,
+                        'category': selected_category,
+                        'start_purchase_date': request.args.get('start_purchase_date', ''),
+                        'end_purchase_date': request.args.get('end_purchase_date', ''),
+                        'start_expiry_date': request.args.get('start_expiry_date', ''),
+                        'end_expiry_date': request.args.get('end_expiry_date', ''),
+                        'page': current_page,
+                        'per_page': per_page
+                        # Add other active filters here
+                    } %}
+
+                    {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('category_name', 'Category', sort_by, sort_order, current_filters) }}
+                    <th>Subcategory</th>
+                    {{ sortable_header('quantity', 'Quantity', sort_by, sort_order, current_filters) }}
+                    <th>Unit</th>
+                    {{ sortable_header('purchase_date', 'Purchase Date', sort_by, sort_order, current_filters) }}
+                    {{ sortable_header('expiry_date', 'Expiry Date', sort_by, sort_order, current_filters) }}
+                    {# Cost per unit sorting might be tricky if it's not directly in the SQL sort. Can be added later or sorted client-side/Python. #}
+                    <th>Cost/Unit</th>
+                    <th>Vendor</th>
+                    <th>Product Purchase Location</th>
+                    {# Add more headers as needed #}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>
+                        {% if item.product_id %}
+                        <a href="#" class="product-name-link" data-product-id="{{ item.product_id }}" onclick="openProductModal(this.dataset.productId); return false;">
+                            {{ item.product_name }}
+                        </a>
+                        {% else %}
+                        {{ item.product_name }}
+                        {% endif %}
+                    </td>
+                    <td>{{ item.category_name if item.category_name else '--' }}</td>
+                    <td>{{ item.subcategory_name if item.subcategory_name else '--' }}</td>
+                    <td>{{ "%.2f"|format(item.quantity|float) if item.quantity is number or item.quantity is string else item.quantity }}</td>
+                    <td>{{ item.unit_of_measure if item.unit_of_measure else '--' }}</td>
+                    <td>{{ item.purchase_date }}</td>
+                    <td>{{ item.expiry_date }}</td>
+                    <td>
+                        {% if item.cost_per_unit is not none %}
+                            {{ "$%.2f"|format(item.cost_per_unit|float) }}
+                        {% else %}
+                            --
+                        {% endif %}
+                    </td>
+                    <td>{{ item.vendor if item.vendor else '--' }}</td>
+                    <td>{{ item.product_purchase_location if item.product_purchase_location else '--' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {# Pagination Controls - Can be copied from current_inventory.html or historical_inventory.html #}
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        <span>Page {{ current_page }} of {{ total_pages }}</span>
+        <div class="page-navigation">
+            {% set pagination_filters = {
+                'search_term': search_term,
+                'category': selected_category,
+                'start_purchase_date': request.args.get('start_purchase_date', ''),
+                'end_purchase_date': request.args.get('end_purchase_date', ''),
+                'start_expiry_date': request.args.get('start_expiry_date', ''),
+                'end_expiry_date': request.args.get('end_expiry_date', ''),
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'per_page': per_page
+                # Add other active filters here
+            } %}
+            {% if current_page > 1 %}
+            <a href="{{ url_for('inventory_batches_view', **dict(pagination_filters, page=current_page - 1)) }}" class="button button-small">
+                <i class="fas fa-chevron-left"></i> Previous
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled"><i class="fas fa-chevron-left"></i> Previous</span>
+            {% endif %}
+
+            {% if current_page < total_pages %}
+            <a href="{{ url_for('inventory_batches_view', **dict(pagination_filters, page=current_page + 1)) }}" class="button button-small">
+                Next <i class="fas fa-chevron-right"></i>
+            </a>
+            {% else %}
+            <span class="button button-small button-disabled">Next <i class="fas fa-chevron-right"></i></span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+        <p class="empty-message">
+            {% if search_term or selected_category or request.args.get('start_purchase_date') or request.args.get('start_expiry_date') %}
+                No inventory batches match your current filters. <a href="{{ url_for('inventory_batches_view') }}">Clear filters</a>.
+            {% else %}
+                No inventory batches found.
+            {% endif %}
+        </p>
+    {% endif %}
+
+    <p><a href="{{ url_for('inventory_usage_links_view') }}" class="nav-link-button" style="margin-top: 20px;"><i class="fas fa-arrow-left"></i> Back to Inventory & Usage Links</a></p>
+{% endblock %}

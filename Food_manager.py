@@ -2324,6 +2324,197 @@ class InventoryManager:
             print(f"Database error fetching current inventory purchase locations: {e}")
         return locations
 
+    def get_inventory_batches_with_cost(self, search_term=None, category=None, purchase_location=None,
+                                   sort_by='product_name', sort_order='ASC',
+                                   page=1, per_page=20,
+                                   start_purchase_date=None, end_purchase_date=None,
+                                   start_expiry_date=None, end_expiry_date=None):
+        """
+        Retrieves current inventory batches with associated product details and, if available,
+        the cost_per_unit and vendor from the most relevant PurchaseLog entry.
+        """
+        items = []
+        params = []
+
+        # This query aims to get each inventory_item and join it with product details.
+        # Then, for each batch, it attempts to find the *latest* PurchaseLog entry
+        # for that product_id that occurred on or before the batch's purchase_date.
+        # This is an approximation if direct batch-to-purchase_log linking isn't perfect.
+        # Using a subquery or a more complex join might be needed for precise cost matching if
+        # multiple purchases happen on the same day for the same product.
+        # For simplicity, this initial version might show the weighted average cost or latest direct cost.
+
+        # Let's try to get the cost from the purchase log that matches product_id and purchase_date.
+        # If multiple purchases for the same product on the same day, this could be ambiguous.
+        # A more robust solution might involve storing purchase_log_id in inventory_items,
+        # or using weighted average cost at the time of batch creation.
+
+        # For this version, we'll fetch all batches and then try to enrich with cost.
+        # This two-step approach might be less efficient for large datasets but simpler to implement initially.
+
+        # Step 1: Fetch filtered and paginated inventory batches with product details.
+        query = """
+            SELECT
+                ii.id AS batch_id,
+                ii.product_id,
+                p.name AS product_name,
+                c.name AS category_name,
+                sc.name AS subcategory_name,
+                p.unit_of_measure,
+                ii.quantity,
+                ii.purchase_date,
+                ii.expiry_date,
+                p.par_level,
+                p.purchase_location AS product_purchase_location
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
+        """
+        where_clauses = ["CAST(ii.quantity AS REAL) > 0"] # Only include items with quantity > 0
+
+        if search_term:
+            where_clauses.append("LOWER(p.name) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("LOWER(c.name) = ?")
+            params.append(category.lower())
+        if purchase_location: # This filters by the product's default purchase location
+            where_clauses.append("LOWER(p.purchase_location) = ?")
+            params.append(purchase_location.lower())
+        if start_purchase_date:
+            where_clauses.append("ii.purchase_date >= ?")
+            params.append(start_purchase_date)
+        if end_purchase_date:
+            where_clauses.append("ii.purchase_date <= ?")
+            params.append(end_purchase_date)
+        if start_expiry_date:
+            where_clauses.append("ii.expiry_date >= ?")
+            params.append(start_expiry_date)
+        if end_expiry_date:
+            where_clauses.append("ii.expiry_date <= ?")
+            params.append(end_expiry_date)
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        # Sorting - apply to the main query
+        # Valid sort columns for batch view
+        valid_sort_columns = {
+            'product_name': 'p.name',
+            'category_name': 'c.name',
+            'quantity': 'CAST(ii.quantity AS REAL)', # Ensure numeric sort for quantity
+            'purchase_date': 'ii.purchase_date',
+            'expiry_date': 'ii.expiry_date',
+            # 'cost_per_unit' would require joining PurchaseLog here or sorting in Python later
+        }
+        sort_column_sql = valid_sort_columns.get(sort_by.lower(), 'p.name')
+        sort_order_sql = 'DESC' if sort_order.upper() == 'DESC' else 'ASC'
+        query += f" ORDER BY {sort_column_sql} {sort_order_sql}, ii.id {sort_order_sql}"
+
+        # Pagination - apply to the main query
+        if page is not None and per_page is not None and page > 0 and per_page > 0:
+            offset = (page - 1) * per_page
+            query += " LIMIT ? OFFSET ?"
+            params.extend([per_page, offset])
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                raw_batches = cursor.fetchall()
+
+                for row_data in raw_batches:
+                    batch_dict = dict(row_data)
+                    batch_dict['cost_per_unit'] = None # Default
+                    batch_dict['vendor'] = None      # Default
+
+                    # Attempt to find a matching purchase log entry
+                    # This is a simplification: it finds the first purchase log for that product on that day.
+                    # If multiple purchases on the same day, this might not be the exact cost for *this specific batch*.
+                    # A more accurate system would link inventory_items.id to PurchaseLog.id upon creation.
+                    cursor.execute("""
+                        SELECT cost_per_unit, vendor
+                        FROM PurchaseLog
+                        WHERE product_id = ? AND purchase_date = ?
+                        ORDER BY id DESC  -- Get the latest purchase on that day if multiple
+                        LIMIT 1
+                    """, (batch_dict['product_id'], batch_dict['purchase_date']))
+                    cost_row = cursor.fetchone()
+
+                    if cost_row:
+                        batch_dict['cost_per_unit'] = cost_row['cost_per_unit']
+                        batch_dict['vendor'] = cost_row['vendor']
+                    else:
+                        # Fallback: use weighted average cost if no direct match on purchase_date
+                        # This might be too broad if purchase_date is the primary key for cost.
+                        # Consider if this fallback is desired. For now, if no direct match, cost remains None.
+                        # batch_dict['cost_per_unit'] = self.get_weighted_average_cost(batch_dict['product_id'])
+                        pass
+
+
+                    # Convert date strings to date objects for consistent handling in template if needed
+                    # However, for display, strings are often fine. Let's keep as string from DB for now.
+                    # If date objects are needed:
+                    # if batch_dict.get('purchase_date'): batch_dict['purchase_date'] = date.fromisoformat(batch_dict['purchase_date'])
+                    # if batch_dict.get('expiry_date'): batch_dict['expiry_date'] = date.fromisoformat(batch_dict['expiry_date'])
+                    items.append(batch_dict)
+        except sqlite3.Error as e:
+            print(f"Database error fetching inventory batches with cost: {e}")
+            # Potentially return an error status or empty list
+        return items
+
+    def get_inventory_batches_with_cost_count(self, search_term=None, category=None, purchase_location=None,
+                                             start_purchase_date=None, end_purchase_date=None,
+                                             start_expiry_date=None, end_expiry_date=None):
+        """
+        Gets the total count of current inventory batches based on filters.
+        """
+        params = []
+        query = """
+            SELECT COUNT(ii.id) as count
+            FROM inventory_items ii
+            JOIN products p ON ii.product_id = p.id
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories sc ON p.subcategory_id = sc.id
+        """
+        where_clauses = ["CAST(ii.quantity AS REAL) > 0"] # Only count items with quantity > 0
+
+        if search_term:
+            where_clauses.append("LOWER(p.name) LIKE ?")
+            params.append(f"%{search_term.lower()}%")
+        if category:
+            where_clauses.append("LOWER(c.name) = ?")
+            params.append(category.lower())
+        if purchase_location:
+            where_clauses.append("LOWER(p.purchase_location) = ?")
+            params.append(purchase_location.lower())
+        if start_purchase_date:
+            where_clauses.append("ii.purchase_date >= ?")
+            params.append(start_purchase_date)
+        if end_purchase_date:
+            where_clauses.append("ii.purchase_date <= ?")
+            params.append(end_purchase_date)
+        if start_expiry_date:
+            where_clauses.append("ii.expiry_date >= ?")
+            params.append(start_expiry_date)
+        if end_expiry_date:
+            where_clauses.append("ii.expiry_date <= ?")
+            params.append(end_expiry_date)
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, tuple(params))
+                result = cursor.fetchone()
+                return result['count'] if result else 0
+        except sqlite3.Error as e:
+            print(f"Database error getting inventory batch count: {e}")
+            return 0
+
     def get_inventory_batches_for_product(self, product_id, limit=None, order_by_purchase_desc=False, order_by_id_desc=False):
         """
         Retrieves specific inventory batches for a given product_id.

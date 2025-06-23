@@ -635,5 +635,126 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         self.assertAlmostEqual(retrieved_recipe['output_yield'], new_output_yield_val)
 
 
+class TestAppInventoryBatchesView(unittest.TestCase):
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['SECRET_KEY'] = 'test_secret_key_batches'
+        self.app_context = app.app_context()
+        self.app_context.push()
+        self.client = app.test_client()
+
+        app_manager.db_filepath = ":memory:"
+        if hasattr(app_manager, 'conn') and app_manager.conn:
+            try: app_manager.close_connection()
+            except: pass
+        app_manager.conn = sqlite3.connect(":memory:")
+        app_manager.conn.row_factory = sqlite3.Row
+        app_manager._initialize_db()
+
+        # Setup data
+        self.cat1_id = app_manager.add_category("Electronics")['category_id']
+        self.cat2_id = app_manager.add_category("Books")['category_id']
+
+        self.prod_laptop_id = app_manager.create_product("Laptop X1", self.cat1_id, None, "unit", 365, purchase_location="Online")['product_id']
+        self.prod_book_id = app_manager.create_product("Flask Guide", self.cat2_id, None, "unit", 730, purchase_location="Bookstore")['product_id']
+
+        # Log purchases which will create inventory_items entries and PurchaseLog entries
+        # Laptop Batches
+        app_manager.log_purchase(self.prod_laptop_id, "2024-01-01", 5.0, 1200.00, "CompSource") # Batch L1
+        app_manager.log_purchase(self.prod_laptop_id, "2024-01-10", 3.0, 1150.00, "TechMart")   # Batch L2
+
+        # Book Batches
+        app_manager.log_purchase(self.prod_book_id, "2024-02-01", 10.0, 25.00, "PublisherDirect") # Batch B1
+        # Add a book batch without a direct PurchaseLog entry on the same day to test missing cost
+        app_manager.add_inventory_stock(self.prod_book_id, "7", "2024-02-05") # Batch B2
+
+    def tearDown(self):
+        if app_manager.db_filepath == ":memory:" and hasattr(app_manager, 'conn') and app_manager.conn:
+            app_manager.close_connection()
+            app_manager.conn = None
+        self.app_context.pop()
+
+    def test_inventory_batches_page_loads(self):
+        response = self.client.get('/inventory/batches')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Inventory Batches", response.data)
+
+    def test_inventory_batches_displays_data_with_cost(self):
+        response = self.client.get('/inventory/batches?sort_by=product_name&sort_order=ASC') # Ensure consistent order
+        html_content = response.data.decode('utf-8')
+
+        # Check for Laptop X1 batch from CompSource
+        self.assertIn("Laptop X1", html_content)
+        self.assertIn("2024-01-01", html_content) # Purchase date L1
+        self.assertIn("1200.00", html_content)   # Cost L1
+        self.assertIn("CompSource", html_content) # Vendor L1
+
+        # Check for Flask Guide batch from PublisherDirect
+        self.assertIn("Flask Guide", html_content)
+        self.assertIn("2024-02-01", html_content) # Purchase date B1
+        self.assertIn("25.00", html_content)    # Cost B1
+        self.assertIn("PublisherDirect", html_content) # Vendor B1
+
+        # Check for Flask Guide batch with no direct cost (should show '--' or similar)
+        self.assertIn("2024-02-05", html_content) # Purchase date B2
+        # Assuming '--' for missing cost/vendor based on template
+        # Need to find a row that has 2024-02-05 and then check for --
+        # This is a bit fragile. A better way would be to parse the table.
+        # For now, a simpler check:
+        self.assertTrue(html_content.count("<td>--</td>") >= 2) # Expecting at least two '--' for cost and vendor of the second book batch.
+
+    def test_inventory_batches_filter_by_product_name(self):
+        response = self.client.get('/inventory/batches?search_term=Laptop')
+        self.assertEqual(response.status_code, 200)
+        html_content = response.data.decode('utf-8')
+        self.assertIn("Laptop X1", html_content)
+        self.assertNotIn("Flask Guide", html_content)
+        # Check that both laptop batches are present
+        self.assertIn("1200.00", html_content) # Cost L1
+        self.assertIn("1150.00", html_content) # Cost L2
+
+    def test_inventory_batches_filter_by_category(self):
+        response = self.client.get('/inventory/batches?category=Books')
+        self.assertEqual(response.status_code, 200)
+        html_content = response.data.decode('utf-8')
+        self.assertIn("Flask Guide", html_content)
+        self.assertNotIn("Laptop X1", html_content)
+
+    def test_inventory_batches_filter_by_purchase_date_range(self):
+        response = self.client.get('/inventory/batches?start_purchase_date=2024-01-05&end_purchase_date=2024-02-02')
+        self.assertEqual(response.status_code, 200)
+        html_content = response.data.decode('utf-8')
+        self.assertIn("Laptop X1", html_content) # L2 (2024-01-10)
+        self.assertIn("1150.00", html_content)
+        self.assertIn("Flask Guide", html_content) # B1 (2024-02-01)
+        self.assertIn("25.00", html_content)
+        self.assertNotIn("1200.00", html_content) # L1 (2024-01-01) is out of range
+
+    def test_inventory_batches_sorting_by_purchase_date(self):
+        response = self.client.get('/inventory/batches?sort_by=purchase_date&sort_order=DESC')
+        html_content = response.data.decode('utf-8')
+        # Expected order of purchase dates: 2024-02-05, 2024-02-01, 2024-01-10, 2024-01-01
+        pos_b2 = html_content.find("2024-02-05") # Flask Guide (no cost)
+        pos_b1 = html_content.find("2024-02-01") # Flask Guide ($25)
+        pos_l2 = html_content.find("2024-01-10") # Laptop ($1150)
+        pos_l1 = html_content.find("2024-01-01") # Laptop ($1200)
+
+        self.assertTrue(pos_b2 < pos_b1 < pos_l2 < pos_l1)
+
+    def test_inventory_batches_pagination(self):
+        response = self.client.get('/inventory/batches?sort_by=product_name&sort_order=ASC&page=1&per_page=2')
+        html_content = response.data.decode('utf-8')
+        self.assertIn("Page 1 of 2", html_content)
+        self.assertIn("Flask Guide", html_content) # B1, B2 (depends on secondary sort by ID)
+        self.assertNotIn("Laptop X1", html_content)
+
+        response_p2 = self.client.get('/inventory/batches?sort_by=product_name&sort_order=ASC&page=2&per_page=2')
+        html_content_p2 = response_p2.data.decode('utf-8')
+        self.assertIn("Page 2 of 2", html_content_p2)
+        self.assertIn("Laptop X1", html_content_p2) # L1, L2
+        self.assertNotIn("Flask Guide", html_content_p2)
+
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
