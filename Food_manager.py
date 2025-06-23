@@ -115,35 +115,6 @@ class InventoryManager:
                         UNIQUE (name, category_id)
                     )
                 ''')
-
-                # NutritionalInfo Table
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS nutritional_info (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        product_id INTEGER,
-                        serving_size_grams REAL,
-                        calories REAL,
-                        protein_grams REAL,
-                        carbs_grams REAL,
-                        fat_grams REAL,
-                        source TEXT,
-                        last_updated TEXT,
-                        FOREIGN KEY (product_id) REFERENCES products (id)
-                    )
-                ''')
-
-                # PurchaseLog Table
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS purchase_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        product_id INTEGER,
-                        purchase_date TEXT,
-                        quantity_purchased REAL,
-                        cost_per_unit REAL,
-                        vendor TEXT,
-                        FOREIGN KEY (product_id) REFERENCES products (id)
-                    )
-                ''')
                 conn.commit()
         except sqlite3.Error as e:
             raise sqlite3.Error(f"Database initialization error: {e}")
