@@ -2699,7 +2699,7 @@ class InventoryManager:
                 hi.id, hi.product_id,
                 COALESCE(p.name, hi.name) AS product_display_name,
                 hi.quantity_consumed_this_time, hi.original_quantity_string,
-                hi.purchase_date, hi.expiry_date, hi.consumed_date,
+                hi.purchase_date, hi.expiry_date, hi.consumed_date, hi.cost_of_goods_used,
                 p.unit_of_measure,
                 c.name AS category_name,
                 sc.name AS subcategory_name
