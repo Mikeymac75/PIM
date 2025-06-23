@@ -29,10 +29,10 @@
                     </li>
 
                     <!-- Inventory & Usage Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['log_purchase_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view'] %}current{% endif %}">
+                    <li class="dropdown {% if request.endpoint in ['add_inventory_stock_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view'] %}current{% endif %}">
                         <a href="{{ url_for('inventory_usage_links_view') }}" class="dropbtn"><i class="fas fa-warehouse"></i> Inventory & Usage <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
-                            <a href="{{ url_for('log_purchase_view') }}"><i class="fas fa-shopping-cart"></i> Log a Purchase</a>
+                            <a href="{{ url_for('add_inventory_stock_view') }}"><i class="fas fa-plus-circle"></i> Add Stock</a>
                             <a href="{{ url_for('current_inventory_view') }}"><i class="fas fa-boxes"></i> Current Inventory</a>
                             <a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a>
                             <a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a>
