@@ -1355,6 +1355,8 @@ def projections_view():
     )
 
     projection_results_list = []
+    total_cost_all_items_last_30_days = 0.0 # Initialize total cost
+
     if products_on_page:
         for product_dict in products_on_page:
             # Using product ID for project_demand is more robust
@@ -1363,6 +1365,11 @@ def projections_view():
                  # Ensure item_name is consistently set from product_name for template
                 if 'product_name' in projection_data and 'item_name' not in projection_data:
                      projection_data['item_name'] = projection_data['product_name']
+
+                # Add to total cost
+                if projection_data.get("success"): # Ensure projection was successful before accessing cost
+                    total_cost_all_items_last_30_days += projection_data.get('cost_last_30_days', 0.0)
+
                 projection_results_list.append(projection_data)
             # Optionally, flash a message if a specific projection failed
             # elif projection_data and not projection_data.get("success", True):
@@ -1376,6 +1383,7 @@ def projections_view():
     return render_template(
         'projections.html',
         projections=projection_results_list,
+        total_cost_all_items_last_30_days=total_cost_all_items_last_30_days, # Pass the total cost
         current_page=page,
         total_pages=total_pages,
         per_page=per_page,
