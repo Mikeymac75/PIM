@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Add Inventory Stock{% endblock %}
+{% block title %}Log a Purchase{% endblock %}
 
 {% block content %}
 
 <!-- Filters Form -->
-<form method="GET" action="{{ url_for('add_inventory_stock_view') }}" class="form-filters">
+<form method="GET" action="{{ url_for('log_purchase_view') }}" class="form-filters">
     <h2>Filter Products</h2>
     <div class="form-row">
         <div>
@@ -30,8 +30,8 @@
 </form>
 <hr>
 
-<h1>Add Stock to Inventory</h1>
-<form method="POST" action="{{ url_for('add_inventory_stock_view') }}">
+<h1>Log a New Purchase</h1>
+<form method="POST" action="{{ url_for('log_purchase_view') }}">
     <div>
         <label for="product_id">Product:</label>
         <select id="product_id" name="product_id" required>
@@ -44,16 +44,24 @@
         </select>
     </div>
     <div>
-        <label for="quantity_added">Quantity Added:</label>
-        <input type="number" step="any" id="quantity_added" name="quantity_added" value="{{ form_data.quantity_added if form_data else '' }}" required>
+        <label for="quantity_purchased">Quantity Purchased:</label>
+        <input type="number" step="any" id="quantity_purchased" name="quantity_purchased" value="{{ form_data.get('quantity_purchased', '') }}" required>
         <small>Enter a numeric value. The unit of measure is defined by the product (e.g., kg, pcs, liters).</small>
     </div>
     <div>
-        <label for="purchase_date">Purchase Date:</label>
-        <input type="date" id="purchase_date" name="purchase_date" value="{{ form_data.purchase_date if form_data else '' }}" required>
+        <label for="cost_per_unit">Cost Per Unit ($):</label>
+        <input type="number" step="any" id="cost_per_unit" name="cost_per_unit" value="{{ form_data.get('cost_per_unit', '') }}" placeholder="e.g., 2.99" required>
     </div>
     <div>
-        <button type="submit" class="button"><i class="fas fa-plus-circle"></i> Add Stock</button>
+        <label for="purchase_date">Purchase Date:</label>
+        <input type="date" id="purchase_date" name="purchase_date" value="{{ form_data.get('purchase_date', today.isoformat() if today else '') }}" required>
+    </div>
+    <div>
+        <label for="vendor">Vendor (Store Name):</label>
+        <input type="text" id="vendor" name="vendor" value="{{ form_data.get('vendor', '') }}" placeholder="e.g., Costco, Sobeys">
+    </div>
+    <div>
+        <button type="submit" class="button"><i class="fas fa-receipt"></i> Log Purchase</button>
     </div>
 </form>
 {% endblock %}
