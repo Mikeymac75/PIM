@@ -3338,13 +3338,23 @@ class InventoryManager:
             print(f"Database error calculating cost_last_30_days for product ID {product_id}: {e}")
             # Keep cost_last_30_days as 0.0 on error
 
+        # Get weighted average cost for projected cost calculation
+        weighted_average_cost = self.get_weighted_average_cost(product_id)
+        projected_cost_per_day = 0.0
+        if weighted_average_cost is not None: # Ensure it's not None before multiplication
+            projected_cost_per_day = avg_daily_consumption * weighted_average_cost
+        else: # Handle case where cost might be None (e.g. no purchase history)
+            weighted_average_cost = 0.0 # Default to 0 for display if None
+
         result = {
             "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
             "current_stock": current_quantity_sum,
             "avg_daily_consumption": avg_daily_consumption, "days_to_depletion": days_to_depletion_str,
             "projected_need": projected_need, "lookback_days": lookback_days, "projection_days": projection_days,
             "consumption_override_rate": product.get('consumption_override_rate'), # Ensure it's in the result
-            "cost_last_30_days": cost_last_30_days, # Add the new cost data
+            "cost_last_30_days": cost_last_30_days,
+            "weighted_average_cost": weighted_average_cost, # Added for reference
+            "projected_cost_per_day": projected_cost_per_day, # New projected cost field
             "success": True
         }
 
