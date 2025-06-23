@@ -185,7 +185,7 @@ def historical_inventory_view():
         per_page = 20
 
     # Fetch data from manager
-    historical_items = manager.get_historical_inventory(
+    historical_items_data = manager.get_historical_inventory( # Renamed to avoid confusion in template if 'items' is ambiguous
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         consumed_start_date=consumed_start_date if consumed_start_date else None,
@@ -195,6 +195,9 @@ def historical_inventory_view():
         page=page,
         per_page=per_page
     )
+
+    # The historical_items_data already contains all necessary fields including cost_of_goods_used
+    # No additional processing needed here for that field if the manager method includes it.
 
     total_items = manager.get_historical_inventory_count(
         search_term=search_term if search_term else None,
@@ -225,7 +228,7 @@ def historical_inventory_view():
 
     return render_template(
         'historical_inventory.html',
-        items=historical_items,
+        items=historical_items_data, # Pass the fetched data as 'items' to the template
         current_page=page,
         total_pages=total_pages,
         per_page=per_page,
@@ -340,8 +343,10 @@ def upload_excel_view():
                 subcategory_col = header_map.get('subcategory')
                 par_level_col = header_map.get('par level')
                 max_holding_col = header_map.get('max holding amount')
-                purchase_location_col = header_map.get('purchase location') # New
-                unit_of_measure_col = header_map.get('unit of measure') # New
+                purchase_location_col = header_map.get('purchase location')
+                unit_of_measure_col = header_map.get('unit of measure')
+                cost_per_unit_col = header_map.get('cost_per_unit') # New
+                vendor_col = header_map.get('vendor') # New
                 
                 items_added_count = 0
                 error_messages = []
@@ -368,8 +373,10 @@ def upload_excel_view():
                     subcategory = str(row[subcategory_col]).strip() if subcategory_col is not None and row[subcategory_col] is not None else None
                     par_level_val = row[par_level_col] if par_level_col is not None and row[par_level_col] is not None else "0" # Default to "0" if cell empty/col missing
                     max_holding_val = row[max_holding_col] if max_holding_col is not None and row[max_holding_col] is not None else "0" # Default to "0"
-                    purchase_location_val = str(row[purchase_location_col]).strip() if purchase_location_col is not None and row[purchase_location_col] is not None else None # New
-                    unit_of_measure_val = str(row[unit_of_measure_col]).strip() if unit_of_measure_col is not None and row[unit_of_measure_col] is not None else None # New
+                    purchase_location_val = str(row[purchase_location_col]).strip() if purchase_location_col is not None and row[purchase_location_col] is not None else None
+                    unit_of_measure_val = str(row[unit_of_measure_col]).strip() if unit_of_measure_col is not None and row[unit_of_measure_col] is not None else None
+                    cost_per_unit_val_str = str(row[cost_per_unit_col]).strip() if cost_per_unit_col is not None and row[cost_per_unit_col] is not None else None # New
+                    vendor_val_str = str(row[vendor_col]).strip() if vendor_col is not None and row[vendor_col] is not None else None # New
 
                     # Skip row if essential 'name' field is missing
                     if not name:
@@ -474,7 +481,9 @@ def upload_excel_view():
                             par_level=par_level_float,
                             max_holding_amount=max_holding_float,
                             purchase_location=purchase_location_to_pass,
-                            unit_of_measure=unit_of_measure_val
+                            unit_of_measure=unit_of_measure_val,
+                            cost_per_unit_str=cost_per_unit_val_str, # Pass new field
+                            vendor=vendor_val_str # Pass new field
                         )
 
                         if result.get("action_required"):
@@ -748,6 +757,8 @@ def confirm_excel_uploads_view():
             max_holding_amount=product_data['max_holding_amount'],
             purchase_location=product_data['purchase_location'],
             unit_of_measure=product_data['unit_of_measure'],
+            cost_per_unit_str=product_data.get('cost_per_unit_str'), # Add new field
+            vendor=product_data.get('vendor'), # Add new field
             confirmed_action=action_required,
             temp_category_id=confirmation_details.get('category_id') # Used if action_required is 'confirm_new_subcategory'
         )
@@ -1640,6 +1651,14 @@ def list_products_view():
         per_page=per_page
     )
 
+    # Enhance products with weighted average cost
+    products_enhanced = []
+    if products:
+        for p in products:
+            product_dict = dict(p) # Convert Row object to dict if necessary, or work with it directly
+            product_dict['weighted_average_cost'] = manager.get_weighted_average_cost(product_dict['id'])
+            products_enhanced.append(product_dict)
+
     # Get total product count for pagination
     total_products = manager.get_product_count(
         search_term=search_term if search_term else None,
@@ -1668,7 +1687,7 @@ def list_products_view():
 
     return render_template(
         'list_products.html',
-        products=products,
+        products_enhanced=products_enhanced, # Pass the enhanced list
         current_page=page,
         total_pages=total_pages,
         per_page=per_page,
@@ -1891,11 +1910,13 @@ def edit_product_view(product_id):
     return render_template('edit_product.html', product=product_display_data, categories_data=all_categories_data)
 
 # --- Inventory Management Routes ---
-@app.route('/inventory/add_stock', methods=['GET', 'POST'])
-def add_inventory_stock_view():
+@app.route('/inventory/log_purchase', methods=['GET', 'POST'])
+def log_purchase_view():
     if request.method == 'POST':
         product_id_str = request.form.get('product_id')
-        quantity_added = request.form.get('quantity_added', '').strip()
+        quantity_purchased_str = request.form.get('quantity_purchased', '').strip()
+        cost_per_unit_str = request.form.get('cost_per_unit', '').strip()
+        vendor_str = request.form.get('vendor', '').strip()
         purchase_date_str = request.form.get('purchase_date', '').strip()
 
         errors = []
@@ -1909,18 +1930,27 @@ def add_inventory_stock_view():
             except ValueError:
                 errors.append("Invalid product ID.")
 
-        if not quantity_added:
-            errors.append("Quantity added is required.")
+        quantity_purchased_float = None
+        if not quantity_purchased_str:
+            errors.append("Quantity purchased is required.")
         else:
             try:
-                # Attempt to parse and validate the quantity.
-                # manager._parse_quantity_string should handle basic conversion.
-                parsed_qty = manager._parse_quantity_string(quantity_added) # This might raise ValueError if not a number
-                if parsed_qty <= 0:
-                    errors.append("Quantity added must be a positive amount.")
+                quantity_purchased_float = float(quantity_purchased_str)
+                if quantity_purchased_float <= 0:
+                    errors.append("Quantity purchased must be a positive amount.")
             except ValueError:
-                # This catches errors if quantity_added is not a valid number string
-                errors.append("Quantity added must be a valid number.")
+                errors.append("Quantity purchased must be a valid number.")
+
+        cost_per_unit_float = None
+        if not cost_per_unit_str:
+            errors.append("Cost per unit is required.")
+        else:
+            try:
+                cost_per_unit_float = float(cost_per_unit_str)
+                if cost_per_unit_float < 0: # Allow 0 cost
+                    errors.append("Cost per unit cannot be negative.")
+            except ValueError:
+                errors.append("Cost per unit must be a valid number.")
 
         if not purchase_date_str:
             purchase_date_str = date.today().isoformat() # Default to today
@@ -1933,24 +1963,28 @@ def add_inventory_stock_view():
         if errors:
             for error in errors:
                 flash(error, 'error')
-            # Repopulate products for dropdown
             products_for_dropdown = manager.get_all_products()
-            return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
+            # Pass all_categories for consistency with GET, though not strictly needed for error repopulation logic here
+            all_categories = manager.get_all_categories()
+            return render_template('log_purchase.html', products=products_for_dropdown, all_categories=all_categories, form_data=request.form, today=date.today())
 
-        # If validation passes
-        result = manager.add_inventory_stock(
+        # If validation passes, call the new log_purchase method
+        result = manager.log_purchase(
             product_id=product_id,
-            quantity_str=quantity_added,
-            purchase_date_str=purchase_date_str
+            purchase_date_str=purchase_date_str,
+            quantity_purchased_float=quantity_purchased_float,
+            cost_per_unit_float=cost_per_unit_float,
+            vendor_str=vendor_str if vendor_str else None # Pass None if empty
         )
 
         if result.get("success"):
             flash(result['message'], 'success')
             return redirect(url_for('current_inventory_view'))
         else:
-            flash(result.get("message", "An error occurred adding inventory stock."), 'error')
-            products_for_dropdown = manager.get_all_products() # Repopulate products
-            return render_template('add_inventory.html', products=products_for_dropdown, form_data=request.form)
+            flash(result.get("message", "An error occurred logging the purchase."), 'error')
+            products_for_dropdown = manager.get_all_products()
+            all_categories = manager.get_all_categories()
+            return render_template('log_purchase.html', products=products_for_dropdown, all_categories=all_categories, form_data=request.form, today=date.today())
 
     # GET request
     search_name = request.args.get('search_name', '').strip()
@@ -1979,11 +2013,12 @@ def add_inventory_stock_view():
     # If there were validation errors on POST, form_data might be passed from POST.
     # For a clean GET, it's just the purchase_date.
     # The template will use request.args for search_name and search_category values.
-
-    return render_template('add_inventory.html',
+    # Pass today's date for the template context
+    return render_template('log_purchase.html',
                            products=products_for_dropdown,
                            all_categories=all_categories,
-                           form_data=form_data_get)
+                           form_data=form_data_get,
+                           today=date.today())
 
 @app.route('/inventory/edit', methods=['GET', 'POST'])
 def edit_inventory_view():
@@ -2459,9 +2494,10 @@ def export_data_view():
             export_start_date = request.form.get('export_start_date')
             export_end_date = request.form.get('export_end_date')
             try:
+                # Use historical_items_data variable name consistent with the view function
                 historical_data = manager.get_historical_inventory(
-                    export_all=True,
-                    export_start_date_str=export_start_date if export_start_date else None,
+                    export_all=True, # This flag implies fetching all data for export
+                    export_start_date_str=export_start_date if export_start_date else None, # Use specific params for export dates
                     export_end_date_str=export_end_date if export_end_date else None
                 )
                 if not historical_data:

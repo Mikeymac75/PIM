@@ -277,6 +277,91 @@ class TestInventoryManager(unittest.TestCase):
         self.assertIsNotNone(subcategory)
         self.assertEqual(product['subcategory_id'], subcategory['id'])
 
+    def test_add_item_to_list_with_cost_and_vendor(self):
+        # Product "Apples" exists.
+        product_id_apples = self.product_ids_setup["Apples"]
+        result = self.manager.add_item_to_list(
+            name="Apples", quantity_str="3 kg", purchase_date_str="2024-03-20", expiry_days=10,
+            category="Produce", subcategory="Fruit", unit_of_measure="kg",
+            cost_per_unit_str="0.99", vendor="Farm Fresh"
+        )
+        self.assertTrue(result.get("success"), result.get("message"))
+        self.assertIsNotNone(result.get("item_id"), "Stock item ID should be present")
+        self.assertIsNotNone(result.get("purchase_log_id"), "PurchaseLog ID should be present")
+
+        # Verify PurchaseLog entry
+        conn = self.manager._get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM PurchaseLog WHERE id = ?", (result["purchase_log_id"],))
+        log_entry = cursor.fetchone()
+        conn.close()
+
+        self.assertIsNotNone(log_entry)
+        self.assertEqual(log_entry["product_id"], product_id_apples)
+        self.assertEqual(log_entry["quantity_purchased"], 3.0)
+        self.assertEqual(log_entry["cost_per_unit"], 0.99)
+        self.assertEqual(log_entry["vendor"], "Farm Fresh")
+
+    def test_add_item_to_list_without_cost_and_vendor(self):
+        # Product "Bananas" exists.
+        result = self.manager.add_item_to_list(
+            name="Bananas", quantity_str="12 units", purchase_date_str="2024-03-21", expiry_days=5,
+            category="Produce", subcategory="Fruit", unit_of_measure="units"
+            # No cost_per_unit_str or vendor provided
+        )
+        self.assertTrue(result.get("success"), result.get("message"))
+        self.assertIsNotNone(result.get("item_id"), "Stock item ID should be present")
+        self.assertIsNone(result.get("purchase_log_id"), "PurchaseLog ID should NOT be present when no cost info")
+
+        # Verify no PurchaseLog entry was created for this specific operation
+        # This is harder to test directly without knowing how many logs existed before.
+        # We rely on purchase_log_id being None in the result.
+
+    def test_add_item_to_list_new_product_with_cost(self):
+        # Using existing category "Produce" and subcategory "Fruit" to simplify and avoid confirmation logic for this test.
+        # This test focuses on ensuring a new product creation via add_item_to_list also logs purchase if cost is provided.
+        result_new_prod_cost = self.manager.add_item_to_list(
+            name="NewCostlyFruit", quantity_str="1 kg", purchase_date_str="2024-03-23", expiry_days=7,
+            category="Produce", subcategory="Fruit", unit_of_measure="kg", # Existing cat/subcat
+            cost_per_unit_str="3.00", vendor="Specialty Store"
+        )
+        self.assertTrue(result_new_prod_cost.get("success"), f"add_item_to_list failed: {result_new_prod_cost.get('message')}")
+        self.assertIsNotNone(result_new_prod_cost.get("item_id"))
+        self.assertIsNotNone(result_new_prod_cost.get("purchase_log_id"))
+
+        new_product = self.manager.get_product_by_name("NewCostlyFruit")
+        self.assertIsNotNone(new_product, "New product 'NewCostlyFruit' was not created.")
+
+        conn = self.manager._get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM PurchaseLog WHERE id = ?", (result_new_prod_cost["purchase_log_id"],))
+        log_entry = cursor.fetchone()
+        conn.close()
+
+        self.assertIsNotNone(log_entry, "PurchaseLog entry not found for NewCostlyFruit.")
+        self.assertEqual(log_entry["product_id"], new_product["id"])
+        self.assertEqual(log_entry["cost_per_unit"], 3.00)
+        self.assertEqual(log_entry["vendor"], "Specialty Store")
+
+
+    def test_add_item_to_list_invalid_cost(self):
+        result = self.manager.add_item_to_list(
+            name="Apples", quantity_str="1 kg", purchase_date_str="2024-03-20", expiry_days=10,
+            category="Produce", subcategory="Fruit", unit_of_measure="kg",
+            cost_per_unit_str="-1.0", vendor="Invalid Vendor" # Negative cost
+        )
+        self.assertFalse(result.get("success"))
+        self.assertIn("cannot be negative", result.get("message", "").lower())
+
+        result_text_cost = self.manager.add_item_to_list(
+            name="Apples", quantity_str="1 kg", purchase_date_str="2024-03-20", expiry_days=10,
+            category="Produce", subcategory="Fruit", unit_of_measure="kg",
+            cost_per_unit_str="abc", vendor="Invalid Vendor" # Non-numeric cost
+        )
+        self.assertFalse(result_text_cost.get("success"))
+        self.assertIn("not a valid number", result_text_cost.get("message", "").lower())
+
+
     # --- Remaining tests from previous state, ensure they still pass or adapt them ---
     def test_get_current_inventory_default_behavior(self):
         product_apples_id = self.product_ids_setup["Apples"]

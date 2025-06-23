@@ -67,7 +67,6 @@ class InventoryManager:
                     )
                 ''')
                 # Historical (Consumed) Items Table
-                # No changes needed for historical_items table in this subtask
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS historical_items (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +77,20 @@ class InventoryManager:
                         purchase_date TEXT, 
                         expiry_date TEXT,
                         consumed_date TEXT NOT NULL,
+                        cost_of_goods_used REAL,
+                        FOREIGN KEY (product_id) REFERENCES products (id)
+                    )
+                ''')
+
+                # PurchaseLog Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS PurchaseLog (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER,
+                        purchase_date TEXT NOT NULL,
+                        quantity_purchased REAL NOT NULL,
+                        cost_per_unit REAL NOT NULL,
+                        vendor TEXT,
                         FOREIGN KEY (product_id) REFERENCES products (id)
                     )
                 ''')
@@ -1848,22 +1861,36 @@ class InventoryManager:
     # This method is called by the Excel upload in app.py
     # It now relies on product_id for linking, and creates product if not found.
     def add_item_to_list(self, name, quantity_str, purchase_date_str, expiry_days,
-                         category=None, subcategory=None, par_level=0, max_holding_amount=0, # Text category/subcategory from Excel
+                         category=None, subcategory=None, par_level=0, max_holding_amount=0,
                          purchase_location=None, unit_of_measure=None,
+                         cost_per_unit_str=None, vendor=None, # New parameters for costing
                          # The following are for handling pending actions from app.py
                          confirmed_action=None, temp_category_id=None):
         """
         Adds an item to inventory. Handles product creation, category/subcategory resolution,
         and potential user confirmation steps for new categories/subcategories.
+        If cost_per_unit is provided, logs the purchase in PurchaseLog.
         """
-        print(f"LOG: add_item_to_list called with: name='{name}', quantity_str='{quantity_str}', purchase_date_str='{purchase_date_str}', expiry_days={expiry_days}, category='{category}', subcategory='{subcategory}', par_level={par_level}, max_holding_amount={max_holding_amount}, purchase_location='{purchase_location}', unit_of_measure='{unit_of_measure}', confirmed_action='{confirmed_action}', temp_category_id={temp_category_id}")
+        print(f"LOG: add_item_to_list called with: name='{name}', quantity_str='{quantity_str}', purchase_date_str='{purchase_date_str}', expiry_days={expiry_days}, category='{category}', subcategory='{subcategory}', par_level={par_level}, max_holding_amount={max_holding_amount}, purchase_location='{purchase_location}', unit_of_measure='{unit_of_measure}', cost_per_unit_str='{cost_per_unit_str}', vendor='{vendor}', confirmed_action='{confirmed_action}', temp_category_id={temp_category_id}")
 
         product_data_for_confirmation = {
             "name": name, "quantity_str": quantity_str, "purchase_date_str": purchase_date_str,
             "expiry_days": expiry_days, "category": category, "subcategory": subcategory,
             "par_level": par_level, "max_holding_amount": max_holding_amount,
-            "purchase_location": purchase_location, "unit_of_measure": unit_of_measure
+            "purchase_location": purchase_location, "unit_of_measure": unit_of_measure,
+            "cost_per_unit_str": cost_per_unit_str, "vendor": vendor # Include new fields
         }
+
+        cost_per_unit_float = None
+        if cost_per_unit_str:
+            try:
+                cost_per_unit_float = float(cost_per_unit_str)
+                if cost_per_unit_float < 0:
+                    # Add to warnings or return error, for now let's make it an error that stops processing this item
+                    return {"success": False, "message": f"Cost per unit for '{name}' cannot be negative ('{cost_per_unit_str}'). Item not added.", "warnings": []} # Assuming warnings is part of return structure
+            except ValueError:
+                 return {"success": False, "message": f"Cost per unit for '{name}' is not a valid number ('{cost_per_unit_str}'). Item not added.", "warnings": []}
+
 
         product_info = self.get_product_by_name(name)
         product_id_to_use = None
@@ -2064,32 +2091,69 @@ class InventoryManager:
             print(f"LOG: Returning because product_id_to_use is None before final inventory add for '{name}'.")
             return {"success": False, "message": f"Could not determine product ID for '{name}'. Inventory item not added.", "warnings": warnings}
 
-        try:
-            purchase_dt = date.fromisoformat(purchase_date_str)
-            # Use default_expiry_days from the product (either existing or newly created)
-            # Need to fetch the product if it was just created to get its default_expiry_days
-            # However, the expiry_days param is for THIS BATCH from Excel, not necessarily product default
-            batch_expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
-        except (ValueError, TypeError) as e:
-            print(f"LOG: Returning due to invalid date or expiry days for item '{name}'. Error: {e}")
-            return {"success": False, "message": f"Invalid purchase date '{purchase_date_str}' or expiry days '{expiry_days}' for item '{name}': {e}", "warnings": warnings}
+        # If cost_per_unit is provided, use log_purchase, which handles both PurchaseLog and inventory_items.
+        # Otherwise, use the old logic to just add to inventory_items.
+        if cost_per_unit_float is not None:
+            print(f"LOG: Cost provided for '{name}'. Using log_purchase.")
+            # Ensure quantity_str is parsed to float for log_purchase
+            try:
+                quantity_purchased_float = self._parse_quantity_string(quantity_str)
+                if quantity_purchased_float <= 0: # log_purchase also checks this, but good for consistency
+                    return {"success": False, "message": f"Quantity for '{name}' must be positive ('{quantity_str}'). Item not added.", "warnings": warnings}
+            except ValueError: # Should be caught by _parse_quantity_string if it returns non-numeric or error
+                 return {"success": False, "message": f"Invalid quantity format for '{name}' ('{quantity_str}'). Item not added.", "warnings": warnings}
 
-        try:
-            with self._get_db_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO inventory_items
-                    (product_id, name, quantity, purchase_date, expiry_date, original_quantity_string)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (product_id_to_use, name, str(quantity_str), purchase_dt.isoformat(),
-                      batch_expiry_dt.isoformat(), str(quantity_str)))
-                conn.commit()
-                item_id = cursor.lastrowid
-                print(f"LOG: Successfully added item '{name}' (Batch ID: {item_id}) to inventory_items. Expires: {batch_expiry_dt.isoformat()}") # Note: This is user-facing print
-                return {"success": True, "message": f"Item '{name}' added to inventory.", "item_id": item_id, "product_id": product_id_to_use, "warnings": warnings}
-        except sqlite3.Error as e:
-            print(f"LOG: Returning due to database error adding item '{name}' to inventory_items. Error: {e}")
-            return {"success": False, "message": f"Database error adding item '{name}' to inventory: {e}", "warnings": warnings}
+
+            log_purchase_result = self.log_purchase(
+                product_id=product_id_to_use,
+                purchase_date_str=purchase_date_str,
+                quantity_purchased_float=quantity_purchased_float,
+                cost_per_unit_float=cost_per_unit_float,
+                vendor_str=vendor
+            )
+            # Adapt the return message to be consistent with add_item_to_list's expectations
+            if log_purchase_result.get("success"):
+                return {
+                    "success": True,
+                    "message": f"Item '{name}' purchase logged and stock added.",
+                    "item_id": log_purchase_result.get("stock_item_id"), # Use stock_item_id from log_purchase
+                    "product_id": product_id_to_use,
+                    "purchase_log_id": log_purchase_result.get("purchase_log_id"),
+                    "warnings": warnings # Pass along any warnings accumulated during product/category resolution
+                }
+            else:
+                # If log_purchase failed, append its message to warnings or return directly
+                # For now, returning its message as the main message
+                return {
+                    "success": False,
+                    "message": log_purchase_result.get("message", f"Failed to log purchase for '{name}'."),
+                    "warnings": warnings
+                }
+        else: # No cost provided, just add to inventory as before
+            print(f"LOG: No cost provided for '{name}'. Adding directly to inventory_items.")
+            try:
+                purchase_dt = date.fromisoformat(purchase_date_str)
+                batch_expiry_dt = purchase_dt + timedelta(days=int(expiry_days))
+            except (ValueError, TypeError) as e: # Catches if expiry_days is not int-convertible too
+                print(f"LOG: Returning due to invalid date or expiry days for item '{name}'. Error: {e}")
+                return {"success": False, "message": f"Invalid purchase date '{purchase_date_str}' or expiry days '{expiry_days}' for item '{name}': {e}", "warnings": warnings}
+
+            try:
+                with self._get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO inventory_items
+                        (product_id, name, quantity, purchase_date, expiry_date, original_quantity_string)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (product_id_to_use, name, str(quantity_str), purchase_dt.isoformat(),
+                          batch_expiry_dt.isoformat(), str(quantity_str)))
+                    conn.commit()
+                    item_id = cursor.lastrowid
+                    print(f"LOG: Successfully added item '{name}' (Batch ID: {item_id}) to inventory_items (no cost). Expires: {batch_expiry_dt.isoformat()}")
+                    return {"success": True, "message": f"Item '{name}' added to inventory (no cost info).", "item_id": item_id, "product_id": product_id_to_use, "warnings": warnings}
+            except sqlite3.Error as e:
+                print(f"LOG: Returning due to database error adding item '{name}' to inventory_items (no cost). Error: {e}")
+                return {"success": False, "message": f"Database error adding item '{name}' to inventory (no cost): {e}", "warnings": warnings}
 
 
     def get_current_inventory(self, search_term=None, category=None, purchase_location=None,
@@ -2704,15 +2768,20 @@ class InventoryManager:
                                        (new_quantity_db_str, item_id))
                         log_messages.append(f"Partially consumed batch ID {item_id} of '{product_name_canonical}'. New qty: {new_quantity_db_str}")
                     
-                    # Log to historical_items, now including product_id
+                    # Log to historical_items, now including product_id and cost_of_goods_used
+                    weighted_avg_cost = self.get_weighted_average_cost(product_id_to_consume)
+                    cost_of_goods_this_consumption = 0.0
+                    if weighted_avg_cost is not None and weighted_avg_cost > 0: # Ensure cost is valid
+                        cost_of_goods_this_consumption = consumable_from_this_batch * weighted_avg_cost
+
                     cursor.execute('''
                         INSERT INTO historical_items 
                         (product_id, name, quantity_consumed_this_time, original_quantity_string,
-                         purchase_date, expiry_date, consumed_date) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                         purchase_date, expiry_date, consumed_date, cost_of_goods_used)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (product_id_to_consume, product_name_canonical, consumable_from_this_batch, current_original_qty_str,
                           item_stock_dict['purchase_date'], item_stock_dict['expiry_date'],
-                          date.today().isoformat()))
+                          date.today().isoformat(), cost_of_goods_this_consumption))
                     
                     consumed_amount_total_overall += consumable_from_this_batch
                     quantity_remaining_to_consume -= consumable_from_this_batch
@@ -3385,6 +3454,89 @@ class InventoryManager:
             write_to_csv_internal(f"{filename_prefix}_historical.csv", filtered_hist_export, hist_fields)
         else: print("Historical inventory empty. Skipping export.")
 
+    # --- Purchase Logging and Costing Methods ---
+    def log_purchase(self, product_id, purchase_date_str, quantity_purchased_float, cost_per_unit_float, vendor_str=None):
+        """Logs a purchase into the PurchaseLog and updates inventory stock."""
+        if not all([product_id, purchase_date_str, quantity_purchased_float is not None, cost_per_unit_float is not None]):
+            return {"success": False, "message": "Missing required fields for logging purchase (product_id, purchase_date, quantity, cost_per_unit)."}
+        if quantity_purchased_float <= 0:
+            return {"success": False, "message": "Quantity purchased must be positive."}
+        if cost_per_unit_float < 0: # Allow 0 cost, but not negative
+            return {"success": False, "message": "Cost per unit cannot be negative."}
+
+        try:
+            # Validate purchase_date_str format
+            date.fromisoformat(purchase_date_str)
+        except ValueError:
+            return {"success": False, "message": "Invalid purchase_date format. Use YYYY-MM-DD."}
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO PurchaseLog
+                    (product_id, purchase_date, quantity_purchased, cost_per_unit, vendor)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (product_id, purchase_date_str, quantity_purchased_float, cost_per_unit_float, vendor_str))
+                purchase_log_id = cursor.lastrowid
+                conn.commit() # Commit PurchaseLog entry first
+
+                # Now add to inventory stock
+                # The quantity_str for add_inventory_stock should be the total quantity purchased.
+                # add_inventory_stock will use the product's default_expiry_days.
+                stock_result = self.add_inventory_stock(
+                    product_id=product_id,
+                    quantity_str=str(quantity_purchased_float), # add_inventory_stock expects a string
+                    purchase_date_str=purchase_date_str
+                )
+
+                if stock_result.get("success"):
+                    return {
+                        "success": True,
+                        "message": f"Purchase logged (ID: {purchase_log_id}) and stock added successfully for product ID {product_id}.",
+                        "purchase_log_id": purchase_log_id,
+                        "stock_item_id": stock_result.get("stock_item_id")
+                    }
+                else:
+                    # Attempt to rollback PurchaseLog entry if stock addition failed?
+                    # For simplicity, we'll report the error. Manual correction might be needed if only stock fails.
+                    # A more robust solution would use transactions spanning both operations.
+                    return {
+                        "success": False,
+                        "message": f"Purchase logged (ID: {purchase_log_id}), but failed to add stock: {stock_result.get('message')}",
+                        "purchase_log_id": purchase_log_id
+                    }
+        except sqlite3.IntegrityError as e: # e.g. product_id doesn't exist
+            return {"success": False, "message": f"Database integrity error logging purchase: {e}. Ensure product ID exists."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error logging purchase: {e}"}
+
+    def get_weighted_average_cost(self, product_id):
+        """Calculates the weighted average cost for a product from PurchaseLog."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT SUM(quantity_purchased * cost_per_unit) as total_cost,
+                           SUM(quantity_purchased) as total_quantity
+                    FROM PurchaseLog
+                    WHERE product_id = ?
+                ''', (product_id,))
+                row = cursor.fetchone()
+
+                if row and row['total_quantity'] is not None and row['total_quantity'] > 0:
+                    return float(row['total_cost']) / float(row['total_quantity'])
+                else:
+                    # No purchases logged or total quantity is zero
+                    return 0.0 # Or None, depending on how you want to handle "no cost data"
+        except sqlite3.Error as e:
+            print(f"Database error calculating weighted average cost for product ID {product_id}: {e}")
+            return 0.0 # Or raise error
+        except TypeError: # Handles if row is None or keys are missing unexpectedly
+            print(f"Type error calculating weighted average cost for product ID {product_id}. Likely no purchase data.")
+            return 0.0
+
+
         # Projections export:
         # The original code projected demand for items in current/historical.
         # For future inventory projection, this part might change or be an additional export.
@@ -3393,7 +3545,10 @@ class InventoryManager:
         if all_current_batches_export: # Use product_ids from current batches
             for item in all_current_batches_export: unique_product_ids_for_demand_projection.add(item['product_id'])
         if historical_inv_data: # Use product_ids from historical items
-            for item in historical_inv_data: unique_product_ids_for_demand_projection.add(item['product_id'])
+            # Ensure product_id exists in hist_dict, it might be None if historical item wasn't linked
+            for hist_dict in historical_inv_data:
+                if hist_dict.get('product_id'):
+                    unique_product_ids_for_demand_projection.add(hist_dict['product_id'])
 
         if unique_product_ids_for_demand_projection:
             demand_projections = [self.project_demand(pid) for pid in sorted(list(unique_product_ids_for_demand_projection))]
@@ -3414,16 +3569,20 @@ class InventoryManager:
         # This is just an example, you'd likely iterate or select products for this export.
         # For demonstration, let's pick the first product_id if available.
         if unique_product_ids_for_demand_projection:
-            first_product_id_for_future_proj = next(iter(unique_product_ids_for_demand_projection), None)
-            if first_product_id_for_future_proj:
-                future_proj_data = self.get_future_inventory_projection(first_product_id_for_future_proj, 30) # Project 30 days
-                if future_proj_data and isinstance(future_proj_data, list) and len(future_proj_data) > 0 : # Check if it's a list of records
-                    future_proj_fields = future_proj_data[0].keys() # Assuming all dicts have same keys
-                    write_to_csv_internal(f"{filename_prefix}_future_inventory_proj_prod_{first_product_id_for_future_proj}.csv", future_proj_data, list(future_proj_fields))
-                elif isinstance(future_proj_data, dict) and not future_proj_data.get("success", True): # Handle error dict
-                    print(f"Could not generate future inventory projection for product {first_product_id_for_future_proj}: {future_proj_data.get('message')}")
-                else:
-                    print(f"No future inventory projection data generated for product {first_product_id_for_future_proj}.")
+            # Ensure the set is not empty before trying to get an iterator
+            if unique_product_ids_for_demand_projection:
+                first_product_id_for_future_proj = next(iter(unique_product_ids_for_demand_projection), None)
+                if first_product_id_for_future_proj:
+                    future_proj_data = self.get_future_inventory_projection(first_product_id_for_future_proj, 30) # Project 30 days
+                    if future_proj_data and isinstance(future_proj_data, list) and len(future_proj_data) > 0 : # Check if it's a list of records
+                        future_proj_fields = future_proj_data[0].keys() # Assuming all dicts have same keys
+                        write_to_csv_internal(f"{filename_prefix}_future_inventory_proj_prod_{first_product_id_for_future_proj}.csv", future_proj_data, list(future_proj_fields))
+                    elif isinstance(future_proj_data, dict) and not future_proj_data.get("success", True): # Handle error dict
+                        print(f"Could not generate future inventory projection for product {first_product_id_for_future_proj}: {future_proj_data.get('message')}")
+                    else:
+                        print(f"No future inventory projection data generated for product {first_product_id_for_future_proj}.")
+            else:
+                print("No product IDs available to generate future inventory projection example.")
 
 
 # --- Standalone Garden Produce Functions (Not part of InventoryManager class) ---
