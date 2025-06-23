@@ -98,7 +98,7 @@
                         'end_expiry_date': request.args.get('end_expiry_date', ''),
                         'page': current_page,
                         'per_page': per_page
-                        # Add other active filters here
+                {# Add other active filters here #}
                     } %}
 
                     {{ sortable_header('product_name', 'Product Name', sort_by, sort_order, current_filters) }}
@@ -163,7 +163,7 @@
                 'sort_by': sort_by,
                 'sort_order': sort_order,
                 'per_page': per_page
-                # Add other active filters here
+                {# Add other active filters here #}
             } %}
             {% if current_page > 1 %}
             <a href="{{ url_for('inventory_batches_view', **dict(pagination_filters, page=current_page - 1)) }}" class="button button-small">
