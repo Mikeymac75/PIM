@@ -79,7 +79,8 @@
                     {{ sortable_header('name', 'Item Name', sort_by, sort_order, current_product_filters) }}
                     <th class="projections-header text-right">Current Stock</th>
                     <th class="projections-header text-right">Avg. Daily Consumption (Last {{ projections[0].lookback_days if projections and projections[0] else 'N/A' }} days)</th>
-                    <th class="projections-header">Consumption Override</th> {# New Column #}
+                    <th class="projections-header">Consumption Override</th>
+                    <th class="projections-header text-right">Cost (Last 30 Days)</th> {# New Cost Column Header #}
                     <th class="projections-header text-center">Days to Depletion</th>
                     <th class="projections-header text-right">Projected Need (Next {{ projections[0].projection_days if projections and projections[0] else 'N/A' }} days)</th>
                 </tr>
@@ -104,11 +105,21 @@
                     <td> {# Input Box for Override #}
                         <input type="number" step="0.01" min="0" name="overrides[{{ proj.product_id }}]" value="{{ proj.consumption_override_rate | default('', true) }}" class="override-input" placeholder="e.g., 0.5">
                     </td>
+                    <td class="text-right {% if proj.cost_last_30_days > 0 %}has-cost{% else %}no-cost{% endif %}"> {# New Cost Cell #}
+                        ${{ "%.2f"|format(proj.cost_last_30_days | default(0.0)) }}
+                    </td>
                     <td class="text-center">{{ proj.days_to_depletion }}</td>
                     <td class="text-right">{{ "%.2f"|format(proj.projected_need) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
                 </tr>
                 {% endfor %}
             </tbody>
+            <tfoot> {# New Table Footer for Totals #}
+                <tr>
+                    <td colspan="4" class="text-right total-label"><strong>Total Cost (Last 30 Days):</strong></td>
+                    <td class="text-right total-value"><strong>${{ "%.2f"|format(total_cost_all_items_last_30_days | default(0.0)) }}</strong></td>
+                    <td colspan="2"></td> {# Empty cells for remaining columns #}
+                </tr>
+            </tfoot>
         </table>
     </div>
     <button type="submit" class="button button-primary" style="margin-top: 15px;"><i class="fas fa-save"></i> Save All Overrides</button> {# Save Button #}

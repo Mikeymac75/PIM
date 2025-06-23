@@ -3319,13 +3319,32 @@ class InventoryManager:
             days_to_depletion_str = "N/A (out of stock, no consumption history)"
         
         projected_need = avg_daily_consumption * projection_days
-        
+
+        # Calculate cost over the last 30 days
+        cost_last_30_days = 0.0
+        thirty_days_ago_dt = today - timedelta(days=30)
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT SUM(cost_of_goods_used) as total_cost
+                    FROM historical_items
+                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date < ?
+                ''', (product_id, thirty_days_ago_dt.isoformat(), today.isoformat()))
+                cost_row = cursor.fetchone()
+                if cost_row and cost_row['total_cost'] is not None:
+                    cost_last_30_days = float(cost_row['total_cost'])
+        except sqlite3.Error as e:
+            print(f"Database error calculating cost_last_30_days for product ID {product_id}: {e}")
+            # Keep cost_last_30_days as 0.0 on error
+
         result = {
             "product_id": product_id, "product_name": product_name, "unit_of_measure": product_unit,
             "current_stock": current_quantity_sum,
             "avg_daily_consumption": avg_daily_consumption, "days_to_depletion": days_to_depletion_str,
             "projected_need": projected_need, "lookback_days": lookback_days, "projection_days": projection_days,
             "consumption_override_rate": product.get('consumption_override_rate'), # Ensure it's in the result
+            "cost_last_30_days": cost_last_30_days, # Add the new cost data
             "success": True
         }
 
