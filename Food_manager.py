@@ -3756,6 +3756,68 @@ class InventoryManager:
             print(f"Type error calculating weighted average cost for product ID {product_id}. Likely no purchase data.")
             return 0.0
 
+    def log_multiple_purchases(self, purchases_data_list):
+        """
+        Logs multiple purchases from a list of purchase data.
+        Each item in purchases_data_list is a dict:
+        {
+            "product_id": int,
+            "purchase_date_str": "YYYY-MM-DD",
+            "quantity_purchased_float": float,
+            "cost_per_unit_float": float,
+            "vendor_str": str_or_none
+        }
+        Returns a summary of successes and failures.
+        """
+        success_count = 0
+        failure_count = 0
+        results_details = [] # List of dicts: {"product_id": X, "success": True/False, "message": "..."}
+
+        for purchase_data in purchases_data_list:
+            product_id = purchase_data.get("product_id")
+            purchase_date_str = purchase_data.get("purchase_date_str")
+            quantity_purchased_float = purchase_data.get("quantity_purchased_float")
+            cost_per_unit_float = purchase_data.get("cost_per_unit_float")
+            vendor_str = purchase_data.get("vendor_str")
+
+            # Basic check for required fields in each item
+            if not all([product_id is not None, purchase_date_str,
+                        quantity_purchased_float is not None, cost_per_unit_float is not None]):
+                failure_count += 1
+                results_details.append({
+                    "product_id": product_id, # Might be None if missing
+                    "success": False,
+                    "message": "Missing essential data for purchase."
+                })
+                continue
+
+            # Call the existing log_purchase method for each item
+            result = self.log_purchase(
+                product_id=product_id,
+                purchase_date_str=purchase_date_str,
+                quantity_purchased_float=quantity_purchased_float,
+                cost_per_unit_float=cost_per_unit_float,
+                vendor_str=vendor_str
+            )
+
+            if result.get("success"):
+                success_count += 1
+            else:
+                failure_count += 1
+
+            results_details.append({
+                "product_id": product_id,
+                "success": result.get("success"),
+                "message": result.get("message", "Unknown error during individual purchase logging.")
+            })
+
+        return {
+            "overall_success": failure_count == 0, # True if all items succeeded
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "results_details": results_details
+        }
+
 
         # Projections export:
         # The original code projected demand for items in current/historical.
