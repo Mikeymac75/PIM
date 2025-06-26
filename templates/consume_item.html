@@ -211,9 +211,9 @@
                     fetch("{{ url_for('consume_item_view') }}", {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
+                            'Content-Type': 'application/json'
                             // Add CSRF token header if your Flask app uses Flask-WTF or similar
-                            // 'X-CSRFToken': '{{ csrf_token() }}'
+                            // Example: 'X-CSRFToken': 'some_token_if_needed'
                         },
                         body: JSON.stringify(payload)
                     })
