@@ -1493,6 +1493,7 @@ def shopping_list_view():
 @app.route('/shopping_list/log_purchases', methods=['POST'])
 def log_shopping_list_purchases_view():
     if request.method == 'POST':
+        app.logger.info(f"Shopping list log purchases request.form: {request.form}") # Log received form data
         purchase_date_str = request.form.get('purchase_date')
         form_errors = []
         purchases_to_log = []
@@ -1591,10 +1592,13 @@ def log_shopping_list_purchases_view():
             })
 
         if not purchases_to_log:
-            if not any(key.startswith("include_item_") for key in request.form):
-                 flash("No items were selected for purchase.", "info")
-            else: # Items were selected, but all had validation errors
-                 flash("No items could be logged due to validation errors. See details above.", "warning")
+            num_included_items = sum(1 for key in request.form if key.startswith("include_item_"))
+            if num_included_items == 0 :
+                 flash("No items were selected for purchase. Please check the boxes next to items you wish to log.", "info")
+            elif form_errors: # Errors specific to purchase_date
+                 flash("Could not log purchases due to form errors (e.g., missing purchase date).", "error")
+            else: # Items were selected, no general form errors, but all individual items had validation issues.
+                 flash("No items could be logged due to validation errors for each selected item. See details above.", "warning")
             return redirect(url_for('shopping_list_view'))
 
         # Call the manager method
