@@ -21,27 +21,27 @@
             </div>
         </div>
 
-        <div id="item_fields">
-            <div class="form-group">
-                <label for="item_name">Item Name:</label>
+        <div class="form-group">
+            <label for="consumption_date">Date of Consumption:</label>
+            <input type="date" id="consumption_date" name="consumption_date" class="form-control" value="{{ today }}">
+        </div>
+
+        <div id="item_fields" style="display: block;"> <!-- Default to showing item fields -->
+            <p>Select items to consume (max 10):</p>
+            <div id="item_list_container" class="item-list-container">
                 {% if item_names %}
-                    <select id="item_name" name="item_name" class="form-control">
-                        <option value="">-- Select an Item --</option>
-                        {% for name in item_names %}
-                            <option value="{{ name }}" {% if form_data.get('item_name') == name %}selected{% endif %}>{{ name }}</option>
-                        {% endfor %}
-                    </select>
+                    {% for name in item_names %}
+                    <div class="item-row">
+                        <input type="checkbox" id="item_{{ loop.index }}" name="selected_items" value="{{ name }}" class="item-checkbox">
+                        <label for="item_{{ loop.index }}" class="item-label">{{ name }}</label>
+                        <input type="number" name="quantity_{{ name }}" class="quantity-input form-control" placeholder="Qty" min="0.01" step="any" style="display:none; width: 80px; margin-left: 10px;" disabled>
+                    </div>
+                    {% endfor %}
                 {% else %}
-                    <p class="empty-message" style="margin-top: 5px;">No items currently in inventory to consume individually.</p>
+                    <p class="empty-message">No items currently in inventory to consume individually.</p>
                 {% endif %}
             </div>
-
-            <div class="form-group">
-                <label for="quantity_consumed">Quantity to Consume:</label>
-                <input type="number" id="quantity_consumed" name="quantity_consumed" class="form-control" 
-                       value="{{ form_data.get('quantity_consumed', '') }}" min="0.01" step="any">
-                <small class="help-text">Enter a positive number (e.g., 0.5, 1, 2). For items like "1 loaf", enter 1.</small>
-            </div>
+            <p id="item_limit_message" style="color:red; display:none;">Maximum 10 items can be selected.</p>
         </div>
 
         <div id="recipe_fields" style="display:none;">
@@ -55,16 +55,37 @@
                         {% endfor %}
                     </select>
                 {% else %}
-                    <p class="empty-message" style="margin-top: 5px;">No recipes available to consume.</p>
+                    <p class="empty-message">No recipes available to consume.</p>
                 {% endif %}
             </div>
         </div>
         
-        {# The button text will be updated by JS, or simply "Submit Consumption" #}
-        <button type="submit" class="button" id="submitButton"><i class="fas fa-check-circle"></i> Consume</button>
+        <button type="button" class="button" id="submitButton"><i class="fas fa-check-circle"></i> Consume Selected</button>
     </form>
 
     <p style="margin-top: 20px;"><a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Home</a></p>
+
+    <style>
+        .item-list-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+        .item-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .item-label {
+            margin-left: 5px;
+            flex-grow: 1;
+        }
+        .quantity-input {
+            /* Styles already applied via class form-control and inline */
+        }
+    </style>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -72,36 +93,217 @@
             const typeRecipeRadio = document.getElementById('type_recipe');
             const itemFieldsDiv = document.getElementById('item_fields');
             const recipeFieldsDiv = document.getElementById('recipe_fields');
-            const itemNameSelect = document.getElementById('item_name');
-            const quantityConsumedInput = document.getElementById('quantity_consumed');
+            const consumptionDateInput = document.getElementById('consumption_date');
             const recipeNameSelect = document.getElementById('recipe_name_to_consume');
             const submitButton = document.getElementById('submitButton');
+            const form = document.getElementById('consumeForm');
+            const itemCheckboxes = document.querySelectorAll('.item-checkbox');
+            const itemLimitMessage = document.getElementById('item_limit_message');
+            const MAX_ITEMS = 10;
+
+            function updateCheckedCountAndLimit() {
+                let checkedCount = 0;
+                itemCheckboxes.forEach(cb => {
+                    if (cb.checked) checkedCount++;
+                });
+
+                if (checkedCount >= MAX_ITEMS) {
+                    itemLimitMessage.style.display = 'block';
+                    itemCheckboxes.forEach(cb => {
+                        if (!cb.checked) cb.disabled = true;
+                    });
+                } else {
+                    itemLimitMessage.style.display = 'none';
+                    itemCheckboxes.forEach(cb => {
+                        cb.disabled = false;
+                    });
+                }
+            }
+
+            itemCheckboxes.forEach(checkbox => {
+                const itemName = checkbox.value;
+                const quantityInput = document.querySelector(`input[name="quantity_${itemName}"]`);
+
+                checkbox.addEventListener('change', function() {
+                    if (this.checked) {
+                        if (quantityInput) {
+                            quantityInput.style.display = 'inline-block';
+                            quantityInput.disabled = false;
+                            quantityInput.required = true;
+                        }
+                    } else {
+                        if (quantityInput) {
+                            quantityInput.style.display = 'none';
+                            quantityInput.disabled = true;
+                            quantityInput.required = false;
+                            quantityInput.value = ''; // Clear value
+                        }
+                    }
+                    updateCheckedCountAndLimit();
+                });
+            });
 
             function toggleFields() {
                 if (typeItemRadio.checked) {
                     itemFieldsDiv.style.display = 'block';
                     recipeFieldsDiv.style.display = 'none';
-                    // Make item fields required, recipe fields not
-                    if(itemNameSelect) itemNameSelect.required = true;
-                    quantityConsumedInput.required = true;
                     if(recipeNameSelect) recipeNameSelect.required = false;
-                    submitButton.innerHTML = '<i class="fas fa-minus-circle"></i> Consume Item';
+                    submitButton.innerHTML = '<i class="fas fa-check-circle"></i> Consume Selected Items';
+                    submitButton.type = 'button';
+                    updateCheckedCountAndLimit(); // Apply limit logic if switching to item view
                 } else { // Recipe selected
                     itemFieldsDiv.style.display = 'none';
                     recipeFieldsDiv.style.display = 'block';
-                    // Make recipe field required, item fields not
-                    if(itemNameSelect) itemNameSelect.required = false;
-                    quantityConsumedInput.required = false;
                     if(recipeNameSelect) recipeNameSelect.required = true;
                     submitButton.innerHTML = '<i class="fas fa-blender"></i> Consume Recipe Ingredients';
+                    submitButton.type = 'submit';
+                    itemLimitMessage.style.display = 'none'; // Hide limit message
+                    itemCheckboxes.forEach(cb => cb.disabled = false); // Re-enable all checkboxes
                 }
             }
 
             typeItemRadio.addEventListener('change', toggleFields);
             typeRecipeRadio.addEventListener('change', toggleFields);
+            toggleFields(); // Initial call
 
-            // Initial call to set correct visibility and requirements
-            toggleFields();
+            submitButton.addEventListener('click', function(event) {
+                if (typeItemRadio.checked) {
+                    event.preventDefault(); // Prevent default form submission for item type
+
+                    const selectedDate = consumptionDateInput.value;
+                    if (!selectedDate) {
+                        alert("Please select a consumption date.");
+                        return;
+                    }
+
+                    const itemsToConsume = [];
+                    let hasErrors = false;
+                    let anythingSelected = false;
+
+                    itemCheckboxes.forEach(cb => {
+                        if (cb.checked) {
+                            anythingSelected = true;
+                            const itemName = cb.value;
+                            const quantityInput = document.querySelector(`input[name="quantity_${itemName}"]`);
+                            const quantity = quantityInput ? quantityInput.value : '';
+
+                            if (!quantity || parseFloat(quantity) <= 0) {
+                                alert(`Please enter a valid positive quantity for ${itemName}.`);
+                                quantityInput.focus();
+                                hasErrors = true;
+                                return; // exit forEach iteration for this item
+                            }
+                            itemsToConsume.push({ item_name: itemName, quantity: quantity });
+                        }
+                    });
+
+                    if (hasErrors) return;
+                    if (!anythingSelected) {
+                        alert("Please select at least one item to consume.");
+                        return;
+                    }
+
+                    const payload = {
+                        consumption_date: selectedDate,
+                        items: itemsToConsume
+                    };
+
+                    fetch("{{ url_for('consume_item_view') }}", {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            // Add CSRF token header if your Flask app uses Flask-WTF or similar
+                            // 'X-CSRFToken': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify(payload)
+                    })
+                    .then(response => response.json().then(data => ({ status: response.status, body: data })))
+                    .then(({ status, body }) => {
+                        // Clear existing flash messages dynamically
+                        const existingFlashes = document.querySelectorAll('.flash-message-container .alert');
+                        existingFlashes.forEach(flash => flash.remove());
+
+                        if (body.details && Array.isArray(body.details)) {
+                            body.details.forEach(detail => {
+                                const alertType = detail.success ? 'success' : 'danger';
+                                const message = `Item '${detail.item_name}': ${detail.message}`;
+                                displayFlashMessage(message, alertType);
+                            });
+                        } else if (body.message) { // General message if no details array
+                             displayFlashMessage(body.message, body.success ? 'success' : 'danger');
+                        }
+
+
+                        if (status === 200 || status === 207 ) { // OK or Multi-Status
+                            if (body.success || (status === 207 && body.details.some(d => d.success))) {
+                                // If all items submitted were processed successfully (even if some had non-fatal issues but returned success:true from manager)
+                                const allSubmittedSuccessfully = body.details && body.details.every(d => d.success);
+                                if (status === 200 && body.success && allSubmittedSuccessfully) {
+                                    // Redirect only if overall success and all individual items succeeded
+                                    window.location.href = "{{ url_for('current_inventory_view') }}";
+                                } else if (status === 207) {
+                                    // Partial success, stay on page, messages already shown
+                                }
+                                // If status 200 but not all individual items succeeded (e.g. some item not found but others ok),
+                                // it would be a 207 or a 400 with details.
+                                // The key is that a full success (all items processed without error) leads to redirect.
+                            }
+                        }
+                        // Errors like 400, 500 are handled by the general message display above if body.message is populated
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        displayFlashMessage('An unexpected error occurred. Please try again.', 'danger');
+                    });
+
+                } else {
+                    // For recipe type, let the form submit traditionally
+                    form.submit();
+                }
+            });
+
+            function displayFlashMessage(message, category) {
+                const container = document.querySelector('.flash-message-container') || createFlashContainer();
+                const alertDiv = document.createElement('div');
+                alertDiv.className = `alert alert-${category} alert-dismissible fade show`;
+                alertDiv.role = 'alert';
+                alertDiv.innerHTML = `
+                    ${message}
+                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                `;
+                container.appendChild(alertDiv);
+                // Auto-dismiss after 7 seconds
+                setTimeout(() => {
+                    if (alertDiv.parentElement) { // Check if still in DOM
+                         // Use Bootstrap's jQuery plugin to close if available, otherwise direct remove
+                        if (typeof(bootstrap) !== 'undefined' && bootstrap.Alert) {
+                            new bootstrap.Alert(alertDiv).close();
+                        } else if (typeof($) !== 'undefined' && $.fn.alert) {
+                             $(alertDiv).alert('close');
+                        } else {
+                            alertDiv.remove();
+                        }
+                    }
+                }, 7000);
+            }
+
+            function createFlashContainer() {
+                let container = document.querySelector('.flash-message-container');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.className = 'flash-message-container';
+                    // Insert it after the page header, or adjust as needed
+                    const pageHeader = document.querySelector('.page-header');
+                    if (pageHeader && pageHeader.parentNode) {
+                        pageHeader.parentNode.insertBefore(container, pageHeader.nextSibling);
+                    } else {
+                        document.body.insertBefore(container, document.body.firstChild);
+                    }
+                }
+                return container;
+            }
         });
     </script>
 {% endblock %}
