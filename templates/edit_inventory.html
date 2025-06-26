@@ -6,7 +6,6 @@
 <h1>Edit Inventory</h1>
 <form method="POST" action="{{ url_for('edit_inventory_view') }}">
     {% if selected_product_id %}
-    {% if selected_product_id %}
     <input type="hidden" name="product_id_for_redirect" value="{{ selected_product_id }}">
     {% endif %}
     <div>
