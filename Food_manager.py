@@ -2632,13 +2632,21 @@ class InventoryManager:
             recommended_purchase_amount = max(0, round(recommended_purchase_amount, 2))
 
             if recommended_purchase_amount > 0:
-                # Find the earliest expiry date for this product from inventory for display (optional)
                 earliest_expiry_date_str = "N/A"
-                relevant_inventory_batches = [
-                    item for item in inventory_with_product_details if item['product_id'] == product_id
-                ]
-                if relevant_inventory_batches:
-                    earliest_expiry_date_str = min(item['expiry_date'] for item in relevant_inventory_batches).isoformat()
+                try:
+                    with self._get_db_connection() as conn_inner: # Use a new connection or ensure thread safety if reusing
+                        cursor_inner = conn_inner.cursor()
+                        cursor_inner.execute('''
+                            SELECT MIN(expiry_date) as min_expiry
+                            FROM inventory_items
+                            WHERE product_id = ? AND CAST(quantity AS REAL) > 0
+                        ''', (product_id,))
+                        expiry_row = cursor_inner.fetchone()
+                        if expiry_row and expiry_row['min_expiry']:
+                            earliest_expiry_date_str = expiry_row['min_expiry']
+                except sqlite3.Error as e_expiry:
+                    print(f"Database error getting earliest expiry date for product ID {product_id} in shopping list: {e_expiry}")
+                    # earliest_expiry_date_str remains "N/A"
 
                 # Current quantity display string (sum of original strings might be complex, so just use numeric total with unit)
                 current_quantity_display = f"{current_numeric_quantity:.2f} {unit_of_measure}"
