@@ -6,68 +6,124 @@
 <h1>Edit Inventory</h1>
 <form method="POST" action="{{ url_for('edit_inventory_view') }}">
     {% if selected_product_id %}
+    {% if selected_product_id %}
     <input type="hidden" name="product_id_for_redirect" value="{{ selected_product_id }}">
     {% endif %}
     <div>
-        <label for="include_in_projections">Include in Demand Projections:</label>
-        <input type="checkbox" id="include_in_projections" name="include_in_projections" value="true">
-    </div>
-    <div>
         <label for="product_id">Product:</label>
-        <select id="product_id" name="product_id" required>
+        <select id="product_id" name="product_id_dropdown" required> {# Changed name to avoid conflict if product_id_for_redirect is also named product_id #}
             <option value="">Select a Product...</option>
             {% for product in products %}
-            <option value="{{ product.id }}" {% if selected_product_id == product.id|string %}selected{% endif %}>
+            <option value="{{ product.id }}" {% if selected_product_id|string == product.id|string %}selected{% endif %}>
                 {{ product.name }}
             </option>
             {% endfor %}
         </select>
     </div>
+    <hr>
+    <div>
+        <label for="include_in_projections">Include Changes in Demand Projections:</label>
+        <input type="checkbox" id="include_in_projections" name="include_in_projections" value="true" checked>
+        <small>(Uncheck if this is a data correction that should not affect historical consumption rates)</small>
+    </div>
+    <hr>
 
-    {% if inventory_batches %}
-    <h2>Inventory Batches for {{ selected_product_name }}</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Batch ID</th>
-                <th>Current Quantity</th>
-                <th>Purchase Date</th>
-                <th>Expiry Date</th>
-                <th>New Quantity</th>
-                <th>New Purchase Date</th>
-                <th>New Expiry Date</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for batch in inventory_batches %}
-            <tr>
-                <td>{{ batch.id }}<input type="hidden" name="batch_id_{{ loop.index0 }}" value="{{ batch.id }}"></td>
-                <td>{{ batch.quantity }}</td>
-                <td>{{ batch.purchase_date.isoformat() if batch.purchase_date else 'N/A' }}</td>
-                <td>{{ batch.expiry_date.isoformat() if batch.expiry_date else 'N/A' }}</td>
-                <td><input type="number" step="any" name="quantity_{{ loop.index0 }}" value="{{ batch.quantity }}"></td>
-                <td><input type="date" name="purchase_date_{{ loop.index0 }}" value="{{ batch.purchase_date.isoformat() if batch.purchase_date else '' }}"></td>
-                <td><input type="date" name="expiry_date_{{ loop.index0 }}" value="{{ batch.expiry_date.isoformat() if batch.expiry_date else '' }}"></td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    {% if active_inventory_batches %}
+    <h2>Active Inventory Batches for {{ selected_product_name }}</h2>
+    <div class="table-responsive-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Batch ID</th>
+                    <th>Current Quantity</th>
+                    <th>Unit</th>
+                    <th>Purchase Date</th>
+                    <th>Expiry Date</th>
+                    <th>New Quantity</th>
+                    <th>New Purchase Date</th>
+                    <th>New Expiry Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for batch in active_inventory_batches %}
+                <tr>
+                    <td>{{ batch.id }}<input type="hidden" name="active_batch_id_{{ loop.index0 }}" value="{{ batch.id }}"></td>
+                    <td>{{ batch.quantity }}</td>
+                    <td>{{ batch.unit_of_measure }}</td>
+                    <td>{{ batch.purchase_date.isoformat() if batch.purchase_date else 'N/A' }}</td>
+                    <td>{{ batch.expiry_date.isoformat() if batch.expiry_date else 'N/A' }}</td>
+                    <td><input type="number" step="any" name="active_quantity_{{ loop.index0 }}" value="{{ batch.quantity }}"></td>
+                    <td><input type="date" name="active_purchase_date_{{ loop.index0 }}" value="{{ batch.purchase_date.isoformat() if batch.purchase_date else '' }}"></td>
+                    <td><input type="date" name="active_expiry_date_{{ loop.index0 }}" value="{{ batch.expiry_date.isoformat() if batch.expiry_date else '' }}"></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% elif selected_product_id %}
-    <p>No inventory batches found for {{ selected_product_name }}.</p>
+    <p>No active inventory batches found for {{ selected_product_name }}.</p>
     {% endif %}
 
-    <div>
-        <button type="submit" class="button"><i class="fas fa-save"></i> Save Changes</button>
+    {% if recently_consumed_batches %}
+    <h2>Recently Consumed Batches for {{ selected_product_name }} (Return to Stock)</h2>
+    <p><small>These are batches that have had quantities consumed from them. If a consumption was an error, you can return a quantity to stock here. This will create a new inventory batch.</small></p>
+    <div class="table-responsive-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Original Purchase Date</th>
+                    <th>Original Expiry Date</th>
+                    <th>Original Qty String</th>
+                    <th>Total Consumed</th>
+                    <th>Unit</th>
+                    <th>Last Consumed On</th>
+                    <th>Quantity to Return to Stock</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for batch in recently_consumed_batches %}
+                <tr>
+                    <td>
+                        {{ batch.purchase_date if batch.purchase_date else 'N/A' }}
+                        <input type="hidden" name="consumed_product_id_{{ loop.index0 }}" value="{{ batch.product_id }}">
+                        <input type="hidden" name="consumed_product_name_{{ loop.index0 }}" value="{{ batch.product_name }}">
+                        <input type="hidden" name="consumed_purchase_date_{{ loop.index0 }}" value="{{ batch.purchase_date if batch.purchase_date else '' }}">
+                        <input type="hidden" name="consumed_expiry_date_{{ loop.index0 }}" value="{{ batch.expiry_date if batch.expiry_date else '' }}">
+                        <input type="hidden" name="consumed_original_qty_str_{{ loop.index0 }}" value="{{ batch.original_quantity_string if batch.original_quantity_string else '' }}">
+                    </td>
+                    <td>{{ batch.expiry_date if batch.expiry_date else 'N/A' }}</td>
+                    <td>{{ batch.original_quantity_string if batch.original_quantity_string else 'N/A' }}</td>
+                    <td>{{ "%.2f"|format(batch.total_quantity_consumed_from_batch) if batch.total_quantity_consumed_from_batch is number else batch.total_quantity_consumed_from_batch }}</td>
+                    <td>{{ batch.unit_of_measure if batch.unit_of_measure else 'N/A' }}</td>
+                    <td>{{ batch.last_consumed_date if batch.last_consumed_date else 'N/A' }}</td>
+                    <td><input type="number" step="any" name="consumed_return_quantity_{{ loop.index0 }}" placeholder="Enter qty to return"></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
+    {% elif selected_product_id %}
+    <p>No recently consumed batch history found for {{ selected_product_name }} to return to stock.</p>
+    {% endif %}
+
+    {% if selected_product_id %}
+    <div style="margin-top: 20px;">
+        <button type="submit" class="button"><i class="fas fa-save"></i> Save All Changes</button>
+    </div>
+    {% endif %}
 </form>
 
 <script>
-    // Add event listener to product dropdown to reload page with selected product
-    document.getElementById('product_id').addEventListener('change', function() {
-        if (this.value) {
-            window.location.href = "{{ url_for('edit_inventory_view') }}?product_id=" + this.value;
-        } else {
-            window.location.href = "{{ url_for('edit_inventory_view') }}";
+    document.addEventListener('DOMContentLoaded', function() {
+        const productDropdown = document.getElementById('product_id');
+        if (productDropdown) {
+            productDropdown.addEventListener('change', function() {
+                if (this.value) {
+                    window.location.href = "{{ url_for('edit_inventory_view') }}?product_id=" + this.value;
+                } else {
+                    window.location.href = "{{ url_for('edit_inventory_view') }}";
+                }
+            });
         }
     });
 </script>
