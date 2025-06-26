@@ -381,17 +381,21 @@ def consume_item_view():
             if request.is_json:
                 data = request.get_json()
                 items_to_consume = data.get('items') # Expecting a list of {'item_name': name, 'quantity': qty}
-                consumption_date = data.get('consumption_date', date.today().isoformat()) # Optional date
+                consumption_date_str = data.get('consumption_date', date.today().isoformat()) # Optional date
 
                 if not items_to_consume or not isinstance(items_to_consume, list):
                     return jsonify({"success": False, "message": "Invalid data: 'items' array is required."}), 400
 
-                # TODO: Add validation for consumption_date format if provided
+                # Validate consumption_date_str format before passing to manager
+                if consumption_date_str:
+                    try:
+                        date.fromisoformat(consumption_date_str)
+                    except ValueError:
+                        return jsonify({"success": False, "message": f"Invalid consumption_date format: {consumption_date_str}. Use YYYY-MM-DD."}), 400
 
-                results = manager.consume_multiple_items(items_to_consume)
+                results = manager.consume_multiple_items(items_to_consume, consumption_date_str=consumption_date_str)
 
                 # Process results for JSON response
-                # For now, returning the raw results from manager.
                 # Could also summarize:
                 success_count = sum(1 for r in results if r.get("success"))
                 failure_count = len(results) - success_count
