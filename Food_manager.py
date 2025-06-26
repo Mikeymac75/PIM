@@ -2515,6 +2515,69 @@ class InventoryManager:
             print(f"Database error getting inventory batch count: {e}")
             return 0
 
+    def get_recently_consumed_batch_info(self, product_id, limit=10):
+        """
+        Retrieves information about recently consumed batches for a given product_id.
+        It identifies distinct original batches from historical_items by grouping
+        on product_id, name, purchase_date, and expiry_date.
+        It then sums the total quantity consumed from each of these distinct original batches
+        and orders them by the most recent consumption date.
+        """
+        if not product_id:
+            return []
+        try:
+            valid_product_id = int(product_id)
+        except ValueError:
+            print(f"Invalid product_id format for get_recently_consumed_batch_info: {product_id}")
+            return []
+
+        query = """
+            SELECT
+                hi.product_id,
+                hi.name AS product_name, -- Name at the time of consumption, usually product name
+                hi.purchase_date,        -- Original purchase date of the batch
+                hi.expiry_date,          -- Original expiry date of the batch
+                hi.original_quantity_string, -- Original quantity string of the batch when it was created
+                SUM(hi.quantity_consumed_this_time) AS total_quantity_consumed_from_batch,
+                MAX(hi.consumed_date) AS last_consumed_date,
+                p.unit_of_measure -- Get unit of measure from products table
+            FROM historical_items hi
+            LEFT JOIN products p ON hi.product_id = p.id
+            WHERE hi.product_id = ?
+            GROUP BY
+                hi.product_id,
+                hi.name,
+                hi.purchase_date,
+                hi.expiry_date,
+                hi.original_quantity_string,
+                p.unit_of_measure
+            ORDER BY
+                last_consumed_date DESC
+            LIMIT ?;
+        """
+        consumed_batches_info = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (valid_product_id, limit))
+                rows = cursor.fetchall()
+                for row in rows:
+                    batch_info = dict(row)
+                    # Convert date strings to date objects if needed by template, or leave as strings
+                    # For now, keeping as strings from DB.
+                    # Example:
+                    # if batch_info.get('purchase_date'):
+                    #     batch_info['purchase_date'] = date.fromisoformat(batch_info['purchase_date'])
+                    # if batch_info.get('expiry_date'):
+                    #     batch_info['expiry_date'] = date.fromisoformat(batch_info['expiry_date'])
+                    # if batch_info.get('last_consumed_date'):
+                    #     batch_info['last_consumed_date'] = date.fromisoformat(batch_info['last_consumed_date'])
+                    consumed_batches_info.append(batch_info)
+        except sqlite3.Error as e:
+            print(f"Database error fetching recently consumed batch info for product ID {valid_product_id}: {e}")
+
+        return consumed_batches_info
+
     def get_inventory_batches_for_product(self, product_id, limit=None, order_by_purchase_desc=False, order_by_id_desc=False):
         """
         Retrieves specific inventory batches for a given product_id.
@@ -3204,6 +3267,78 @@ class InventoryManager:
         
         print("---------------------------------------\n")
         return expiring_items_list
+
+    def return_consumed_batch_to_stock(self, product_id, product_name, purchase_date_str, expiry_date_str,
+                                       original_quantity_at_creation_str, # This might be the new quantity or original, clarify usage
+                                       quantity_to_return_str, include_in_projections):
+        """
+        Returns a previously consumed batch (or part of it) to stock.
+        This involves creating a new inventory_item record and potentially
+        logging a reverse transaction in historical_items.
+        """
+        try:
+            valid_product_id = int(product_id)
+            quantity_to_return_float = self._parse_quantity_string(quantity_to_return_str)
+            if quantity_to_return_float <= 0:
+                return {"success": False, "message": "Quantity to return must be positive."}
+
+            # Validate dates
+            date.fromisoformat(purchase_date_str)
+            date.fromisoformat(expiry_date_str)
+
+        except ValueError as ve:
+            return {"success": False, "message": f"Invalid input data: {ve}"}
+        except TypeError as te:
+            return {"success": False, "message": f"Missing or invalid input data type: {te}"}
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+
+                # Add the returned quantity as a new batch in inventory_items
+                # The 'original_quantity_string' for this new batch will be the quantity_to_return_str itself.
+                cursor.execute('''
+                    INSERT INTO inventory_items
+                    (product_id, name, quantity, purchase_date, expiry_date, original_quantity_string)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (valid_product_id, product_name, quantity_to_return_str, purchase_date_str,
+                      expiry_date_str, quantity_to_return_str))
+                new_batch_id = cursor.lastrowid
+                log_message = f"Batch ID {new_batch_id} created for returned stock of '{product_name}' (Qty: {quantity_to_return_str})."
+
+                if include_in_projections:
+                    # Log a "negative consumption" to offset previous consumption records for projection purposes.
+                    # Cost calculation for this reversal:
+                    # Use weighted average cost of the product. If cost is positive, the reversal is negative cost.
+                    weighted_avg_cost = self.get_weighted_average_cost(valid_product_id)
+                    cost_of_goods_returned = 0.0
+                    if weighted_avg_cost is not None and weighted_avg_cost > 0:
+                        cost_of_goods_returned = - (quantity_to_return_float * weighted_avg_cost)
+
+                    # The 'original_quantity_string' for this historical entry could be the one from the consumed batch
+                    # if we want to link it back, or None if not directly relevant for this reversal log.
+                    # For now, let's use the quantity_to_return_str or original_quantity_at_creation_str if it's more appropriate.
+                    # Using original_quantity_at_creation_str to signify the context of the batch being returned.
+                    cursor.execute('''
+                        INSERT INTO historical_items
+                        (product_id, name, quantity_consumed_this_time, original_quantity_string,
+                         purchase_date, expiry_date, consumed_date, cost_of_goods_used)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (valid_product_id, product_name, -quantity_to_return_float,
+                          original_quantity_at_creation_str, # Context of original batch
+                          purchase_date_str, expiry_date_str, # Dates of original batch
+                          date.today().isoformat(), cost_of_goods_returned))
+                    log_message += f" Negative consumption of {-quantity_to_return_float} units recorded for projections."
+
+                conn.commit()
+                return {"success": True, "message": log_message, "new_batch_id": new_batch_id}
+
+        except sqlite3.Error as e:
+            print(f"Database error returning batch to stock for product ID {valid_product_id}: {e}")
+            return {"success": False, "message": f"Database error: {e}"}
+        except Exception as e_gen:
+            print(f"Unexpected error returning batch to stock for product ID {valid_product_id}: {e_gen}")
+            return {"success": False, "message": f"Unexpected error: {str(e_gen)}"}
 
     def get_inventory_concerns(self, product_id):
         """
