@@ -221,6 +221,28 @@ class InventoryManager:
             print(f"Database error in get_all_products: {e}")
             return []
 
+    def get_product_by_name(self, product_name):
+        """
+        Retrieves a single product by its name (case-insensitive).
+        Joins with categories and subcategories to include their names.
+        """
+        if not product_name or not isinstance(product_name, str):
+            return None
+
+        sql = """
+            SELECT p.*, c.name as category_name, s.name as subcategory_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN subcategories s ON p.subcategory_id = s.id
+            WHERE LOWER(p.name) = ?
+        """
+        try:
+            # Using .strip() to handle potential leading/trailing whitespace in input name
+            return self._execute_query(sql, (product_name.lower().strip(),), fetch_one=True)
+        except sqlite3.Error as e:
+            print(f"Database error in get_product_by_name for '{product_name}': {e}")
+            return None
+
     def get_category_name_by_id(self, category_id):
         if not isinstance(category_id, int): return None
         try:
