@@ -365,14 +365,34 @@ def consume_item_view():
         consumption_type = request.form.get('consumption_type', 'item') # Default to 'item'
 
         if consumption_type == 'recipe':
+            # This block is now simplified. The JavaScript on consume_item.html
+            # will change the form's action to POST directly to make_recipe_view.
+            # This server-side Python redirect for recipes is less likely to be hit
+            # if JS is enabled. If JS is disabled, the form should ideally still target
+            # make_recipe_view.
+            # For robustness, if it *does* hit here (e.g. JS disabled and form action not updated):
             recipe_name_to_consume = request.form.get('recipe_name_to_consume')
+            num_batches_str = request.form.get('num_batches', '1') # Standardized to 'num_batches'
+
             if not recipe_name_to_consume:
                 flash("Please select a recipe to consume.", 'error')
-                # item_names and all_recipes are already fetched
-                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
-            else:
-                # Redirect to the make_recipe_view, which handles the actual consumption
-                return redirect(url_for('make_recipe_view', recipe_name=recipe_name_to_consume))
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form, today=date.today().isoformat())
+
+            try:
+                num_batches = int(num_batches_str)
+                if num_batches <= 0:
+                    flash("Number of batches must be a positive integer.", 'error')
+                    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form, today=date.today().isoformat())
+            except ValueError:
+                flash("Invalid number of batches specified.", 'error')
+                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form, today=date.today().isoformat())
+
+            # Redirect to make_recipe_view, passing necessary parameters via query string for GET.
+            # make_recipe_view is already equipped to handle these from request.args.
+            return redirect(url_for('make_recipe_view',
+                                    recipe_name=recipe_name_to_consume,
+                                    num_batches=num_batches,
+                                    origin_page='consume_item_page'))
         
 
         # Else, it's an 'item' consumption
@@ -1223,21 +1243,25 @@ def recipe_detail_view(recipe_name):
                            ingredients_status=ingredients_status, 
                            recipe_makeable=recipe_makeable)
 
-# Placeholder for Make Recipe POST route - to be implemented in a later subtask
 @app.route('/recipes/<path:recipe_name>/make', methods=['GET', 'POST'])
 def make_recipe_view(recipe_name):
-    # This is where the logic to "make" the recipe would go.
-    # For now, just flash a message and redirect.
-    # Actual implementation would consume ingredients from inventory.
-    
-    # Re-check if makeable before attempting to make, as inventory might have changed.
-    recipe = recipe_mngr.get_recipe_by_name(recipe_name) # This now includes output_product_id and output_yield
-    app.logger.info(f"Recipe fetched for making: {recipe}") # Log the entire recipe object
+    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
     if not recipe:
         flash(f"Recipe '{recipe_name}' not found.", 'error')
         return redirect(url_for('recipes_list_view'))
 
-    num_batches_str = request.form.get('num_batches', '1').strip()
+    origin_page = None
+    num_batches_str = None
+
+    if request.method == 'POST':
+        num_batches_str = request.form.get('num_batches', '1').strip()
+        confirmed_partial_consumption = request.form.get('confirmed_partial') == 'true'
+        origin_page = request.form.get('origin_page', 'recipe_detail') # Default if POSTing from recipe_detail or confirm page
+    elif request.method == 'GET': # Likely from consume_item_view redirect
+        num_batches_str = request.args.get('num_batches', '1').strip()
+        confirmed_partial_consumption = request.args.get('confirmed_partial') == 'true' # Should be false on initial GET
+        origin_page = request.args.get('origin_page', 'consume_item_page') # Default if GETting from consume_item_view
+
     try:
         num_batches = int(num_batches_str)
         if num_batches <= 0:
@@ -1246,93 +1270,149 @@ def make_recipe_view(recipe_name):
     except ValueError:
         flash("Invalid number of batches specified.", 'error')
         return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
-
-    # Check ingredient availability for the total quantity needed
-    recipe_makeable_now = True
-    if recipe.get('ingredients'):
-        for ing_spec in recipe['ingredients']:
-            total_required_qty = float(ing_spec['quantity_required']) * num_batches
-            available = manager.get_total_item_quantity(ing_spec['item_name'])
-            if available < total_required_qty:
-                recipe_makeable_now = False
-                flash(f"Not enough '{ing_spec['item_name']}'. Needed: {total_required_qty}, Available: {available}.", 'warning')
-                # break # Optional: break on first insufficient ingredient or list all
-    
-    if not recipe_makeable_now:
-        flash(f"Cannot make {num_batches} batch(es) of '{recipe_name}'. Not enough ingredients.", 'error')
+    except TypeError: # If num_batches_str is None
+        flash("Number of batches not provided.", 'error')
         return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
 
-    # Consume ingredients
+
+    missing_ingredients_details = []
+    ingredients_to_consume_details = [] # Store details for actual consumption
+
+    if recipe.get('ingredients'):
+        for ing_spec in recipe['ingredients']:
+            item_name = ing_spec['item_name']
+            # Ensure quantity_required is float
+            try:
+                qty_per_batch = float(ing_spec['quantity_required'])
+            except (ValueError, TypeError):
+                flash(f"Invalid quantity_required format for ingredient '{item_name}' in recipe '{recipe_name}'. Cannot proceed.", 'error')
+                return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
+
+            total_required_qty = qty_per_batch * num_batches
+            available_qty = manager.get_total_item_quantity(item_name)
+
+            product_details = manager.get_product_by_name(item_name)
+            unit_of_measure = product_details.get('unit_of_measure', 'units') if product_details else 'units'
+
+            if available_qty < total_required_qty:
+                missing_ingredients_details.append({
+                    'name': item_name,
+                    'required': total_required_qty,
+                    'available': available_qty,
+                    'needed': total_required_qty - available_qty,
+                    'unit_of_measure': unit_of_measure
+                })
+
+            # For consumption, decide how much to actually try to consume
+            # If confirmed_partial, consume min(available, required), otherwise consume required (and let it fail if not enough, or rely on prior check)
+            qty_to_attempt_consume = 0
+            if confirmed_partial_consumption:
+                qty_to_attempt_consume = min(available_qty, total_required_qty)
+            else: # Initial attempt, or if no missing ingredients
+                qty_to_attempt_consume = total_required_qty
+
+            if qty_to_attempt_consume > 0 : # Only add to list if there's something to consume
+                ingredients_to_consume_details.append({
+                    'item_name': item_name,
+                    'quantity_to_consume': qty_to_attempt_consume,
+                    'is_partial': available_qty < total_required_qty # Flag if this consumption is less than fully required
+                })
+
+    if missing_ingredients_details and not confirmed_partial_consumption:
+        # Render a confirmation page/modal
+        # For now, using a distinct template 'confirm_recipe_consumption.html'
+        # This template will need a form that POSTs back to this same URL
+        # with `confirmed_partial='true'`, `num_batches`, and `recipe_name`.
+        origin_page = request.form.get('origin_page', 'recipe_detail') # Helper to redirect cancel appropriately
+        return render_template('confirm_recipe_consumption.html',
+                               recipe=recipe,
+                               num_batches=num_batches,
+                               missing_ingredients=missing_ingredients_details,
+                               origin_page=origin_page)
+
+    # Proceed with consumption (either full or confirmed partial)
     all_consumed_successfully = True
     consumption_error_messages = []
-    if recipe.get('ingredients'):
-        for ingredient in recipe['ingredients']:
-            item_name = ingredient['item_name']
-            qty_per_batch = float(ingredient['quantity_required'])
-            total_qty_to_consume = qty_per_batch * num_batches
-            
-            consumption_result = manager.consume_item(item_name, total_qty_to_consume)
+    successful_consumptions_info = [] # For partial success messages
+
+    if ingredients_to_consume_details: # Check if there's anything to consume
+        for ing_detail in ingredients_to_consume_details:
+            item_name = ing_detail['item_name']
+            qty_to_consume = ing_detail['quantity_to_consume']
+
+            if qty_to_consume <= 0: # Skip if calculated amount is zero (e.g. missing and partial confirm)
+                successful_consumptions_info.append(f"Skipped '{item_name}' as 0 quantity was available/to be consumed.")
+                continue
+
+            consumption_result = manager.consume_item(item_name, qty_to_consume)
             
             if not consumption_result.get("success"):
                 all_consumed_successfully = False
                 consumption_error_messages.append(
-                    f"Failed to consume {total_qty_to_consume} of '{item_name}'. "
+                    f"Failed to consume {qty_to_consume} of '{item_name}'. "
                     f"Reason: {consumption_result.get('message', 'Unknown error.')}"
                 )
-                break 
+                # If critical, break. For partial, we might want to continue.
+                # For now, let's continue to try consuming other available items in a partial scenario.
+                if not confirmed_partial_consumption: # If it's not a confirmed partial, one failure means overall failure
+                    break
+            else:
+                message = f"Consumed {qty_to_consume:.2f} of '{item_name}'."
+                if ing_detail['is_partial'] and confirmed_partial_consumption:
+                    message += " (Partial amount due to availability)."
+                successful_consumptions_info.append(message)
     
     if all_consumed_successfully and not consumption_error_messages:
-        flash(f"{num_batches} batch(es) of '{recipe['name']}' made! Ingredients consumed.", 'success')
+        if confirmed_partial_consumption:
+            flash(f"Partially made {num_batches} batch(es) of '{recipe['name']}' with available ingredients.", 'success')
+            for info_msg in successful_consumptions_info:
+                flash(info_msg, 'info') # Use 'info' for details of partial consumption
+        else:
+            flash(f"{num_batches} batch(es) of '{recipe['name']}' made! All ingredients consumed.", 'success')
 
+        # Output production logic (remains largely the same)
         output_product_id = recipe.get('output_product_id')
-        output_yield_per_batch_from_recipe = recipe.get('output_yield') # Renamed
-        app.logger.info(f"Attempting production: output_product_id={output_product_id}, output_yield_per_batch_from_recipe={output_yield_per_batch_from_recipe}")
-
-        output_yield_per_batch_float = None
-        if output_yield_per_batch_from_recipe is not None:
+        output_yield_per_batch_from_recipe = recipe.get('output_yield')
+        if output_product_id and output_yield_per_batch_from_recipe is not None:
             try:
                 output_yield_per_batch_float = float(output_yield_per_batch_from_recipe)
-            except ValueError:
-                app.logger.error(f"Invalid output_yield format ('{output_yield_per_batch_from_recipe}') in recipe ID {recipe.get('id')}. Cannot produce output.")
-                # The flash message for this case will be handled by the broader try-except block below if production fails
-
-        if output_product_id and output_yield_per_batch_float is not None:
-            try:
                 if output_yield_per_batch_float > 0:
                     total_output_yield = output_yield_per_batch_float * num_batches
-                    app.logger.info(f"Calculated total_output_yield: {total_output_yield} for product_id: {output_product_id}")
-                    # Ensure purchase_date_str is defined for add_inventory_stock
                     purchase_date_str = date.today().isoformat()
                     production_result = manager.add_inventory_stock(
                         product_id=output_product_id,
                         quantity_str=str(total_output_yield),
                         purchase_date_str=purchase_date_str
                     )
-                    app.logger.info(f"Result of add_inventory_stock: {production_result}")
                     if production_result.get("success"):
                         output_product_details = manager.get_product(output_product_id)
                         output_product_name = output_product_details.get('name', f"ID {output_product_id}") if output_product_details else f"ID {output_product_id}"
-                        flash(f"Produced {total_output_yield} of '{output_product_name}' and added to inventory.", 'success')
+                        flash(f"Produced {total_output_yield:.2f} of '{output_product_name}' and added to inventory.", 'success')
                     else:
                         flash(f"Error producing output for recipe: {production_result.get('message', 'Unknown error')}", 'error')
-                elif output_yield_per_batch_float == 0 : # Yield is zero, no production needed
-                    pass # Do nothing if yield is zero
-                else: # Negative yield, should be caught by validation ideally
-                    flash(f"Recipe has a non-positive output yield ({output_yield_per_batch_float}). No output produced.", 'warning')
-
+                elif output_yield_per_batch_float < 0:
+                     flash(f"Recipe has a non-positive output yield ({output_yield_per_batch_float}). No output produced.", 'warning')
             except ValueError:
-                flash(f"Invalid output_yield format ('{output_yield_per_batch}') in recipe. Cannot produce output.", 'error')
-            except Exception as e: # Catch-all for other errors during production
+                 flash(f"Invalid output_yield format ('{output_yield_per_batch_from_recipe}') in recipe. Cannot produce output.", 'error')
+            except Exception as e:
                 flash(f"An unexpected error occurred during output production: {e}", 'error')
-
-        elif output_product_id and output_yield_per_batch is None:
+        elif output_product_id and output_yield_per_batch_from_recipe is None:
              flash(f"Recipe '{recipe['name']}' has an output product ID but missing output yield. No output produced.", 'warning')
-        # If no output_product_id, it's a recipe that doesn't produce a direct inventory item.
 
-    else:
-        flash(f"Error making recipe '{recipe['name']}'. Some ingredients could not be consumed:", 'error')
+    else: # Some or all consumptions failed
+        if confirmed_partial_consumption:
+            flash(f"Attempted to partially make recipe '{recipe['name']}', but some available ingredients could not be consumed:", 'error')
+        else:
+            flash(f"Error making recipe '{recipe['name']}'. Some ingredients could not be consumed:", 'error')
+
         for err_msg in consumption_error_messages:
-            flash(err_msg, 'error_detail') # Use a more specific category for display
+            flash(err_msg, 'error_detail')
+        # If there were also successful partial consumptions, show them
+        if successful_consumptions_info and any("Consumed" in s for s in successful_consumptions_info):
+            flash("Some ingredients were consumed successfully before errors occurred:", "info")
+            for info_msg in successful_consumptions_info:
+                if "Consumed" in info_msg : flash(info_msg, 'info')
+
 
     return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
 

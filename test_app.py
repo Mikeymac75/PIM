@@ -756,5 +756,159 @@ class TestAppInventoryBatchesView(unittest.TestCase):
         self.assertNotIn("Flask Guide", html_content_p2)
 
 
+class TestRecipeConsumptionFlows(unittest.TestCase):
+    def setUp(self):
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['SECRET_KEY'] = 'test_recipe_consumption_secret'
+        self.app_context = app.app_context()
+        self.app_context.push()
+        self.client = app.test_client()
+
+        # Use in-memory SQLite for both managers, sharing the same connection
+        app.manager.db_filepath = ":memory:"
+        app.recipe_mngr.db_filepath = ":memory:"
+
+        if hasattr(app.manager, 'conn') and app.manager.conn:
+            try: app.manager.close_connection()
+            except Exception as e: print(f"Error closing manager conn in TestRecipeConsumptionFlows setUp: {e}")
+
+        app.manager.conn = sqlite3.connect(":memory:")
+        app.manager.conn.row_factory = sqlite3.Row
+        app.recipe_mngr.conn = app.manager.conn # Share connection
+
+        app.manager._initialize_db()
+        app.recipe_mngr._initialize_db()
+
+        # Create categories
+        self.cat_pantry_id = app.manager.add_category("Pantry")['category_id']
+        self.cat_dairy_id = app.manager.add_category("Dairy")['category_id']
+
+        # Create products
+        self.flour_prod = app.manager.create_product(name="Flour", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=365)
+        self.sugar_prod = app.manager.create_product(name="Sugar", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=730)
+        self.eggs_prod = app.manager.create_product(name="Eggs", category_id=self.cat_dairy_id, unit_of_measure="unit", default_expiry_days=21)
+
+        self.flour_prod_id = self.flour_prod['product_id']
+        self.sugar_prod_id = self.sugar_prod['product_id']
+        self.eggs_prod_id = self.eggs_prod['product_id']
+
+        # Create a test recipe
+        self.test_recipe_name = "Simple Cookies"
+        self.recipe_data = {
+            "name": self.test_recipe_name,
+            "description": "Easy to make cookies.",
+            "ingredients": [
+                {"item_name": "Flour", "quantity_required": 2.0}, # cups
+                {"item_name": "Sugar", "quantity_required": 1.0}, # cup
+                {"item_name": "Eggs", "quantity_required": 2.0}   # units
+            ],
+            "output_product_id": None, # No output for simplicity in this test
+            "output_yield": None
+        }
+        add_recipe_result = app.recipe_mngr.add_recipe(self.recipe_data)
+        self.assertTrue(add_recipe_result.get('success'), "Failed to add test recipe in setUp.")
+        self.test_recipe_id = add_recipe_result.get('recipe_id')
+
+        # Common purchase date for stock
+        self.purchase_date = date.today().isoformat()
+
+    def tearDown(self):
+        if app.manager.conn:
+            app.manager.conn.close()
+            app.manager.conn = None
+        self.app_context.pop()
+
+    def _add_stock(self, product_id, quantity_str):
+        app.manager.add_inventory_stock(product_id=product_id, quantity_str=quantity_str, purchase_date_str=self.purchase_date)
+
+    def test_consume_recipe_all_ingredients_available(self):
+        # Stock all ingredients sufficiently
+        self._add_stock(self.flour_prod_id, "5") # Needs 2
+        self._add_stock(self.sugar_prod_id, "3") # Needs 1
+        self._add_stock(self.eggs_prod_id, "4")   # Needs 2
+
+        response = self.client.post(f'/recipes/{self.test_recipe_name}/make', data={'num_batches': '1'}, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"1 batch(es) of '{self.test_recipe_name}' made! All ingredients consumed.".encode(), response.data)
+
+        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.flour_prod_id), 3.0)
+        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.sugar_prod_id), 2.0)
+        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.eggs_prod_id), 2.0)
+
+    def test_consume_recipe_some_ingredients_missing_shows_confirmation(self):
+        self._add_stock(self.flour_prod_id, "1") # Needs 2 (Missing 1)
+        self._add_stock(self.sugar_prod_id, "3") # Needs 1 (Available)
+
+        response = self.client.post(f'/recipes/{self.test_recipe_name}/make', data={'num_batches': '1', 'origin_page': 'recipe_detail'})
+        self.assertEqual(response.status_code, 200) # Should render confirmation template
+        self.assertIn(b"Confirm Consumption: Simple Cookies", response.data)
+        self.assertIn(b"Missing or Insufficient Ingredients:", response.data)
+        self.assertIn(b"Flour", response.data)
+        self.assertIn(b"Needed: 1.00 cup", response.data) # 2 required - 1 available = 1 needed
+        self.assertNotIn(b"Sugar", response.data) # Sugar is available
+        self.assertNotIn(b"Eggs", response.data) # Eggs are completely missing, so should also be listed
+
+        # Check for eggs (completely missing, 0 available)
+        self.assertIn(b"Eggs", response.data)
+        self.assertIn(b"Needed: 2.00 unit", response.data) # 2 required - 0 available = 2 needed
+
+    def test_consume_recipe_confirm_partial_consumption(self):
+        self._add_stock(self.flour_prod_id, "1.5") # Needs 2, Available 1.5
+        self._add_stock(self.sugar_prod_id, "2.0") # Needs 1, Available 2.0
+        # Eggs are missing (0 available)
+
+        # Initial POST to trigger confirmation
+        response_confirm_page = self.client.post(f'/recipes/{self.test_recipe_name}/make', data={'num_batches': '1', 'origin_page': 'recipe_detail'})
+        self.assertEqual(response_confirm_page.status_code, 200)
+        self.assertIn(b"Confirm Consumption: Simple Cookies", response_confirm_page.data)
+
+        # POST again, this time confirming partial consumption
+        response = self.client.post(f'/recipes/{self.test_recipe_name}/make',
+                                    data={'num_batches': '1', 'confirmed_partial': 'true', 'origin_page': 'recipe_detail'},
+                                    follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+
+        flashed_messages = [msg.decode() for msg in response.data.split(b'<div class="alert ') if b'alert-success' in msg or b'alert-info' in msg]
+
+        self.assertTrue(any(f"Partially made 1 batch(es) of '{self.test_recipe_name}' with available ingredients." in msg for msg in flashed_messages))
+        self.assertTrue(any("Consumed 1.50 of 'Flour'. (Partial amount due to availability)." in msg for msg in flashed_messages))
+        self.assertTrue(any("Consumed 1.00 of 'Sugar'." in msg for msg in flashed_messages)) # Full amount as it was available
+        self.assertTrue(any("Skipped 'Eggs' as 0 quantity was available/to be consumed." in msg for msg in flashed_messages))
+
+        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.flour_prod_id), 0) # 1.5 available - 1.5 consumed
+        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.sugar_prod_id), 1.0) # 2.0 available - 1.0 consumed
+        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.eggs_prod_id), 0)   # 0 available - 0 consumed
+
+    def test_recipe_detail_page_make_button_always_enabled(self):
+        # Make ingredients insufficient
+        self._add_stock(self.flour_prod_id, "0.5") # Needs 2
+        response = self.client.get(f'/recipes/name/{self.test_recipe_name}')
+        self.assertEqual(response.status_code, 200)
+
+        # Check for the button and ensure it's not disabled
+        # The button text might change, but the core is that it's a submit button and not disabled
+        self.assertIn(b'<button type="submit" class="button btn btn-success mb-2">', response.data)
+        self.assertNotIn(b'disabled', response.data.split(b'<button type="submit" class="button btn btn-success mb-2">')[1].split(b'</button>')[0])
+        self.assertIn(b"(Some ingredients missing)", response.data) # Informational text
+
+    def test_consume_item_page_recipe_flow_to_confirmation(self):
+        # Scenario: User is on /inventory/consume, selects recipe, ingredients are missing
+        self._add_stock(self.flour_prod_id, "0.5") # Needs 2 for recipe
+
+        # Simulate POST from /inventory/consume to itself, which then redirects to /make_recipe_view
+        # This is a bit indirect. The key is that make_recipe_view gets 'origin_page=consume_item_page'
+        # and then renders the confirmation.
+
+        # Direct call to make_recipe_view simulating the redirect from consume_item_view
+        response = self.client.get(f"/recipes/{self.test_recipe_name}/make?num_batches=1&origin_page=consume_item_page")
+        self.assertEqual(response.status_code, 200) # Renders confirmation page
+        self.assertIn(b"Confirm Consumption: Simple Cookies", response.data)
+        self.assertIn(b"Missing or Insufficient Ingredients:", response.data)
+        self.assertIn(b"Flour", response.data)
+        # Check that the cancel button on this confirmation page points back to consume_item_view
+        self.assertIn(b'href="/inventory/consume"', response.data)
+
+
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
