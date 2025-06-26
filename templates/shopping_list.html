@@ -21,76 +21,78 @@
     </form>
 </div>
 
-<table class="table is-striped is-hoverable is-fullwidth">
-    <thead>
-        <tr>
-            <th><input type="checkbox" id="select_all_items" title="Select/Deselect All"></th>
-            <th>Product Name</th>
-            <th>Rec. Purchase</th>
-            <th>Actual Qty Purchased</th>
-            <th>Cost/Unit ($)</th>
-            <th>Vendor</th>
-            <th>Current Stock</th>
-            <th>Par Level</th>
-            <th>Avg. Daily Consumption</th>
-            <th>Store</th>
-            <th>Cycle (Days)</th>
-            <th>Earliest Expiry</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% if items %}
-            {% for item in items %} {# Each item is from the get_shopping_list_items structure #}
+<!-- New form for logging purchases -->
+<form method="POST" action="{{ url_for('log_shopping_list_purchases_view') }}">
+    <table class="table is-striped is-hoverable is-fullwidth">
+        <thead>
             <tr>
-                <td>
-                    <input type="checkbox" name="include_item_{{ loop.index0 }}" value="{{ item.product_id }}" class="item-checkbox">
-                    <input type="hidden" name="product_id_{{ loop.index0 }}" value="{{ item.product_id }}">
-                </td>
-                <td>{{ item.name }}</td>
-                <td>{{ "%.2f" | format(item.recommended_purchase_amount) }} {{ item.unit_of_measure }}</td>
-                <td>
-                    <input type="number" step="any" name="quantity_purchased_{{ loop.index0 }}"
-                           value="{{ "%.2f" | format(item.recommended_purchase_amount) }}"
-                           class="input is-small purchase-input" style="width: 100px;" disabled> {{ item.unit_of_measure }}
-                </td>
-                <td>
-                    <input type="number" step="any" name="cost_per_unit_{{ loop.index0 }}"
-                           placeholder="0.00" class="input is-small purchase-input" style="width: 80px;" disabled>
-                </td>
-                <td>
-                    <input type="text" name="vendor_{{ loop.index0 }}" value="{{ item.purchase_location or '' }}"
-                           class="input is-small purchase-input" style="width: 120px;" disabled>
-                </td>
-                <td>{{ item.current_quantity_display }}</td>
-                <td>{{ "%.2f" | format(item.par_level) }}</td>
-                <td>{{ "%.2f" | format(item.avg_daily_consumption) }} {{ item.unit_of_measure }}/day</td>
-                <td>{{ item.purchase_location }}</td>
-                <td>{{ item.days_to_next_shop }}</td>
-                <td>{{ item.earliest_expiry_date if item.earliest_expiry_date != 'N/A' else 'N/A' }}</td>
+                <th><input type="checkbox" id="select_all_items" title="Select/Deselect All"></th>
+                <th>Product Name</th>
+                <th>Rec. Purchase</th>
+                <th>Actual Qty Purchased</th>
+                <th>Cost/Unit ($)</th>
+                <th>Vendor</th>
+                <th>Current Stock</th>
+                <th>Par Level</th>
+                <th>Avg. Daily Consumption</th>
+                <th>Store</th>
+                <th>Cycle (Days)</th>
+                <th>Earliest Expiry</th>
             </tr>
-            {% endfor %}
-        {% else %}
-            <tr>
-                <td colspan="12" style="text-align: center;">Your shopping list is currently empty. Adjust filters or check par levels for your products.</td>
-            </tr>
-        {% endif %}
-    </tbody>
-</table>
+        </thead>
+        <tbody>
+            {% if items %}
+                {% for item in items %} {# Each item is from the get_shopping_list_items structure #}
+                <tr>
+                    <td>
+                        <input type="checkbox" name="include_item_{{ loop.index0 }}" value="{{ item.product_id }}" class="item-checkbox">
+                        <input type="hidden" name="product_id_{{ loop.index0 }}" value="{{ item.product_id }}">
+                    </td>
+                    <td>{{ item.name }}</td>
+                    <td>{{ "%.2f" | format(item.recommended_purchase_amount) }} {{ item.unit_of_measure }}</td>
+                    <td>
+                        <input type="number" step="any" name="quantity_purchased_{{ loop.index0 }}"
+                               value="{{ "%.2f" | format(item.recommended_purchase_amount) }}"
+                               class="input is-small purchase-input" style="width: 100px;" disabled> {{ item.unit_of_measure }}
+                    </td>
+                    <td>
+                        <input type="number" step="any" name="cost_per_unit_{{ loop.index0 }}"
+                               placeholder="0.00" class="input is-small purchase-input" style="width: 80px;" disabled>
+                    </td>
+                    <td>
+                        <input type="text" name="vendor_{{ loop.index0 }}" value="{{ item.purchase_location or '' }}"
+                               class="input is-small purchase-input" style="width: 120px;" disabled>
+                    </td>
+                    <td>{{ item.current_quantity_display }}</td>
+                    <td>{{ "%.2f" | format(item.par_level) }}</td>
+                    <td>{{ "%.2f" | format(item.avg_daily_consumption) }} {{ item.unit_of_measure }}/day</td>
+                    <td>{{ item.purchase_location }}</td>
+                    <td>{{ item.days_to_next_shop }}</td>
+                    <td>{{ item.earliest_expiry_date if item.earliest_expiry_date != 'N/A' else 'N/A' }}</td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="12" style="text-align: center;">Your shopping list is currently empty. Adjust filters or check par levels for your products.</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
 
-{% if items %}
-<div class="field is-grouped is-grouped-right" style="margin-top: 20px;">
-    <div class="control">
-        <label for="purchase_date" class="label">Purchase Date for Logged Items:</label>
-        <input type="date" id="purchase_date" name="purchase_date" class="input" value="{{ today.isoformat() if today else '' }}" required>
+    {% if items %}
+    <div class="field is-grouped is-grouped-right" style="margin-top: 20px;">
+        <div class="control">
+            <label for="purchase_date" class="label">Purchase Date for Logged Items:</label>
+            <input type="date" id="purchase_date" name="purchase_date" class="input" value="{{ today.isoformat() if today else '' }}" required>
+        </div>
+        <div class="control">
+            <button type="submit" class="button is-primary" style="margin-top: 28px;"> <!-- Adjusted margin for alignment -->
+                <i class="fas fa-cart-plus"></i>&nbsp;Log Selected Purchases
+            </button>
+        </div>
     </div>
-    <div class="control">
-        <button type="submit" class="button is-primary" style="margin-top: 28px;"> <!-- Adjusted margin for alignment -->
-            <i class="fas fa-cart-plus"></i>&nbsp;Log Selected Purchases
-        </button>
-    </div>
-</div>
-{% endif %}
-</form> <!-- End of the main form -->
+    {% endif %}
+</form> <!-- This now correctly ends the new POST form -->
 
 
 <script>
