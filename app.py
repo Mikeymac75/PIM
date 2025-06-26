@@ -374,50 +374,81 @@ def consume_item_view():
                 # Redirect to the make_recipe_view, which handles the actual consumption
                 return redirect(url_for('make_recipe_view', recipe_name=recipe_name_to_consume))
         
-        # Else, it's an 'item' consumption (existing logic)
-        else: # consumption_type == 'item'
-            item_name = request.form.get('item_name')
-            quantity_consumed_str = request.form.get('quantity_consumed')
 
-            errors = []
-            if not item_name:
-                errors.append("Item name is required.")
+        # Else, it's an 'item' consumption
+        else: # consumption_type == 'item' or potentially JSON payload for multi-item
+            # Check if data is JSON (for multi-item AJAX)
+            if request.is_json:
+                data = request.get_json()
+                items_to_consume = data.get('items') # Expecting a list of {'item_name': name, 'quantity': qty}
+                consumption_date = data.get('consumption_date', date.today().isoformat()) # Optional date
 
-            numeric_quantity_consumed = None # Initialize to None
-            if not quantity_consumed_str:
-                errors.append("Quantity to consume is required.")
-            else:
-                try:
-                    numeric_quantity_consumed = float(quantity_consumed_str) # Allow for float quantities
-                    if numeric_quantity_consumed <= 0: # This check is now in FoodManager, but good to have here too for early feedback
-                        errors.append("Quantity to consume must be a positive number (greater than zero).")
-                except ValueError:
-                    errors.append("Quantity to consume must be a valid number.")
+                if not items_to_consume or not isinstance(items_to_consume, list):
+                    return jsonify({"success": False, "message": "Invalid data: 'items' array is required."}), 400
 
-            if errors:
-                for error in errors:
-                    flash(error, 'error')
-                # item_names and all_recipes are already fetched
-                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+                # TODO: Add validation for consumption_date format if provided
 
-            # If validation passes for item consumption
-            try:
-                result = manager.consume_item(item_name, numeric_quantity_consumed)
+                results = manager.consume_multiple_items(items_to_consume)
 
-                if result.get("success"):
-                    flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
+                # Process results for JSON response
+                # For now, returning the raw results from manager.
+                # Could also summarize:
+                success_count = sum(1 for r in results if r.get("success"))
+                failure_count = len(results) - success_count
+
+                if failure_count == 0 and success_count > 0:
+                    return jsonify({"success": True, "message": f"Successfully consumed {success_count} item(s).", "details": results})
+                elif success_count > 0 and failure_count > 0:
+                    return jsonify({"success": False, "message": f"Consumed {success_count} item(s), but failed for {failure_count} item(s).", "details": results}), 207 # Multi-Status
+                elif failure_count > 0 and success_count == 0:
+                     return jsonify({"success": False, "message": f"Failed to consume {failure_count} item(s).", "details": results}), 400
+                else: # No items processed or other edge case
+                    return jsonify({"success": False, "message": "No items were processed.", "details": results}), 400
+
+            else: # Traditional form submission for single item (fallback or if JS is disabled)
+                item_name = request.form.get('item_name')
+                quantity_consumed_str = request.form.get('quantity_consumed')
+                # consumption_date_str = request.form.get('consumption_date', date.today().isoformat()) # If date is added to form
+
+                errors = []
+                if not item_name:
+                    errors.append("Item name is required.")
+
+                numeric_quantity_consumed = None
+                if not quantity_consumed_str:
+                    errors.append("Quantity to consume is required.")
                 else:
-                    flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
+                    try:
+                        numeric_quantity_consumed = float(quantity_consumed_str)
+                        if numeric_quantity_consumed <= 0:
+                            errors.append("Quantity to consume must be a positive number.")
+                    except ValueError:
+                        errors.append("Quantity to consume must be a valid number.")
 
-                return redirect(url_for('current_inventory_view'))
+                # TODO: Validate consumption_date_str if it's part of the form
 
-            except Exception as e:
-                flash(f"An unexpected error occurred while consuming item: {e}", 'error')
-                # item_names and all_recipes are already fetched
-                return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+                if errors:
+                    for error in errors:
+                        flash(error, 'error')
+                    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
 
-    # For GET request (all_recipes already fetched)
-    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data={})
+                try:
+                    # Pass consumption_date to consume_item if it's updated to accept it.
+                    # For now, consume_item uses date.today() internally.
+                    result = manager.consume_item(item_name, numeric_quantity_consumed) #, consumption_date_str)
+
+                    if result.get("success"):
+                        flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
+                    else:
+                        flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
+                    return redirect(url_for('current_inventory_view'))
+
+                except Exception as e:
+                    flash(f"An unexpected error occurred while consuming item: {e}", 'error')
+                    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data=request.form)
+
+    # GET request
+    return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data={}, today=date.today().isoformat())
 
 @app.route('/inventory/upload_excel', methods=['GET', 'POST'])
 def upload_excel_view():

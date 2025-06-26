@@ -3000,6 +3000,44 @@ class InventoryManager:
         print(final_message)
         return {"success": consumed_amount_total_overall > 0, "message": final_message, "details": log_messages}
 
+    def consume_multiple_items(self, items_to_consume: list):
+        """
+        Consumes multiple items from the inventory.
+        - items_to_consume: A list of dictionaries, each with 'item_name' and 'quantity'.
+                            Example: [{'item_name': 'Apples', 'quantity': 2.0}, ...]
+        Returns a list of results, one for each item consumption attempt.
+        """
+        overall_results = []
+        if not isinstance(items_to_consume, list):
+            return [{"success": False, "item_name": "N/A", "message": "Invalid input: items_to_consume must be a list."}]
+
+        for item_spec in items_to_consume:
+            item_name = item_spec.get('item_name')
+            quantity_str = item_spec.get('quantity') # Assuming quantity comes as string from form/JSON
+
+            if not item_name or quantity_str is None:
+                overall_results.append({"success": False, "item_name": item_name or "Unknown", "message": "Missing item_name or quantity."})
+                continue
+
+            try:
+                quantity_float = float(quantity_str)
+                if quantity_float <= 0:
+                    overall_results.append({"success": False, "item_name": item_name, "message": "Quantity must be a positive number."})
+                    continue
+            except ValueError:
+                overall_results.append({"success": False, "item_name": item_name, "message": f"Invalid quantity format: {quantity_str}."})
+                continue
+
+            # Call the existing single consume_item method
+            # consume_item already returns a dict like {"success": True/False, "message": "...", "details": []}
+            single_item_result = self.consume_item(item_name, quantity_float)
+
+            # Add item_name to the result for clarity if not already there or to ensure it's present
+            single_item_result['item_name'] = item_name
+            overall_results.append(single_item_result)
+
+        return overall_results
+
     def adjust_inventory_batch(self, batch_id, new_quantity_str, new_purchase_date_str=None, new_expiry_date_str=None, include_in_projections=False):
         """
         Adjusts the quantity, purchase date, or expiry date of a specific inventory batch.
