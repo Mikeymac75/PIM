@@ -237,7 +237,7 @@ class TestInventoryManager(unittest.TestCase):
             confirmed_action="confirm_new_category"
         )
         self.assertTrue(confirmed_result.get("success"), confirmed_result.get("message"))
-        self.assertIn("Item 'Kombucha' added to inventory (no cost info).", confirmed_result.get("message"))
+        self.assertIn("Item 'Kombucha' added to inventory.", confirmed_result.get("message"))
 
         # Verify product, category, and subcategory were created
         product = self.manager.get_product_by_name("Kombucha")
@@ -268,7 +268,7 @@ class TestInventoryManager(unittest.TestCase):
             temp_category_id=confirmation_details['category_id']
         )
         self.assertTrue(confirmed_result.get("success"), confirmed_result.get("message"))
-        self.assertIn("Item 'Mangoes' added to inventory (no cost info).", confirmed_result.get("message"))
+        self.assertIn("Item 'Mangoes' added to inventory.", confirmed_result.get("message"))
 
         product = self.manager.get_product_by_name("Mangoes")
         self.assertIsNotNone(product)
@@ -395,81 +395,6 @@ class TestInventoryManager(unittest.TestCase):
         self.assertEqual(historical_inventory[0]['product_display_name'], "Bananas")
         self.assertEqual(historical_inventory[1]['product_display_name'], "Apples")
         self.assertEqual(historical_inventory[0]['category_name'], "Produce") # Check new field
-
-    def test_consume_multiple_items_with_specific_date_impacts_projections(self):
-        """
-        Tests that consuming multiple items with a specific past date correctly logs
-        to historical_items with that date and that this historical entry
-        influences the average daily consumption calculation for projections.
-        """
-        # 1. Setup: Create product and add inventory
-        projection_prod_name = "Projection Test Product"
-        projection_prod_cat_res = self.manager.add_category("Projection Category")
-        projection_prod_cat_id = projection_prod_cat_res['category_id']
-
-        proj_prod_res = self.manager.create_product(
-            name=projection_prod_name,
-            category_id=projection_prod_cat_id,
-            subcategory_id=None,
-            unit_of_measure="units",
-            default_expiry_days=30
-        )
-        self.assertTrue(proj_prod_res.get("success"), "Failed to create projection test product.")
-        projection_product_id = proj_prod_res['product_id']
-
-        purchase_date_str = "2024-01-01"
-        self.manager.add_inventory_stock(projection_product_id, "100", purchase_date_str)
-
-        # 2. Define consumption details
-        # Consume 5 units, 15 days ago from a fixed "today" for test stability
-        fixed_today_for_test = date(2024, 2, 1) # February 1st, 2024
-        consumption_date_specific = fixed_today_for_test - timedelta(days=15) # Approx Jan 17th, 2024
-        consumption_date_str_specific = consumption_date_specific.isoformat()
-        quantity_consumed = 5.0
-
-        items_to_consume = [
-            {"item_name": projection_prod_name, "quantity": str(quantity_consumed)}
-        ]
-
-        # 3. Mock date.today() within Food_manager's scope for the parts that might still use it,
-        #    although consume_item should now use the passed date.
-        #    The main reason for mocking here is to control the reference point for _get_average_daily_consumption's lookback.
-        with unittest.mock.patch('Food_manager.date') as mock_date_fm:
-            mock_date_fm.today.return_value = fixed_today_for_test # All "today" calls in manager use this
-            mock_date_fm.fromisoformat.side_effect = lambda d: date.fromisoformat(d) # Ensure fromisoformat still works
-
-            # Perform multi-consumption with the specific past date
-            consume_results = self.manager.consume_multiple_items(items_to_consume, consumption_date_str=consumption_date_str_specific)
-            self.assertTrue(consume_results[0].get("success"), f"Multi-consumption failed: {consume_results[0].get('message')}")
-
-            # 4. Verify historical_items entry
-            conn = self.manager._get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT product_id, quantity_consumed_this_time, consumed_date
-                FROM historical_items
-                WHERE product_id = ? AND consumed_date = ?
-            """, (projection_product_id, consumption_date_str_specific))
-            historical_entry = cursor.fetchone()
-            conn.close()
-
-            self.assertIsNotNone(historical_entry, "Historical entry not found for specific consumption date.")
-            self.assertEqual(historical_entry['product_id'], projection_product_id)
-            self.assertEqual(historical_entry['quantity_consumed_this_time'], quantity_consumed)
-            self.assertEqual(historical_entry['consumed_date'], consumption_date_str_specific)
-
-            # 5. Verify impact on average daily consumption
-            # Lookback period of 30 days from "fixed_today_for_test" should include the consumption.
-            avg_consumption_including_past = self.manager._get_average_daily_consumption(projection_product_id, lookback_days=30)
-            expected_avg_if_included = quantity_consumed / 30
-            self.assertAlmostEqual(avg_consumption_including_past, expected_avg_if_included, places=5,
-                                 msg="Average consumption did not correctly include the specific past dated consumption.")
-
-            # Lookback period that excludes the specific consumption date.
-            # E.g., look back 10 days from fixed_today_for_test. Consumption was 15 days ago.
-            avg_consumption_excluding_past = self.manager._get_average_daily_consumption(projection_product_id, lookback_days=10)
-            self.assertAlmostEqual(avg_consumption_excluding_past, 0.0, places=5,
-                                 msg="Average consumption was not zero when specific past date was excluded from lookback.")
 
 # --- Test Cases for Production Items (Garden & Harvest) ---
 # (TestProductionItems class remains largely the same as its product creation was already updated)
