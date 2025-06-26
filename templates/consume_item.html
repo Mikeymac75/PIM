@@ -58,6 +58,11 @@
                     <p class="empty-message">No recipes available to consume.</p>
                 {% endif %}
             </div>
+            <div class="form-group">
+                <label for="num_batches_recipe">Number of Batches:</label>
+                <input type="number" id="num_batches_recipe" name="num_batches" class="form-control" value="1" min="1" style="width: 100px;">
+            </div>
+            <input type="hidden" name="origin_page" value="consume_item_page">
         </div>
         
         <button type="button" class="button" id="submitButton"><i class="fas fa-check-circle"></i> Consume Selected</button>
@@ -99,6 +104,8 @@
             const form = document.getElementById('consumeForm');
             const itemCheckboxes = document.querySelectorAll('.item-checkbox');
             const itemLimitMessage = document.getElementById('item_limit_message');
+            const consumeForm = document.getElementById('consumeForm');
+            const originalFormAction = consumeForm.action; // Store original action
             const MAX_ITEMS = 10;
 
             function updateCheckedCountAndLimit() {
@@ -118,6 +125,16 @@
                         cb.disabled = false;
                     });
                 }
+            }
+
+            if (recipeNameSelect) {
+                recipeNameSelect.addEventListener('change', function() {
+                    if (typeRecipeRadio.checked && this.value) {
+                        consumeForm.action = "{{ url_for('make_recipe_view', recipe_name='REPLACE_ME') }}".replace('REPLACE_ME', encodeURIComponent(this.value));
+                    } else if (typeRecipeRadio.checked && !this.value) {
+                        consumeForm.action = originalFormAction; // Or disable submit
+                    }
+                });
             }
 
             itemCheckboxes.forEach(checkbox => {
@@ -147,24 +164,46 @@
                 if (typeItemRadio.checked) {
                     itemFieldsDiv.style.display = 'block';
                     recipeFieldsDiv.style.display = 'none';
-                    if(recipeNameSelect) recipeNameSelect.required = false;
+                    if(recipeNameSelect) {
+                        recipeNameSelect.required = false;
+                        // consumeForm.action = originalFormAction; // Reset action when switching to item
+                    }
+                    // For item consumption, use JS to submit, so button type is 'button'
                     submitButton.innerHTML = '<i class="fas fa-check-circle"></i> Consume Selected Items';
                     submitButton.type = 'button';
-                    updateCheckedCountAndLimit(); // Apply limit logic if switching to item view
+                    consumeForm.action = originalFormAction; // Explicitly set for item consumption
+                    updateCheckedCountAndLimit();
                 } else { // Recipe selected
                     itemFieldsDiv.style.display = 'none';
                     recipeFieldsDiv.style.display = 'block';
-                    if(recipeNameSelect) recipeNameSelect.required = true;
+                    if(recipeNameSelect) {
+                        recipeNameSelect.required = true;
+                        // Update form action if a recipe is already selected
+                        if (recipeNameSelect.value) {
+                             consumeForm.action = "{{ url_for('make_recipe_view', recipe_name='REPLACE_ME') }}".replace('REPLACE_ME', encodeURIComponent(recipeNameSelect.value));
+                        } else {
+                            consumeForm.action = originalFormAction; // Or handle error, disable submit
+                        }
+                    }
                     submitButton.innerHTML = '<i class="fas fa-blender"></i> Consume Recipe Ingredients';
-                    submitButton.type = 'submit';
-                    itemLimitMessage.style.display = 'none'; // Hide limit message
-                    itemCheckboxes.forEach(cb => cb.disabled = false); // Re-enable all checkboxes
+                    submitButton.type = 'submit'; // For recipe, traditional form POST
+                    itemLimitMessage.style.display = 'none';
+                    itemCheckboxes.forEach(cb => cb.disabled = false);
                 }
             }
 
             typeItemRadio.addEventListener('change', toggleFields);
             typeRecipeRadio.addEventListener('change', toggleFields);
-            toggleFields(); // Initial call
+
+            // Call toggleFields on load AND ensure form action is correct based on initial state
+            toggleFields();
+            // Additional check for initial state of recipe selection
+            if (typeRecipeRadio.checked && recipeNameSelect && recipeNameSelect.value) {
+                 consumeForm.action = "{{ url_for('make_recipe_view', recipe_name='REPLACE_ME') }}".replace('REPLACE_ME', encodeURIComponent(recipeNameSelect.value));
+            } else if (typeRecipeRadio.checked) {
+                consumeForm.action = originalFormAction; // No recipe selected, or no select element
+            }
+
 
             submitButton.addEventListener('click', function(event) {
                 if (typeItemRadio.checked) {

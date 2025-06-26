@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Confirm Recipe Consumption - {{ recipe.name }}{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Confirm Consumption: {{ recipe.name }}</h1>
+{% endblock %}
+
+{% block content %}
+    <div class="confirmation-container">
+        <p>You are about to make <strong>{{ num_batches }} batch(es)</strong> of <strong>{{ recipe.name }}</strong>.</p>
+
+        <h3 style="color: #dc3545; margin-top: 20px;">Missing or Insufficient Ingredients:</h3>
+        {% if missing_ingredients %}
+            <ul class="list-group mb-3">
+                {% for item in missing_ingredients %}
+                    <li class="list-group-item list-group-item-warning d-flex justify-content-between align-items-center">
+                        <span>
+                            <strong>{{ item.name }}</strong>
+                        </span>
+                        <span class="badge badge-danger badge-pill">
+                            Needed: {{ "%.2f"|format(item.needed) }} {{ item.unit_of_measure }} (Available: {{ "%.2f"|format(item.available) }} {{ item.unit_of_measure }})
+                        </span>
+                    </li>
+                {% endfor %}
+            </ul>
+            <p>Do you want to proceed and consume only the available ingredients for this recipe?</p>
+        {% else %}
+            <p class="text-success">All ingredients seem to be available. This confirmation is a safety step.</p>
+            <p>Do you want to proceed with making the recipe?</p>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" style="margin-top: 20px;">
+            <input type="hidden" name="num_batches" value="{{ num_batches }}">
+            <input type="hidden" name="confirmed_partial" value="true">
+             <input type="hidden" name="origin_page" value="{{ origin_page if origin_page else 'recipe_detail' }}">
+
+
+            <button type="submit" class="button btn btn-success mr-2">
+                <i class="fas fa-check-circle"></i> Yes, Proceed with Available
+            </button>
+
+            {# Determine cancel URL based on where the user came from #}
+            {% if origin_page == 'consume_item_page' %}
+                <a href="{{ url_for('consume_item_view') }}" class="button btn btn-secondary">
+                    <i class="fas fa-times-circle"></i> Cancel
+                </a>
+            {% else %} {# Default to recipe_detail_view #}
+                <a href="{{ url_for('recipe_detail_view', recipe_name=recipe.name) }}" class="button btn btn-secondary">
+                    <i class="fas fa-times-circle"></i> Cancel
+                </a>
+            {% endif %}
+        </form>
+    </div>
+
+    <div style="margin-top: 30px;">
+        <a href="{{ url_for('recipe_detail_view', recipe_name=recipe.name) }}" class="nav-link-button"><i class="fas fa-arrow-left"></i> Back to Recipe Details</a>
+        <a href="{{ url_for('home') }}" class="nav-link-button"><i class="fas fa-home"></i> Back to Home</a>
+    </div>
+
+<style>
+    .confirmation-container {
+        padding: 20px;
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 5px;
+        margin-bottom: 20px;
+    }
+    .list-group-item-warning {
+        color: #856404;
+        background-color: #fff3cd;
+        border-color: #ffeeba;
+    }
+    .badge-danger {
+        color: #fff;
+        background-color: #dc3545;
+    }
+</style>
+{% endblock %}

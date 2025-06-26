@@ -85,24 +85,20 @@
         </div>
 
             <div class="actions-section" style="margin-top: 20px;">
-                {% if recipe_makeable %}
-                    <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" class="form-inline">
-                        <div class="form-group mb-2 mr-sm-2">
-                            <label for="num_batches" class="sr-only">Number of Batches</label>
-                            <input type="number" class="form-control" id="num_batches" name="num_batches" value="1" min="1" style="width: 80px;" title="Number of batches to make">
-                        </div>
-                        <button type="submit" class="button btn btn-success mb-2"><i class="fas fa-blender"></i> Make Recipe</button>
-                    </form>
-                {% else %}
-                    {# Keep the form structure for consistency, but disable the button and input if not makeable #}
-                    <form class="form-inline">
-                         <div class="form-group mb-2 mr-sm-2">
-                            <label for="num_batches_disabled" class="sr-only">Number of Batches</label>
-                            <input type="number" class="form-control" id="num_batches_disabled" name="num_batches_disabled" value="1" min="1" style="width: 80px;" disabled>
-                        </div>
-                        <button type="button" class="button btn btn-secondary mb-2" disabled title="Not enough ingredients to make this recipe."><i class="fas fa-blender"></i> Make Recipe (Insufficient Ingredients)</button>
-                    </form>
-                {% endif %}
+                {# The button is now always enabled. recipe_makeable can still be used for informational text if desired. #}
+                <form method="POST" action="{{ url_for('make_recipe_view', recipe_name=recipe.name) }}" class="form-inline">
+                    <input type="hidden" name="origin_page" value="recipe_detail"> {# Identify origin for confirmation cancel #}
+                    <div class="form-group mb-2 mr-sm-2">
+                        <label for="num_batches" class="sr-only">Number of Batches</label>
+                        <input type="number" class="form-control" id="num_batches" name="num_batches" value="1" min="1" style="width: 80px;" title="Number of batches to make">
+                    </div>
+                    <button type="submit" class="button btn btn-success mb-2">
+                        <i class="fas fa-blender"></i> Make Recipe
+                    </button>
+                    {% if not recipe_makeable %}
+                        <span class="ml-2 text-warning">(Some ingredients missing)</span>
+                    {% endif %}
+                </form>
             </div>
 
         {% else %}
