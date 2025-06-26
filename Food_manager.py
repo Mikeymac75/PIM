@@ -2899,9 +2899,12 @@ class InventoryManager:
             print(f"Database error getting total item quantity for product ID {product_id}: {e}")
         return total_quantity
 
-    def consume_item(self, item_name_to_consume, quantity_to_consume_float):
+    def consume_item(self, item_name_to_consume, quantity_to_consume_float, consumed_date_str: str = None):
         """
         Consumes a specified quantity of an item from the inventory.
+        - item_name_to_consume: Name of the item.
+        - quantity_to_consume_float: Amount to consume.
+        - consumed_date_str: Optional. The date of consumption in 'YYYY-MM-DD' format. Defaults to today if None.
         - Fetches all batches of the item, ordered by expiry date (soonest first).
         - Iterates through batches, consuming the required quantity.
         - Updates item quantities in `inventory_items` table (or deletes if fully consumed).
@@ -3000,20 +3003,35 @@ class InventoryManager:
         print(final_message)
         return {"success": consumed_amount_total_overall > 0, "message": final_message, "details": log_messages}
 
-    def consume_multiple_items(self, items_to_consume: list):
+    def consume_multiple_items(self, items_to_consume: list, consumption_date_str: str = None):
         """
         Consumes multiple items from the inventory.
         - items_to_consume: A list of dictionaries, each with 'item_name' and 'quantity'.
-                            Example: [{'item_name': 'Apples', 'quantity': 2.0}, ...]
+                            Example: [{'item_name': 'Apples', 'quantity': '2.0'}, ...]
+        - consumption_date_str: Optional. The date of consumption in 'YYYY-MM-DD' format.
+                                Defaults to today if None.
         Returns a list of results, one for each item consumption attempt.
         """
         overall_results = []
         if not isinstance(items_to_consume, list):
             return [{"success": False, "item_name": "N/A", "message": "Invalid input: items_to_consume must be a list."}]
 
+        # Validate consumption_date_str format once if provided
+        if consumption_date_str:
+            try:
+                date.fromisoformat(consumption_date_str)
+            except ValueError:
+                # Apply this error to all items if the common date is invalid
+                for item_spec_err in items_to_consume:
+                    item_name_err = item_spec_err.get('item_name', "Unknown")
+                    overall_results.append({"success": False, "item_name": item_name_err, "message": f"Invalid consumption_date_str format: {consumption_date_str}. Use YYYY-MM-DD."})
+                return overall_results
+
+        final_consumed_date = consumption_date_str if consumption_date_str else date.today().isoformat()
+
         for item_spec in items_to_consume:
             item_name = item_spec.get('item_name')
-            quantity_str = item_spec.get('quantity') # Assuming quantity comes as string from form/JSON
+            quantity_str = item_spec.get('quantity')
 
             if not item_name or quantity_str is None:
                 overall_results.append({"success": False, "item_name": item_name or "Unknown", "message": "Missing item_name or quantity."})
@@ -3025,14 +3043,12 @@ class InventoryManager:
                     overall_results.append({"success": False, "item_name": item_name, "message": "Quantity must be a positive number."})
                     continue
             except ValueError:
-                overall_results.append({"success": False, "item_name": item_name, "message": f"Invalid quantity format: {quantity_str}."})
+                overall_results.append({"success": False, "item_name": item_name, "message": f"Invalid quantity format for '{item_name}': {quantity_str}."})
                 continue
 
-            # Call the existing single consume_item method
-            # consume_item already returns a dict like {"success": True/False, "message": "...", "details": []}
-            single_item_result = self.consume_item(item_name, quantity_float)
+            # Call consume_item, passing the validated consumption date
+            single_item_result = self.consume_item(item_name, quantity_float, consumed_date_str=final_consumed_date)
 
-            # Add item_name to the result for clarity if not already there or to ensure it's present
             single_item_result['item_name'] = item_name
             overall_results.append(single_item_result)
 
