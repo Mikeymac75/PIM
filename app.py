@@ -2438,45 +2438,119 @@ def edit_inventory_view():
         # For the redirect:
         page_product_id_for_redirect = request.form.get('product_id_for_redirect') # Assuming we add this hidden field
 
-        # Iterate through form data to find batch adjustments
-        i = 0
+        # Iterate through form data to find batch adjustments for Active Inventory Batches
+        active_batch_index = 0
         while True:
-            batch_id_str = request.form.get(f'batch_id_{i}')
+            # Corrected field names to match the template (e.g., active_batch_id_0, active_quantity_0)
+            batch_id_str = request.form.get(f'active_batch_id_{active_batch_index}')
             if batch_id_str is None:
-                break # No more batches in the form
+                # No more active batches submitted with this index pattern
+                break
 
-            new_quantity_str = request.form.get(f'quantity_{i}')
-            new_purchase_date_str = request.form.get(f'purchase_date_{i}')
-            new_expiry_date_str = request.form.get(f'expiry_date_{i}')
+            new_quantity_str = request.form.get(f'active_quantity_{active_batch_index}')
+            new_purchase_date_str = request.form.get(f'active_purchase_date_{active_batch_index}')
+            new_expiry_date_str = request.form.get(f'active_expiry_date_{active_batch_index}')
 
-            if not batch_id_str: # Should not happen if form is structured correctly
-                i += 1
+            # It's possible for a batch_id to be submitted but quantity/dates to be missing if form is manipulated
+            # or if they are optional and not filled. adjust_inventory_batch should handle None for dates.
+            # new_quantity_str should always be present if batch_id is.
+
+            if not batch_id_str: # Should ideally not happen if loop breaks on missing batch_id_X
+                active_batch_index += 1
                 continue
 
             try:
                 batch_id = int(batch_id_str)
-                # Call the manager method
-                # NOTE: The `include_in_projections` variable is captured but not yet passed to `adjust_inventory_batch`.
-                # This will be addressed if `adjust_inventory_batch` is updated to use it.
                 result = manager.adjust_inventory_batch(
                     batch_id=batch_id,
-                    new_quantity_str=new_quantity_str,
-                    new_purchase_date_str=new_purchase_date_str,
-                    new_expiry_date_str=new_expiry_date_str,
-                    include_in_projections=include_in_projections # Ensure this is passed
+                    new_quantity_str=new_quantity_str, # adjust_inventory_batch handles if this is None or empty
+                    new_purchase_date_str=new_purchase_date_str if new_purchase_date_str else None,
+                    new_expiry_date_str=new_expiry_date_str if new_expiry_date_str else None,
+                    include_in_projections=include_in_projections
                 )
 
                 if result.get("success"):
                     flash(result["message"], 'success')
                 else:
-                    flash(f"Error for batch ID {batch_id}: {result.get('message', 'Unknown error.')}", 'error')
+                    flash(f"Error adjusting active batch ID {batch_id}: {result.get('message', 'Unknown error.')}", 'error')
 
             except ValueError:
-                flash(f"Invalid Batch ID format: {batch_id_str}", "error")
-            except Exception as e: # Catch any other unexpected errors during adjustment
-                flash(f"An unexpected error occurred processing batch ID {batch_id_str}: {e}", "error")
+                flash(f"Invalid Batch ID format for active batch: {batch_id_str}", "error")
+            except Exception as e:
+                flash(f"An unexpected error occurred processing active batch ID {batch_id_str}: {e}", "error")
 
-            i += 1
+            active_batch_index += 1
+
+        # --- Implement "Return to Stock" logic for Recently Consumed Batches ---
+        consumed_batch_index = 0
+        while True:
+            # Fields from the "Recently Consumed Batches" section in the template
+            return_quantity_str = request.form.get(f'consumed_return_quantity_{consumed_batch_index}')
+
+            # If no return quantity for this index, assume no more consumed items to process
+            # An empty string for quantity means user didn't want to return this one.
+            if return_quantity_str is None : # No more consumed_return_quantity_X fields
+                break
+
+            if not return_quantity_str.strip(): # Empty string, skip
+                consumed_batch_index += 1
+                continue
+
+            # Retrieve other necessary hidden fields for this consumed batch
+            product_id_str = request.form.get(f'consumed_product_id_{consumed_batch_index}')
+            product_name = request.form.get(f'consumed_product_name_{consumed_batch_index}')
+            purchase_date_str = request.form.get(f'consumed_purchase_date_{consumed_batch_index}')
+            expiry_date_str = request.form.get(f'consumed_expiry_date_{consumed_batch_index}')
+            original_qty_str_of_consumed_batch = request.form.get(f'consumed_original_qty_str_{consumed_batch_index}')
+
+            try:
+                # Validate product_id and quantity
+                product_id_int = int(product_id_str)
+                # The manager's _parse_quantity_string can handle various quantity string formats
+                # quantity_to_return_float = manager._parse_quantity_string(return_quantity_str) # Not ideal to call private method
+
+                # Basic float conversion for quantity to return
+                quantity_to_return_float = 0.0
+                try:
+                    quantity_to_return_float = float(return_quantity_str)
+                except ValueError:
+                    flash(f"Invalid return quantity format '{return_quantity_str}' for {product_name}. Must be a number.", 'error')
+                    consumed_batch_index += 1
+                    continue
+
+                if quantity_to_return_float <= 0:
+                    # User might have entered 0 or negative, just skip without error
+                    consumed_batch_index += 1
+                    continue
+
+                # Call manager method
+                # The original_quantity_at_creation_str for return_consumed_batch_to_stock
+                # should be the quantity of the batch being created by the return.
+                # The consumed_original_qty_str_{{ loop.index0 }} is the original quantity of the batch
+                # *from which items were consumed*. This might be useful for context if the manager method
+                # is ever enhanced to use it, but for now, the new batch's original quantity is `return_quantity_str`.
+                return_result = manager.return_consumed_batch_to_stock(
+                    product_id=product_id_int,
+                    product_name=product_name,
+                    purchase_date_str=purchase_date_str, # This is original purchase date of consumed item
+                    expiry_date_str=expiry_date_str,     # This is original expiry date of consumed item
+                    original_quantity_at_creation_str=return_quantity_str, # This is the quantity of the NEW batch
+                    quantity_to_return_str=return_quantity_str,
+                    include_in_projections=include_in_projections
+                )
+
+                if return_result.get("success"):
+                    flash(return_result["message"], 'success')
+                else:
+                    flash(f"Error returning stock for {product_name}: {return_result.get('message', 'Unknown error.')}", 'error')
+
+            except ValueError:
+                flash(f"Invalid product ID format '{product_id_str}' for returning stock.", "error")
+            except Exception as e:
+                flash(f"An unexpected error occurred returning stock for {product_name}: {e}", "error")
+
+            consumed_batch_index += 1
+        # --- End of "Return to Stock" logic ---
 
         # If page_product_id_for_redirect was not available, try selected_product_id from GET context
         redirect_product_id = page_product_id_for_redirect if page_product_id_for_redirect else selected_product_id
@@ -2489,11 +2563,46 @@ def edit_inventory_view():
             flash("No product context for redirect, returning to general edit page.", "warning")
             return redirect(url_for('edit_inventory_view'))
 
+    # GET Request: Fetch data for the page
+    # Fetch products for the dropdown
+    products_for_dropdown = manager.get_all_products() # Assuming this fetches all product names and IDs
+
+    selected_product_id_from_arg = request.args.get('product_id')
+    active_inventory_batches = [] # Renamed from inventory_batches for clarity
+    recently_consumed_batches = []
+    selected_product_name_display = None # Renamed from selected_product_name
+
+    if selected_product_id_from_arg:
+        try:
+            product_id_int_for_get = int(selected_product_id_from_arg)
+
+            # Fetch active inventory batches for editing
+            active_inventory_batches = manager.get_inventory_batches_for_product(
+                product_id=product_id_int_for_get,
+                limit=4, # Keep existing limit for active batches
+                order_by_id_desc=True # Most recent first
+            )
+
+            # Fetch recently consumed batch history for "Return to Stock"
+            # This method needs to be implemented in FoodManager
+            recently_consumed_batches = manager.get_recently_consumed_batch_info(
+                product_id=product_id_int_for_get,
+                limit=5 # Example: show up to 5 recently consumed distinct batch origins
+            )
+
+            selected_product_details = manager.get_product(product_id_int_for_get)
+            if selected_product_details:
+                selected_product_name_display = selected_product_details['name']
+        except ValueError:
+            flash("Invalid product ID format provided in URL.", "error")
+            selected_product_id_from_arg = None # Reset to avoid further errors
+
     return render_template('edit_inventory.html',
                            products=products_for_dropdown,
-                           selected_product_id=selected_product_id,
-                           selected_product_name=selected_product_name,
-                           inventory_batches=inventory_batches)
+                           selected_product_id=selected_product_id_from_arg, # Pass the validated/processed ID
+                           selected_product_name=selected_product_name_display, # Pass the name for display
+                           active_inventory_batches=active_inventory_batches,
+                           recently_consumed_batches=recently_consumed_batches) # Pass new data to template
 
 # --- Category and Subcategory Management Route ---
 @app.route('/manage_categories', methods=['GET', 'POST'])
