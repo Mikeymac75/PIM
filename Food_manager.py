@@ -3308,8 +3308,8 @@ class InventoryManager:
                 cursor.execute('''
                     SELECT SUM(quantity_consumed_this_time) as total_consumed
                     FROM historical_items
-                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date < ?
-                ''', (product_id, lookback_start_dt.isoformat(), today.isoformat())) # Use < today to not include today's consumption
+                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date <= ?
+                ''', (product_id, lookback_start_dt.isoformat(), today.isoformat())) # Changed to <= today to include today's consumption
                 result_row = cursor.fetchone()
                 if result_row and result_row['total_consumed'] is not None:
                     total_consumed_in_lookback = float(result_row['total_consumed'])
@@ -3391,8 +3391,8 @@ class InventoryManager:
                 cursor.execute('''
                     SELECT SUM(cost_of_goods_used) as total_cost
                     FROM historical_items
-                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date < ?
-                ''', (product_id, thirty_days_ago_dt.isoformat(), today.isoformat()))
+                    WHERE product_id = ? AND consumed_date >= ? AND consumed_date <= ?
+                ''', (product_id, thirty_days_ago_dt.isoformat(), today.isoformat())) # Changed to <= today
                 cost_row = cursor.fetchone()
                 if cost_row and cost_row['total_cost'] is not None:
                     cost_last_30_days = float(cost_row['total_cost'])
