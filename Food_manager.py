@@ -4017,59 +4017,47 @@ class InventoryManager:
             results_details.append({
                 "product_id": product_id,
                 "success": result.get("success"),
-                "message": result.get("message", "Unknown error during individual purchase logging.")
+                "message": result.get("message", "Unknown error during individual purchase logging."),
+                "user_shopping_list_item_id": purchase_data.get("user_shopping_list_item_id") # Carry this over
             })
 
+        # After processing all purchases, attempt to remove successful ones from shopping list
+        items_removed_from_sl_count = 0
+        items_failed_sl_removal_count = 0
+
+        if success_count > 0:
+            for detail in results_details:
+                if detail.get("success") and detail.get("user_shopping_list_item_id") is not None:
+                    sl_item_id = detail["user_shopping_list_item_id"]
+                    removal_result = self.remove_item_from_user_shopping_list(sl_item_id)
+                    if removal_result.get("success"):
+                        items_removed_from_sl_count += 1
+                        logging.info(f"Successfully removed item ID {sl_item_id} from user_shopping_list after purchase.")
+                    else:
+                        items_failed_sl_removal_count += 1
+                        logging.warning(f"Failed to remove item ID {sl_item_id} from user_shopping_list: {removal_result.get('message')}")
+                elif detail.get("success") and detail.get("user_shopping_list_item_id") is None:
+                    # This case should ideally not happen if items logged via SL always have the ID.
+                    # Could be a purchase logged from elsewhere not tied to a SL item.
+                    logging.info(f"Purchase for product ID {detail.get('product_id')} was successful but no user_shopping_list_item_id was provided for removal.")
+
+
+        final_summary_message = f"Logged {success_count} purchase(s), failed {failure_count}. "
+        if items_removed_from_sl_count > 0 :
+            final_summary_message += f"Removed {items_removed_from_sl_count} item(s) from shopping list. "
+        if items_failed_sl_removal_count > 0:
+            final_summary_message += f"Failed to remove {items_failed_sl_removal_count} item(s) from shopping list. "
+
+        # Add overall success to the return, useful for flashing a single summary message
+        # The `results_details` contains per-item success/failure for logging.
         return {
-            "overall_success": failure_count == 0, # True if all items succeeded
+            "overall_success": failure_count == 0 and items_failed_sl_removal_count == 0,
             "success_count": success_count,
             "failure_count": failure_count,
-            "results_details": results_details
-        }
-
-        # This block should be executed if there were successful purchases
-        if success_count > 0:
-            product_ids_to_remove = []
-            # Use the 'results_details' list that was populated in the loop above
-            for detail in results_details:
-                if detail.get("success") and detail.get("product_id") is not None:
-                    product_ids_to_remove.append(detail.get("product_id"))
-
-            for prod_id in set(product_ids_to_remove): # Ensure unique product IDs
-                removal_result = self.remove_item_from_user_shopping_list_by_product_id(prod_id)
-                if removal_result.get("success"):
-                    print(f"LOG: Successfully processed removal of product ID {prod_id} from user_shopping_list after purchase.")
-                else:
-                    print(f"LOG_ERROR: Failed to remove product ID {prod_id} from user_shopping_list: {removal_result.get('message')}")
-        # This block should be executed if there were successful purchases
-        if success_count > 0:
-            product_ids_to_remove = []
-            # Use the 'results_details' list that was populated in the loop above
-            for detail in results_details:
-                if detail.get("success") and detail.get("product_id") is not None:
-                    # Check if the original purchase_data had a user_shopping_list_item_id
-                    # This requires results_details to carry it, or re-associating.
-                    # For now, assume we remove by product_id if purchase was successful.
-                    # This matches the behavior implied by the original placement of the code.
-                    product_ids_to_remove.append(detail.get("product_id"))
-
-            for prod_id in set(product_ids_to_remove): # Ensure unique product IDs
-                # This was the original intent: remove by product_id from user_shopping_list
-                # The method `remove_item_from_user_shopping_list_by_product_id` is suitable.
-                removal_result = self.remove_item_from_user_shopping_list_by_product_id(prod_id)
-                if removal_result.get("success"):
-                    print(f"LOG: Successfully processed removal of product ID {prod_id} from user_shopping_list after purchase.")
-                else:
-                    # Log an error or warning if removal fails. This might happen if the item was already removed
-                    # or if there was a DB issue.
-                    print(f"LOG_ERROR: Failed to remove product ID {prod_id} from user_shopping_list: {removal_result.get('message')}")
-
-        # Return the full summary after all processing, including shopping list removal attempts.
-        return {
-            "overall_success": failure_count == 0,
-            "success_count": success_count,
-            "failure_count": failure_count,
-            "results_details": results_details
+            "items_removed_from_sl_count": items_removed_from_sl_count,
+            "items_failed_sl_removal_count": items_failed_sl_removal_count,
+            "message": final_summary_message.strip(), # For a general status
+            "results_details": results_details # For detailed breakdown
         }
 
     # --- User Shopping List Methods ---
@@ -4155,16 +4143,23 @@ class InventoryManager:
 
     def remove_item_from_user_shopping_list(self, user_shopping_list_item_id):
         """Removes an item from the user_shopping_list by its ID."""
+        if not isinstance(user_shopping_list_item_id, int) or user_shopping_list_item_id <= 0:
+            logging.error(f"Attempted to remove shopping list item with invalid ID: {user_shopping_list_item_id}")
+            return {"success": False, "message": f"Invalid item ID provided ({user_shopping_list_item_id})."}
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                logging.info(f"Attempting to delete from user_shopping_list where id = {user_shopping_list_item_id}")
                 cursor.execute("DELETE FROM user_shopping_list WHERE id = ?", (user_shopping_list_item_id,))
                 conn.commit()
                 if cursor.rowcount > 0:
+                    logging.info(f"Successfully deleted item with id {user_shopping_list_item_id} from user_shopping_list. Rowcount: {cursor.rowcount}")
                     return {"success": True, "message": "Item removed from shopping list."}
                 else:
+                    logging.warning(f"No item found with id {user_shopping_list_item_id} in user_shopping_list to delete. Rowcount: {cursor.rowcount}")
                     return {"success": False, "message": "Item not found in shopping list."}
         except sqlite3.Error as e:
+            logging.error(f"Database error while removing item id {user_shopping_list_item_id} from user_shopping_list: {e}")
             return {"success": False, "message": f"Database error: {e}"}
 
     def remove_item_from_user_shopping_list_by_product_id(self, product_id):
