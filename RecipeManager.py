@@ -8,6 +8,9 @@ class RecipeManager:
         if self.db_filepath == ":memory:":
             self.conn = sqlite3.connect(":memory:")
             self.conn.row_factory = sqlite3.Row
+        # Make InventoryManager accessible for schema and product interactions
+        from Food_manager import InventoryManager # Import locally to avoid circular dependency at module level if any
+        self.manager = InventoryManager(db_filepath=self.db_filepath)
         self._initialize_db()
 
     def _get_db_connection(self):
@@ -197,9 +200,13 @@ class RecipeManager:
         params = []
 
         if not export_all:
-            offset = (page - 1) * per_page
+            # Ensure page and per_page are valid for pagination
+            current_page = page if isinstance(page, int) and page > 0 else 1
+            items_per_page = per_page if isinstance(per_page, int) and per_page > 0 else 10 # Default to 10 if invalid
+
+            offset = (current_page - 1) * items_per_page
             query += " LIMIT ? OFFSET ?"
-            params.extend([per_page, offset])
+            params.extend([items_per_page, offset])
 
         try:
             with self._get_db_connection() as conn:

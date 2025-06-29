@@ -51,10 +51,11 @@
                     <td>{{ "%.2f" | format(item.current_on_hand or 0) }}</td>
                     <td>{{ "%.2f" | format(item.system_calculated_need or 0) }}</td>
                     <td>
-                        <form method="POST" action="{{ url_for('update_new_shopping_list_item_quantity_view', item_id=item.user_shopping_list_item_id) }}" class="is-inline-form">
-                            <input type="number" step="any" name="quantity_added" value="{{ "%.2f" | format(item.quantity_added) }}" class="input is-small" style="width: 80px;">
-                            <button type="submit" class="button is-small is-info"><i class="fas fa-save"></i></button>
-                        </form>
+                        {# This form will be submitted by JS to avoid conflict with the main form #}
+                        <div class="inline-update-qty-container" data-action-url="{{ url_for('update_new_shopping_list_item_quantity_view', item_id=item.user_shopping_list_item_id) }}">
+                            <input type="number" step="any" name="quantity_added_{{item.user_shopping_list_item_id}}" value="{{ "%.2f" | format(item.quantity_added) }}" class="input is-small quantity-sl-update-input" style="width: 80px;">
+                            <button type="button" class="button is-small is-info update-sl-qty-button"><i class="fas fa-save"></i></button>
+                        </div>
                     </td>
                     <td>{{ item.default_purchase_location or 'N/A' }}</td>
                     <td>
@@ -116,6 +117,7 @@
 document.addEventListener('DOMContentLoaded', function () {
     const selectAllCheckbox = document.getElementById('select_all_to_purchase');
     const itemCheckboxes = document.querySelectorAll('.item-purchase-checkbox');
+    const updateQtyButtons = document.querySelectorAll('.update-sl-qty-button');
 
     function togglePurchaseDetails(checkbox, index) {
         const detailsRow = document.getElementById(`purchase_details_${index}`);
@@ -153,6 +155,42 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
+
+    updateQtyButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const container = this.closest('.inline-update-qty-container');
+            const actionUrl = container.dataset.actionUrl;
+            const quantityInput = container.querySelector('.quantity-sl-update-input');
+            const newQuantity = quantityInput.value;
+
+            // Create a temporary form to submit the data
+            const tempForm = document.createElement('form');
+            tempForm.method = 'POST';
+            tempForm.action = actionUrl;
+
+            const quantityField = document.createElement('input');
+            quantityField.type = 'hidden';
+            quantityField.name = 'quantity_added'; // Name expected by the Flask route
+            quantityField.value = newQuantity;
+            tempForm.appendChild(quantityField);
+
+            // Add CSRF token if needed by your application for POST requests
+            // Example:
+            // const csrfToken = document.querySelector('meta[name="csrf-token"]'); // Assuming you have a meta tag
+            // if (csrfToken) {
+            //    const csrfField = document.createElement('input');
+            //    csrfField.type = 'hidden';
+            //    csrfField.name = 'csrf_token';
+            //    csrfField.value = csrfToken.content;
+            //    tempForm.appendChild(csrfField);
+            // }
+
+            document.body.appendChild(tempForm);
+            tempForm.submit();
+            // The form will be removed from the DOM automatically after submission
+            // because the page reloads.
+        });
+    });
 });
 </script>
 

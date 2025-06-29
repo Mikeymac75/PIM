@@ -54,9 +54,9 @@ def client(test_db_path):
 
     with app.test_client() as client:
         with app.app_context(): # Ensures DB operations occur within app context
-            # Initialize DB schema
-            test_inventory_manager.init_db() # Creates tables if they don't exist
-            test_recipe_manager.init_db()   # Creates tables if they don't exist
+            # Initialize DB schema - This is now handled by manager constructors
+            # test_inventory_manager.init_db() # Creates tables if they don't exist
+            # test_recipe_manager.init_db()   # Creates tables if they don't exist
 
             # Pre-populate with some products
             products_to_add = [

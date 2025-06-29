@@ -2,7 +2,7 @@ import unittest
 import os
 import sqlite3
 from flask import session # Added session import
-from app import app, manager as app_manager
+from app import app, manager as app_manager, recipe_mngr as app_recipe_mngr # Added app_recipe_mngr
 from Food_manager import InventoryManager
 import io
 import openpyxl
@@ -201,7 +201,7 @@ class TestAppProductList(unittest.TestCase):
         }
         response = self.client.post('/products/create', data=data, follow_redirects=True)
         self.assertEqual(response.status_code, 200) # Should redirect to product list
-        self.assertIn(b"Product 'New Test Product 123' created successfully.", response.data)
+        self.assertIn(b"Product &#39;New Test Product 123&#39; created successfully.", response.data)
         
         # Verify product in DB (optional, but good)
         product = app_manager.get_product_by_name('New Test Product 123')
@@ -227,7 +227,12 @@ class TestAppProductList(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html_content = response.data.decode('utf-8')
         self.assertIn(b"Edit Product: Apples", response.data)
-        self.assertIn(f'value="{self.produce_cat_id}" selected', html_content)
+        # Check for value and selected attribute, allowing for whitespace variations
+        self.assertIn(f'value="{self.produce_cat_id}"', html_content)
+        self.assertIn('selected', html_content) # This might be too broad if other options could be 'selected'
+        # More specific check for selected attribute on the correct option:
+        self.assertRegex(html_content, f'<option value="{self.produce_cat_id}"[^>]*selected[^>]*>')
+
         # JavaScript will handle subcategory pre-selection, so it's harder to check directly in HTML
         # We can check if the necessary data for JS is present
         self.assertIn(f'const currentProductCategoryId = "{self.produce_cat_id}";', html_content)
@@ -402,29 +407,29 @@ class TestRecipeProduction(unittest.TestCase):
         self.app_context.push()
         self.client = app.test_client()
 
-        self.original_manager_db = app.manager.db_filepath
-        self.original_recipe_mngr_db = app.recipe_mngr.db_filepath
+        self.original_manager_db = app_manager.db_filepath # Use app_manager
+        self.original_recipe_mngr_db = app_recipe_mngr.db_filepath # Use app_recipe_mngr
 
-        app.manager.db_filepath = ":memory:"
+        app_manager.db_filepath = ":memory:" # Use app_manager
         if hasattr(app_manager, 'conn') and app_manager.conn:
             try: app_manager.close_connection()
             except: pass
-        app.manager.conn = sqlite3.connect(":memory:")
-        app.manager.conn.row_factory = sqlite3.Row
-        app_manager._initialize_db()
+        app_manager.conn = sqlite3.connect(":memory:") # Use app_manager
+        app_manager.conn.row_factory = sqlite3.Row
+        app_manager._initialize_db() # Use app_manager
 
-        app.recipe_mngr.db_filepath = ":memory:"
-        app.recipe_mngr.conn = app.manager.conn
-        app.recipe_mngr._initialize_db()
+        app_recipe_mngr.db_filepath = ":memory:" # Use app_recipe_mngr
+        app_recipe_mngr.conn = app_manager.conn # Share connection with app_manager
+        app_recipe_mngr._initialize_db() # Use app_recipe_mngr
 
         # Create Categories needed for products in this test class
-        self.dairy_cat_id = app.manager.add_category("Dairy")['category_id']
-        self.misc_cat_id = app.manager.add_category("Misc")['category_id']
+        self.dairy_cat_id = app_manager.add_category("Dairy")['category_id'] # Use app_manager
+        self.misc_cat_id = app_manager.add_category("Misc")['category_id'] # Use app_manager
 
         # Create Products using new signature
-        self.milk_prod = app.manager.create_product(name="Milk For Cheese", category_id=self.dairy_cat_id, subcategory_id=None, unit_of_measure="liter", default_expiry_days=7)
-        self.rennet_prod = app.manager.create_product(name="Rennet", category_id=self.misc_cat_id, subcategory_id=None, unit_of_measure="tablet", default_expiry_days=365)
-        self.cheese_output_prod = app.manager.create_product(name="Shredded Cheese", category_id=self.dairy_cat_id, subcategory_id=None, unit_of_measure="kg", default_expiry_days=30)
+        self.milk_prod = app_manager.create_product(name="Milk For Cheese", category_id=self.dairy_cat_id, subcategory_id=None, unit_of_measure="liter", default_expiry_days=7) # Use app_manager
+        self.rennet_prod = app_manager.create_product(name="Rennet", category_id=self.misc_cat_id, subcategory_id=None, unit_of_measure="tablet", default_expiry_days=365) # Use app_manager
+        self.cheese_output_prod = app_manager.create_product(name="Shredded Cheese", category_id=self.dairy_cat_id, subcategory_id=None, unit_of_measure="kg", default_expiry_days=30) # Use app_manager
 
         self.milk_prod_id = self.milk_prod['product_id']
         self.rennet_prod_id = self.rennet_prod['product_id']
@@ -440,29 +445,29 @@ class TestRecipeProduction(unittest.TestCase):
                 {"item_name": "Rennet", "quantity_required": 1.0} ],
             "output_product_id": self.cheese_output_prod_id, "output_yield": self.cheese_yield
         }
-        add_recipe_result = app.recipe_mngr.add_recipe(recipe_data)
+        add_recipe_result = app_recipe_mngr.add_recipe(recipe_data) # Use app_recipe_mngr
         self.assertTrue(add_recipe_result.get('success'), f"Failed to add recipe for test: {add_recipe_result.get('message')}")
         self.recipe_id = add_recipe_result.get('recipe_id')
 
-        app.manager.add_inventory_stock(product_id=self.milk_prod_id, quantity_str="10", purchase_date_str="2024-01-01")
-        app.manager.add_inventory_stock(product_id=self.rennet_prod_id, quantity_str="5", purchase_date_str="2024-01-01")
+        app_manager.add_inventory_stock(product_id=self.milk_prod_id, quantity_str="10", purchase_date_str="2024-01-01") # Use app_manager
+        app_manager.add_inventory_stock(product_id=self.rennet_prod_id, quantity_str="5", purchase_date_str="2024-01-01") # Use app_manager
 
     def tearDown(self):
-        if app.manager.db_filepath == ":memory:" and hasattr(app_manager, 'conn') and app.manager.conn:
-            app.manager.close_connection()
-            app.manager.conn = None
+        if app_manager.db_filepath == ":memory:" and hasattr(app_manager, 'conn') and app_manager.conn: # Use app_manager
+            app_manager.close_connection() # Use app_manager
+            app_manager.conn = None # Use app_manager
 
-        app.manager.db_filepath = self.original_manager_db
-        app.recipe_mngr.db_filepath = self.original_recipe_mngr_db
-        app.recipe_mngr.conn = None
+        app_manager.db_filepath = self.original_manager_db # Use app_manager
+        app_recipe_mngr.db_filepath = self.original_recipe_mngr_db # Use app_recipe_mngr
+        app_recipe_mngr.conn = None # Use app_recipe_mngr
 
         self.app_context.pop()
 
     def test_make_recipe_produces_output(self):
         num_batches = 2
-        initial_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
-        initial_rennet_qty = app.manager.get_total_item_quantity(self.rennet_prod_id)
-        initial_cheese_qty = app.manager.get_total_item_quantity(self.cheese_output_prod_id)
+        initial_milk_qty = app_manager.get_total_item_quantity(self.milk_prod_id) # Use app_manager
+        initial_rennet_qty = app_manager.get_total_item_quantity(self.rennet_prod_id) # Use app_manager
+        initial_cheese_qty = app_manager.get_total_item_quantity(self.cheese_output_prod_id) # Use app_manager
         self.assertEqual(initial_cheese_qty, 0)
 
         response = self.client.post(f'/recipes/{self.recipe_name}/make',
@@ -532,38 +537,38 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         self.client = app.test_client()
 
         # Use in-memory SQLite for both managers, sharing the same connection
-        app.manager.db_filepath = ":memory:"
-        app.recipe_mngr.db_filepath = ":memory:"
+        app_manager.db_filepath = ":memory:" # Use app_manager
+        app_recipe_mngr.db_filepath = ":memory:" # Use app_recipe_mngr
 
         # Explicitly close any existing connections if they exist from other tests or contexts
-        if hasattr(app.manager, 'conn') and app.manager.conn:
+        if hasattr(app_manager, 'conn') and app_manager.conn: # Use app_manager
             try:
-                app.manager.close_connection()
+                app_manager.close_connection() # Use app_manager
             except Exception as e:
-                print(f"Error closing existing app.manager connection in setUp: {e}")
+                print(f"Error closing existing app_manager connection in setUp: {e}") # Use app_manager
 
-        # app.recipe_mngr might share app.manager.conn, so closing manager's might be enough
+        # app_recipe_mngr might share app_manager.conn, so closing manager's might be enough
         # but check recipe_mngr's connection too if it could be independent
-        if hasattr(app.recipe_mngr, 'conn') and app.recipe_mngr.conn and app.recipe_mngr.conn != app.manager.conn:
+        if hasattr(app_recipe_mngr, 'conn') and app_recipe_mngr.conn and app_recipe_mngr.conn != app_manager.conn: # Use app_recipe_mngr and app_manager
              try:
-                app.recipe_mngr.close_connection()
+                app_recipe_mngr.close_connection() # Use app_recipe_mngr
              except Exception as e:
-                print(f"Error closing existing app.recipe_mngr connection in setUp: {e}")
+                print(f"Error closing existing app_recipe_mngr connection in setUp: {e}") # Use app_recipe_mngr
 
 
-        app.manager.conn = sqlite3.connect(":memory:")
-        app.manager.conn.row_factory = sqlite3.Row
-        app.recipe_mngr.conn = app.manager.conn # Share the connection
+        app_manager.conn = sqlite3.connect(":memory:") # Use app_manager
+        app_manager.conn.row_factory = sqlite3.Row
+        app_recipe_mngr.conn = app_manager.conn # Share the connection # Use app_recipe_mngr and app_manager
 
-        app.manager._initialize_db()
-        app.recipe_mngr._initialize_db()
+        app_manager._initialize_db() # Use app_manager
+        app_recipe_mngr._initialize_db() # Use app_recipe_mngr
 
         # Minimal category setup for product creation
-        cat_info = app.manager.add_category("Test Category for Output")
+        cat_info = app_manager.add_category("Test Category for Output") # Use app_manager
         self.test_category_id = cat_info['category_id']
 
         # Create a dummy product to be used as output_product_id
-        output_prod_data = app.manager.create_product(
+        output_prod_data = app_manager.create_product( # Use app_manager
             name="Test Output Product Item",
             category_id=self.test_category_id,
             unit_of_measure="units",
@@ -572,10 +577,10 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         self.test_output_product_id = output_prod_data['product_id']
 
     def tearDown(self):
-        if app.manager.conn:
-            app.manager.conn.close()
-            app.manager.conn = None
-        # app.recipe_mngr.conn is the same, so it's already closed.
+        if app_manager.conn: # Use app_manager
+            app_manager.conn.close() # Use app_manager
+            app_manager.conn = None # Use app_manager
+        # app_recipe_mngr.conn is the same, so it's already closed.
         # If it were different, it would need its own close() call.
 
         self.app_context.pop()
@@ -599,7 +604,7 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         response = self.client.post(url_for('add_recipe_view'), data=form_data, follow_redirects=False) # Test redirect separately
         self.assertEqual(response.status_code, 302) # Expect a redirect to recipes_list_view
 
-        retrieved_recipe = app.recipe_mngr.get_recipe_by_name(recipe_name)
+        retrieved_recipe = app_recipe_mngr.get_recipe_by_name(recipe_name) # Use app_recipe_mngr
         self.assertIsNotNone(retrieved_recipe)
         self.assertEqual(retrieved_recipe['output_product_id'], self.test_output_product_id)
         self.assertAlmostEqual(retrieved_recipe['output_yield'], output_yield_val)
@@ -613,7 +618,7 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
             "ingredients": [{"item_name": "SomeItem", "quantity_required": 1.0}]
             # No output_product_id or output_yield initially
         }
-        add_res = app.recipe_mngr.add_recipe(initial_recipe_data)
+        add_res = app_recipe_mngr.add_recipe(initial_recipe_data) # Use app_recipe_mngr
         self.assertTrue(add_res['success'])
         recipe_id_to_edit = add_res['recipe_id']
 
@@ -635,7 +640,7 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         self.assertEqual(response.status_code, 302) # Expect redirect to recipe_detail_view
 
         # 3. Fetch and verify
-        retrieved_recipe = app.recipe_mngr.get_recipe_by_id(recipe_id_to_edit)
+        retrieved_recipe = app_recipe_mngr.get_recipe_by_id(recipe_id_to_edit) # Use app_recipe_mngr
         self.assertIsNotNone(retrieved_recipe)
         self.assertEqual(retrieved_recipe['name'], new_recipe_name) # Name should be updated
         self.assertEqual(retrieved_recipe['output_product_id'], self.test_output_product_id)
@@ -773,28 +778,28 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
         self.client = app.test_client()
 
         # Use in-memory SQLite for both managers, sharing the same connection
-        app.manager.db_filepath = ":memory:"
-        app.recipe_mngr.db_filepath = ":memory:"
+        app_manager.db_filepath = ":memory:" # Use app_manager
+        app_recipe_mngr.db_filepath = ":memory:" # Use app_recipe_mngr
 
-        if hasattr(app.manager, 'conn') and app.manager.conn:
-            try: app.manager.close_connection()
+        if hasattr(app_manager, 'conn') and app_manager.conn: # Use app_manager
+            try: app_manager.close_connection() # Use app_manager
             except Exception as e: print(f"Error closing manager conn in TestRecipeConsumptionFlows setUp: {e}")
 
-        app.manager.conn = sqlite3.connect(":memory:")
-        app.manager.conn.row_factory = sqlite3.Row
-        app.recipe_mngr.conn = app.manager.conn # Share connection
+        app_manager.conn = sqlite3.connect(":memory:") # Use app_manager
+        app_manager.conn.row_factory = sqlite3.Row
+        app_recipe_mngr.conn = app_manager.conn # Share connection # Use app_recipe_mngr and app_manager
 
-        app.manager._initialize_db()
-        app.recipe_mngr._initialize_db()
+        app_manager._initialize_db() # Use app_manager
+        app_recipe_mngr._initialize_db() # Use app_recipe_mngr
 
         # Create categories
-        self.cat_pantry_id = app.manager.add_category("Pantry")['category_id']
-        self.cat_dairy_id = app.manager.add_category("Dairy")['category_id']
+        self.cat_pantry_id = app_manager.add_category("Pantry")['category_id'] # Use app_manager
+        self.cat_dairy_id = app_manager.add_category("Dairy")['category_id'] # Use app_manager
 
         # Create products
-        self.flour_prod = app.manager.create_product(name="Flour", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=365)
-        self.sugar_prod = app.manager.create_product(name="Sugar", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=730)
-        self.eggs_prod = app.manager.create_product(name="Eggs", category_id=self.cat_dairy_id, unit_of_measure="unit", default_expiry_days=21)
+        self.flour_prod = app_manager.create_product(name="Flour", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=365) # Use app_manager
+        self.sugar_prod = app_manager.create_product(name="Sugar", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=730) # Use app_manager
+        self.eggs_prod = app_manager.create_product(name="Eggs", category_id=self.cat_dairy_id, unit_of_measure="unit", default_expiry_days=21) # Use app_manager
 
         self.flour_prod_id = self.flour_prod['product_id']
         self.sugar_prod_id = self.sugar_prod['product_id']
@@ -813,7 +818,7 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
             "output_product_id": None, # No output for simplicity in this test
             "output_yield": None
         }
-        add_recipe_result = app.recipe_mngr.add_recipe(self.recipe_data)
+        add_recipe_result = app_recipe_mngr.add_recipe(self.recipe_data) # Use app_recipe_mngr
         self.assertTrue(add_recipe_result.get('success'), "Failed to add test recipe in setUp.")
         self.test_recipe_id = add_recipe_result.get('recipe_id')
 
@@ -821,13 +826,13 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
         self.purchase_date = date.today().isoformat()
 
     def tearDown(self):
-        if app.manager.conn:
-            app.manager.conn.close()
-            app.manager.conn = None
+        if app_manager.conn: # Use app_manager
+            app_manager.conn.close() # Use app_manager
+            app_manager.conn = None # Use app_manager
         self.app_context.pop()
 
     def _add_stock(self, product_id, quantity_str):
-        app.manager.add_inventory_stock(product_id=product_id, quantity_str=quantity_str, purchase_date_str=self.purchase_date)
+        app_manager.add_inventory_stock(product_id=product_id, quantity_str=quantity_str, purchase_date_str=self.purchase_date) # Use app_manager
 
     def test_consume_recipe_all_ingredients_available(self):
         # Stock all ingredients sufficiently
