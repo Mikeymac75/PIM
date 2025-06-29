@@ -6,6 +6,8 @@ import openpyxl # For reading Excel files
 from io import BytesIO # For handling file streams in memory
 import os # For accessing environment variables
 import shutil # For file operations (backup/restore)
+import re # For parsing numeric quantities
+import zipfile # For BadZipFile exception
 
 app = Flask(__name__)
 # Configure secret key: Use an environment variable for production, with a fallback for development.
@@ -776,7 +778,8 @@ def upload_recipes_excel_view():
                     if not recipe_name: # Skip row if recipe name is missing
                         # Check if any other cell in the row has data to avoid skipping genuinely sparse rows vs. blank rows.
                         if any(get_cell_value(h) for h in all_expected_headers if h.lower() != 'recipe name'):
-                            error_messages.append(f"Row {row_idx}: Recipe Name is missing but other data present. Skipped.")
+                            # Changed from error_messages.append to warning_messages.append
+                            warning_messages.append(f"Row {row_idx}: Recipe Name is missing but other data present. Skipped.")
                         continue # Skip blank or effectively blank rows silently
 
                     description = get_cell_value('Description')
@@ -821,18 +824,23 @@ def upload_recipes_excel_view():
                             if not ing_qty_str:
                                 row_specific_errors.append(f"Ingredient {i} Quantity is required for '{ing_name_str}'.")
                             else:
-                                try:
-                                    ing_qty_float = float(ing_qty_str)
-                                    if ing_qty_float <= 0:
-                                        row_specific_errors.append(f"Ingredient {i} Quantity for '{ing_name_str}' must be positive.")
-                                    else:
-                                        ingredients_data.append({
-                                            'item_name': ing_name_str,
-                                            'quantity_required': ing_qty_float, # Matching add_recipe_view
-                                            'notes': ing_notes_str if ing_notes_str else "" # Notes are optional
-                                        })
-                                except ValueError:
-                                    row_specific_errors.append(f"Invalid Ingredient {i} Quantity '{ing_qty_str}' for '{ing_name_str}'. Must be a number.")
+                                # Try to parse quantity string like "500g", "1.5 kg"
+                                quantity_match = re.match(r"^\s*([0-9\.]+)\s*[a-zA-Z]*\s*$", ing_qty_str)
+                                if quantity_match:
+                                    try:
+                                        ing_qty_float = float(quantity_match.group(1))
+                                        if ing_qty_float <= 0:
+                                            row_specific_errors.append(f"Ingredient {i} Quantity for '{ing_name_str}' must be positive.")
+                                        else:
+                                            ingredients_data.append({
+                                                'item_name': ing_name_str,
+                                                'quantity_required': ing_qty_float,
+                                                'notes': ing_notes_str if ing_notes_str else ""
+                                            })
+                                    except ValueError: # Should not happen if regex matches float, but as safeguard
+                                        row_specific_errors.append(f"Invalid numeric part in Ingredient {i} Quantity '{ing_qty_str}' for '{ing_name_str}'.")
+                                else: # Regex did not match
+                                    row_specific_errors.append(f"Invalid Ingredient {i} Quantity format '{ing_qty_str}' for '{ing_name_str}'. Expected format like '100' or '100g'.")
                         elif ing_qty_str: # Quantity provided without ingredient name
                              row_specific_errors.append(f"Ingredient {i} Name is missing but Quantity '{ing_qty_str}' was provided.")
 
@@ -879,12 +887,15 @@ def upload_recipes_excel_view():
 
                 return redirect(url_for('recipes_list_view'))
 
-            except openpyxl.utils.exceptions.InvalidFileException:
-                 flash("The uploaded file is not a valid Excel (.xlsx) file or is corrupted.", 'error')
+            except openpyxl.utils.exceptions.InvalidFileException: # Keep this for specific openpyxl issues
+                 flash("The uploaded file is not a valid Excel (.xlsx) file or is corrupted (InvalidFileException).", 'error')
+                 return redirect(request.url)
+            except zipfile.BadZipFile: # Add this to catch zip format errors
+                 flash("The uploaded file is not a valid Excel (.xlsx) file or is corrupted (BadZipFile).", 'error')
                  return redirect(request.url)
             except Exception as e:
                 app.logger.error(f"Error processing recipe Excel file: {e}", exc_info=True)
-                flash(f"An unexpected error occurred while processing the Excel file: {e}", 'error')
+                flash(f"An unexpected error occurred while processing the Excel file: {str(e)}", 'error') # Use str(e) for flash
                 return redirect(request.url)
         else:
             flash('Invalid file type. Please upload an .xlsx file.', 'error')
@@ -3278,39 +3289,6 @@ def export_data_view():
             except Exception as e:
                 app.logger.error(f"Error exporting categories data: {e}", exc_info=True)
                 flash(f"An error occurred while exporting categories data: {str(e)}", "error")
-                return redirect(url_for('export_data_view'))
-
-        elif selected_table == "subcategories":
-            try:
-                subcategories_data = manager.get_all_subcategories_export()
-                if not subcategories_data:
-                    flash("No subcategories found to export.", "info")
-                    return redirect(url_for('export_data_view'))
-
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "Subcategories Export"
-
-                headers = list(subcategories_data[0].keys())
-                ws.append(headers)
-
-                for subcategory_row in subcategories_data:
-                    row_values = [subcategory_row.get(header) for header in headers]
-                    ws.append(row_values)
-
-                excel_stream = BytesIO()
-                wb.save(excel_stream)
-                excel_stream.seek(0)
-
-                return send_file(
-                    excel_stream,
-                    as_attachment=True,
-                    download_name='subcategories_export.xlsx',
-                    mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                )
-            except Exception as e:
-                app.logger.error(f"Error exporting subcategories data: {e}", exc_info=True)
-                flash(f"An error occurred while exporting subcategories data: {str(e)}", "error")
                 return redirect(url_for('export_data_view'))
 
         elif selected_table == "subcategories":

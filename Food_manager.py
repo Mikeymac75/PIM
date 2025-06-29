@@ -899,7 +899,8 @@ class InventoryManager:
                     try:
                         plant_dt = date.fromisoformat(item['plant_date'])
                         harvest_start_date = plant_dt + timedelta(days=item['time_to_harvest_days'])
-                        harvest_end_date = harvest_start_date + timedelta(days=item['expected_harvest_period_days'])
+                        # Corrected harvest_end_date to be inclusive for the period
+                        harvest_end_date = harvest_start_date + timedelta(days=item['expected_harvest_period_days'] - 1) if item['expected_harvest_period_days'] > 0 else harvest_start_date
                         current_dt = date.today()
 
                         if current_dt < harvest_start_date:
@@ -979,7 +980,8 @@ class InventoryManager:
                         expected_period = item['expected_harvest_period_days'] if item['expected_harvest_period_days'] is not None else 0
 
                         harvest_start_date = plant_dt + timedelta(days=time_to_harvest)
-                        harvest_end_date = harvest_start_date + timedelta(days=expected_period)
+                        # Corrected harvest_end_date to be inclusive for the period
+                        harvest_end_date = harvest_start_date + timedelta(days=expected_period - 1) if expected_period > 0 else harvest_start_date
 
                         if current_dt < harvest_start_date:
                             item['calculated_status'] = 'Growing'
@@ -3676,7 +3678,7 @@ class InventoryManager:
                     period_days = item.get('expected_harvest_period_days', 0)
 
                     item_harvest_start_date = plant_dt + timedelta(days=time_to_harvest)
-                    item_harvest_end_date = item_harvest_start_date + timedelta(days=period_days)
+                    item_harvest_end_date = item_harvest_start_date + timedelta(days=period_days - 1) if period_days > 0 else item_harvest_start_date
 
                     # Relevant if its harvest period overlaps with the projection window
                     # Or if status is Growing/Harvesting (more complex to perfectly align with dates)
@@ -3815,7 +3817,7 @@ class InventoryManager:
             # Depletion date
             depleted_this_day = False
             if not depletion_date_recorded and projected_inventory_today <= 0:
-                depleted_this_day = True
+                # depleted_this_day = True # This flags only the first day
                 depletion_date_recorded = True # Mark that we've found the first depletion date
 
             projection_results.append({
@@ -3827,7 +3829,7 @@ class InventoryManager:
                 'consumption': round(daily_consumption, 2),
                 'shrink': round(daily_shrink, 2),
                 'projected_ending_inventory': round(projected_inventory_today, 2),
-                'depletion_date_reached': depleted_this_day
+                'depletion_date_reached': depletion_date_recorded # Use the persistent flag
             })
 
             previous_day_ending_inventory = projected_inventory_today
@@ -4036,22 +4038,28 @@ class InventoryManager:
             "results_details": results_details
         }
 
-        # After successful logging, remove purchased items from user_shopping_list
+        # This block should be executed if there were successful purchases
         if success_count > 0:
             product_ids_to_remove = []
+            # Use the 'results_details' list that was populated in the loop above
             for detail in results_details:
                 if detail.get("success") and detail.get("product_id") is not None:
                     product_ids_to_remove.append(detail.get("product_id"))
 
-            # Remove duplicates just in case, though product_id should be unique per entry in results_details
-            for prod_id in set(product_ids_to_remove):
+            for prod_id in set(product_ids_to_remove): # Ensure unique product IDs
                 removal_result = self.remove_item_from_user_shopping_list_by_product_id(prod_id)
-                # Optionally, log success/failure of removal for debugging, but don't let it affect overall purchase status
                 if removal_result.get("success"):
                     print(f"LOG: Successfully processed removal of product ID {prod_id} from user_shopping_list after purchase.")
                 else:
                     print(f"LOG_ERROR: Failed to remove product ID {prod_id} from user_shopping_list: {removal_result.get('message')}")
+        # The return statement was moved here from its premature position.
+        # It should be outside the 'if success_count > 0' block if it's meant to always return.
+        # However, the logic implies it should be part of the overall method's return.
+        # Let's assume the intent is to return this structure regardless of success_count.
+        # If the shopping list removal logic should *only* happen if success_count > 0,
+        # then this return might need to be within that block or structured differently.
 
+        # Corrected: Return the full summary after all processing.
         return {
             "overall_success": failure_count == 0,
             "success_count": success_count,
@@ -4161,9 +4169,11 @@ class InventoryManager:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM user_shopping_list WHERE product_id = ?", (product_id,))
                 conn.commit()
-                # No need to check rowcount here, as it's a helper.
-                # The calling function might want to know if something was deleted.
-                return {"success": True, "message": f"Attempted removal of product ID {product_id} from shopping list."}
+                if cursor.rowcount > 0: # Check if any row was affected
+                    return {"success": True, "message": f"Product ID {product_id} removed from shopping list."}
+                else:
+                    # This case means the product_id was not found in the shopping list
+                    return {"success": False, "message": f"Product ID {product_id} not found in shopping list to remove."}
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error removing by product_id: {e}"}
 

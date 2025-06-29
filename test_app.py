@@ -420,6 +420,12 @@ class TestRecipeProduction(unittest.TestCase):
 
         app_recipe_mngr.db_filepath = ":memory:" # Use app_recipe_mngr
         app_recipe_mngr.conn = app_manager.conn # Share connection with app_manager
+
+        # Configure the InventoryManager *inside* app_recipe_mngr
+        if hasattr(app_recipe_mngr, 'manager'):
+            app_recipe_mngr.manager.db_filepath = ":memory:"
+            app_recipe_mngr.manager.conn = app_manager.conn
+
         app_recipe_mngr._initialize_db() # Use app_recipe_mngr
 
         # Create Categories needed for products in this test class
@@ -470,20 +476,33 @@ class TestRecipeProduction(unittest.TestCase):
         initial_cheese_qty = app_manager.get_total_item_quantity(self.cheese_output_prod_id) # Use app_manager
         self.assertEqual(initial_cheese_qty, 0)
 
-        response = self.client.post(f'/recipes/{self.recipe_name}/make',
-                                    data={'num_batches': str(num_batches)},
-                                    follow_redirects=True)
-        self.assertEqual(response.status_code, 200)
+        response_post = self.client.post(f'/recipes/{self.recipe_name}/make',
+                                         data={'num_batches': str(num_batches)},
+                                         follow_redirects=False) # Changed to False
+        self.assertEqual(response_post.status_code, 302) # Check for redirect
+        # Optionally check redirect location:
+        # from flask import url_for
+        # self.assertTrue(url_for('recipe_detail_view', recipe_name=self.recipe_name) in response_post.location)
 
         flashed_messages = []
-        with self.client.session_transaction() as session_data: # Use different var name
-            flashes = session_data.get('_flashes', [])
+        with self.client.session_transaction() as sess: # Access session before GETting the redirected page
+            flashes = sess.get('_flashes', [])
             for category, message in flashes:
                 flashed_messages.append(message)
 
-        self.assertTrue(any(f"{num_batches} batch(es) of '{self.recipe_name}' made! Ingredients consumed." in msg for msg in flashed_messages))
+        expected_main_message = f"{num_batches} batch(es) of '{self.recipe_name}' made! All ingredients consumed."
+        self.assertTrue(any(expected_main_message in msg for msg in flashed_messages),
+                        f"Expected flash message '{expected_main_message}' not found. Flashes: {flashed_messages}")
+
         expected_total_yield = self.cheese_yield * num_batches
-        self.assertTrue(any(f"Produced {expected_total_yield} of 'Shredded Cheese' and added to inventory." in msg for msg in flashed_messages))
+        produced_message_found = any(f"Produced {expected_total_yield:.2f} of 'Shredded Cheese' and added to inventory." in msg for msg in flashed_messages)
+        # The yield might be a float, ensure format matches. Let's use .2f for comparison.
+        self.assertTrue(produced_message_found,
+                        f"Expected production flash message not found. Flashes: {flashed_messages}")
+
+        # Now, optionally follow the redirect to check final page if needed, but not for flash messages.
+        # response_get = self.client.get(response_post.location)
+        # self.assertEqual(response_get.status_code, 200)
 
         expected_milk_consumed = 2.0 * num_batches
         expected_rennet_consumed = 1.0 * num_batches
@@ -498,30 +517,32 @@ class TestRecipeProduction(unittest.TestCase):
     def test_make_recipe_no_output_product_defined(self):
         no_output_recipe_name = "Salad Without Output"
         # Ensure category for "Milk for Cheese" (Dairy) exists for recipe ingredient product lookup
-        milk_for_cheese_prod = app.manager.get_product_by_name("Milk For Cheese")
+        milk_for_cheese_prod = app_manager.get_product_by_name("Milk For Cheese") # Changed app.manager to app_manager
         self.assertIsNotNone(milk_for_cheese_prod, "Milk For Cheese product not found during recipe test setup")
 
-        app.recipe_mngr.add_recipe({
+        app_recipe_mngr.add_recipe({ # Changed app.recipe_mngr to app_recipe_mngr
             "name": no_output_recipe_name, "ingredients": [{"item_name": "Milk For Cheese", "quantity_required": 0.1}],
             "output_product_id": None, "output_yield": None
         })
-        app.manager.add_inventory_stock(product_id=self.milk_prod_id, quantity_str="1", purchase_date_str="2024-01-01")
-        initial_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
+        app_manager.add_inventory_stock(product_id=self.milk_prod_id, quantity_str="1", purchase_date_str="2024-01-01") # Changed app.manager to app_manager
+        initial_milk_qty = app_manager.get_total_item_quantity(self.milk_prod_id) # Changed app.manager to app_manager
 
-        response = self.client.post(f'/recipes/{no_output_recipe_name}/make', data={'num_batches': '1'}, follow_redirects=True)
-        self.assertEqual(response.status_code, 200)
+        response_post = self.client.post(f'/recipes/{no_output_recipe_name}/make', data={'num_batches': '1'}, follow_redirects=False) # Changed
+        self.assertEqual(response_post.status_code, 302) # Check for redirect
 
         flashed_messages = []
-        with self.client.session_transaction() as session_data:
-            flashes = session_data.get('_flashes', [])
+        with self.client.session_transaction() as sess: # Access session before GET
+            flashes = sess.get('_flashes', [])
             for category, message in flashes:
                 flashed_messages.append(message)
 
-        self.assertTrue(any(f"1 batch(es) of '{no_output_recipe_name}' made! Ingredients consumed." in msg for msg in flashed_messages))
-        self.assertFalse(any("Produced" in msg for msg in flashed_messages))
-        self.assertFalse(any("Error producing output" in msg for msg in flashed_messages))
+        expected_main_message = f"1 batch(es) of '{no_output_recipe_name}' made! All ingredients consumed."
+        self.assertTrue(any(expected_main_message in msg for msg in flashed_messages),
+                        f"Expected flash message '{expected_main_message}' not found. Flashes: {flashed_messages}")
+        self.assertFalse(any("Produced" in msg for msg in flashed_messages)) # No output expected
+        self.assertFalse(any("Error producing output" in msg for msg in flashed_messages)) # No error expected
 
-        final_milk_qty = app.manager.get_total_item_quantity(self.milk_prod_id)
+        final_milk_qty = app_manager.get_total_item_quantity(self.milk_prod_id) # Changed app.manager to app_manager
         self.assertAlmostEqual(final_milk_qty, initial_milk_qty - 0.1)
 
 
@@ -558,9 +579,18 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
 
         app_manager.conn = sqlite3.connect(":memory:") # Use app_manager
         app_manager.conn.row_factory = sqlite3.Row
-        app_recipe_mngr.conn = app_manager.conn # Share the connection # Use app_recipe_mngr and app_manager
+        # app_recipe_mngr.conn is set after app_manager.conn
 
         app_manager._initialize_db() # Use app_manager
+
+        app_recipe_mngr.db_filepath = ":memory:" # Ensure this is set for app_recipe_mngr
+        app_recipe_mngr.conn = app_manager.conn # Share the connection # Use app_recipe_mngr and app_manager
+
+        # Configure the InventoryManager *inside* app_recipe_mngr
+        if hasattr(app_recipe_mngr, 'manager'):
+            app_recipe_mngr.manager.db_filepath = ":memory:"
+            app_recipe_mngr.manager.conn = app_manager.conn
+
         app_recipe_mngr._initialize_db() # Use app_recipe_mngr
 
         # Minimal category setup for product creation
@@ -571,6 +601,7 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         output_prod_data = app_manager.create_product( # Use app_manager
             name="Test Output Product Item",
             category_id=self.test_category_id,
+            subcategory_id=None,  # Added subcategory_id
             unit_of_measure="units",
             default_expiry_days=1
         )
@@ -586,7 +617,7 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         self.app_context.pop()
 
     def test_add_recipe_with_output(self):
-        from flask import url_for
+        # from flask import url_for # Not needed if using direct paths
 
         recipe_name = "Super Output Recipe"
         output_yield_val = 10.5
@@ -601,7 +632,8 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
             'output_yield': str(output_yield_val)
         }
 
-        response = self.client.post(url_for('add_recipe_view'), data=form_data, follow_redirects=False) # Test redirect separately
+        # Using direct path instead of url_for for self.client.post
+        response = self.client.post('/recipes/add', data=form_data, follow_redirects=False)
         self.assertEqual(response.status_code, 302) # Expect a redirect to recipes_list_view
 
         retrieved_recipe = app_recipe_mngr.get_recipe_by_name(recipe_name) # Use app_recipe_mngr
@@ -610,7 +642,7 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
         self.assertAlmostEqual(retrieved_recipe['output_yield'], output_yield_val)
 
     def test_edit_recipe_with_output(self):
-        from flask import url_for
+        # from flask import url_for # Not needed if using direct paths
 
         # 1. Add a recipe without output initially
         initial_recipe_data = {
@@ -636,7 +668,8 @@ class TestAppRecipeAddEditOutput(unittest.TestCase):
             'output_yield': str(new_output_yield_val)
         }
 
-        response = self.client.post(url_for('edit_recipe_view', recipe_id=recipe_id_to_edit), data=form_data_edit, follow_redirects=False)
+        # Using direct path instead of url_for for self.client.post
+        response = self.client.post(f'/recipes/{recipe_id_to_edit}/edit', data=form_data_edit, follow_redirects=False)
         self.assertEqual(response.status_code, 302) # Expect redirect to recipe_detail_view
 
         # 3. Fetch and verify
@@ -787,19 +820,29 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
 
         app_manager.conn = sqlite3.connect(":memory:") # Use app_manager
         app_manager.conn.row_factory = sqlite3.Row
-        app_recipe_mngr.conn = app_manager.conn # Share connection # Use app_recipe_mngr and app_manager
+        app_manager._initialize_db() # InventoryManager's tables on app_manager.conn
 
-        app_manager._initialize_db() # Use app_manager
-        app_recipe_mngr._initialize_db() # Use app_recipe_mngr
+        # Configure app_recipe_mngr (the RecipeManager instance)
+        app_recipe_mngr.db_filepath = ":memory:"
+        app_recipe_mngr.conn = app_manager.conn # app_recipe_mngr now uses the shared connection
+
+        # Configure the InventoryManager *inside* app_recipe_mngr (app_recipe_mngr.manager)
+        # to use the same shared connection.
+        if hasattr(app_recipe_mngr, 'manager'):
+            app_recipe_mngr.manager.db_filepath = ":memory:"
+            app_recipe_mngr.manager.conn = app_manager.conn
+            # app_recipe_mngr.manager._initialize_db() # This is likely redundant as app_manager already did.
+
+        app_recipe_mngr._initialize_db() # RecipeManager's tables on the shared connection
 
         # Create categories
         self.cat_pantry_id = app_manager.add_category("Pantry")['category_id'] # Use app_manager
         self.cat_dairy_id = app_manager.add_category("Dairy")['category_id'] # Use app_manager
 
         # Create products
-        self.flour_prod = app_manager.create_product(name="Flour", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=365) # Use app_manager
-        self.sugar_prod = app_manager.create_product(name="Sugar", category_id=self.cat_pantry_id, unit_of_measure="cup", default_expiry_days=730) # Use app_manager
-        self.eggs_prod = app_manager.create_product(name="Eggs", category_id=self.cat_dairy_id, unit_of_measure="unit", default_expiry_days=21) # Use app_manager
+        self.flour_prod = app_manager.create_product(name="Flour", category_id=self.cat_pantry_id, subcategory_id=None, unit_of_measure="cup", default_expiry_days=365) # Use app_manager
+        self.sugar_prod = app_manager.create_product(name="Sugar", category_id=self.cat_pantry_id, subcategory_id=None, unit_of_measure="cup", default_expiry_days=730) # Use app_manager
+        self.eggs_prod = app_manager.create_product(name="Eggs", category_id=self.cat_dairy_id, subcategory_id=None, unit_of_measure="unit", default_expiry_days=21) # Use app_manager
 
         self.flour_prod_id = self.flour_prod['product_id']
         self.sugar_prod_id = self.sugar_prod['product_id']
@@ -840,13 +883,22 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
         self._add_stock(self.sugar_prod_id, "3") # Needs 1
         self._add_stock(self.eggs_prod_id, "4")   # Needs 2
 
-        response = self.client.post(f'/recipes/{self.test_recipe_name}/make', data={'num_batches': '1'}, follow_redirects=True)
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(f"1 batch(es) of '{self.test_recipe_name}' made! All ingredients consumed.".encode(), response.data)
+        response_post = self.client.post(f'/recipes/{self.test_recipe_name}/make', data={'num_batches': '1'}, follow_redirects=False) # Changed
+        self.assertEqual(response_post.status_code, 302) # Check for redirect
 
-        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.flour_prod_id), 3.0)
-        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.sugar_prod_id), 2.0)
-        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.eggs_prod_id), 2.0)
+        flashed_messages = []
+        with self.client.session_transaction() as sess: # Access session before GET
+            flashes = sess.get('_flashes', [])
+            for category, message in flashes:
+                flashed_messages.append(message)
+
+        expected_message = f"1 batch(es) of '{self.test_recipe_name}' made! All ingredients consumed."
+        self.assertTrue(any(expected_message in msg for msg in flashed_messages),
+                        f"Expected flash message '{expected_message}' not found. Flashes: {flashed_messages}")
+
+        self.assertAlmostEqual(app_manager.get_total_item_quantity(self.flour_prod_id), 3.0)
+        self.assertAlmostEqual(app_manager.get_total_item_quantity(self.sugar_prod_id), 2.0)
+        self.assertAlmostEqual(app_manager.get_total_item_quantity(self.eggs_prod_id), 2.0) # Used app_manager
 
     def test_consume_recipe_some_ingredients_missing_shows_confirmation(self):
         self._add_stock(self.flour_prod_id, "1") # Needs 2 (Missing 1)
@@ -857,13 +909,12 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
         self.assertIn(b"Confirm Consumption: Simple Cookies", response.data)
         self.assertIn(b"Missing or Insufficient Ingredients:", response.data)
         self.assertIn(b"Flour", response.data)
-        self.assertIn(b"Needed: 1.00 cup", response.data) # 2 required - 1 available = 1 needed
-        self.assertNotIn(b"Sugar", response.data) # Sugar is available
-        self.assertNotIn(b"Eggs", response.data) # Eggs are completely missing, so should also be listed
+        self.assertIn(b"Needed: 1.00 cup (Available: 1.00 cup)", response.data) # Adjusted to match actual output
+        self.assertNotIn(b"Sugar", response.data) # Sugar is available, so it shouldn't be in the "Missing" list
 
-        # Check for eggs (completely missing, 0 available)
-        self.assertIn(b"Eggs", response.data)
-        self.assertIn(b"Needed: 2.00 unit", response.data) # 2 required - 0 available = 2 needed
+        # Check for eggs (completely missing, 0 available) - It SHOULD be listed as missing.
+        self.assertIn(b"Eggs", response.data) # Eggs should be listed as missing
+        self.assertIn(b"Needed: 2.00 unit (Available: 0.00 unit)", response.data) # Check its specific missing message
 
     def test_consume_recipe_confirm_partial_consumption(self):
         self._add_stock(self.flour_prod_id, "1.5") # Needs 2, Available 1.5
@@ -876,21 +927,28 @@ class TestRecipeConsumptionFlows(unittest.TestCase):
         self.assertIn(b"Confirm Consumption: Simple Cookies", response_confirm_page.data)
 
         # POST again, this time confirming partial consumption
-        response = self.client.post(f'/recipes/{self.test_recipe_name}/make',
+        response_post = self.client.post(f'/recipes/{self.test_recipe_name}/make',
                                     data={'num_batches': '1', 'confirmed_partial': 'true', 'origin_page': 'recipe_detail'},
-                                    follow_redirects=True)
-        self.assertEqual(response.status_code, 200)
+                                    follow_redirects=False) # Changed
+        self.assertEqual(response_post.status_code, 302) # Check for redirect
 
-        flashed_messages = [msg.decode() for msg in response.data.split(b'<div class="alert ') if b'alert-success' in msg or b'alert-info' in msg]
+        flashed_messages = []
+        with self.client.session_transaction() as sess: # Access session before GET
+            flashes = sess.get('_flashes', [])
+            for category, message in flashes:
+                flashed_messages.append(message)
 
-        self.assertTrue(any(f"Partially made 1 batch(es) of '{self.test_recipe_name}' with available ingredients." in msg for msg in flashed_messages))
+        expected_partial_message = f"Partially made 1 batch(es) of '{self.test_recipe_name}' with available ingredients."
+        self.assertTrue(any(expected_partial_message in msg for msg in flashed_messages),
+                        f"Expected partial message '{expected_partial_message}' not found. Actual flashes: {flashed_messages}")
+
         self.assertTrue(any("Consumed 1.50 of 'Flour'. (Partial amount due to availability)." in msg for msg in flashed_messages))
         self.assertTrue(any("Consumed 1.00 of 'Sugar'." in msg for msg in flashed_messages)) # Full amount as it was available
         self.assertTrue(any("Skipped 'Eggs' as 0 quantity was available/to be consumed." in msg for msg in flashed_messages))
 
-        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.flour_prod_id), 0) # 1.5 available - 1.5 consumed
-        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.sugar_prod_id), 1.0) # 2.0 available - 1.0 consumed
-        self.assertAlmostEqual(app.manager.get_total_item_quantity(self.eggs_prod_id), 0)   # 0 available - 0 consumed
+        self.assertAlmostEqual(app_manager.get_total_item_quantity(self.flour_prod_id), 0)
+        self.assertAlmostEqual(app_manager.get_total_item_quantity(self.sugar_prod_id), 1.0)
+        self.assertAlmostEqual(app_manager.get_total_item_quantity(self.eggs_prod_id), 0)
 
     def test_recipe_detail_page_make_button_always_enabled(self):
         # Make ingredients insufficient

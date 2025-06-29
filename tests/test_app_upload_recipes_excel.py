@@ -121,7 +121,7 @@ def test_upload_no_file_selected(client):
     """Test submitting the form with no file selected."""
     response = client.post('/upload_recipes_excel', data={}, content_type='multipart/form-data')
     assert response.status_code == 302 # Redirect expected
-    assert response.location == '/upload_recipes_excel' # Redirects back to self
+    assert '/upload_recipes_excel' in response.location # Redirects back to self
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
     assert any('No file part in the request.' in message[1] for message in flashes)
@@ -133,7 +133,7 @@ def test_upload_empty_filename(client):
     }
     response = client.post('/upload_recipes_excel', data=data, content_type='multipart/form-data')
     assert response.status_code == 302
-    assert response.location == '/upload_recipes_excel'
+    assert '/upload_recipes_excel' in response.location
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
     assert any('No selected file.' in message[1] for message in flashes)
@@ -146,7 +146,7 @@ def test_upload_invalid_file_type(client):
     }
     response = client.post('/upload_recipes_excel', data=data, content_type='multipart/form-data')
     assert response.status_code == 302
-    assert response.location == '/upload_recipes_excel'
+    assert '/upload_recipes_excel' in response.location
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
     assert any('Invalid file type. Please upload an .xlsx file.' in message[1] for message in flashes)
@@ -158,7 +158,7 @@ def test_upload_corrupted_excel_file(client):
     }
     response = client.post('/upload_recipes_excel', data=data, content_type='multipart/form-data')
     assert response.status_code == 302 # Should redirect back to the upload page
-    assert response.location == '/upload_recipes_excel'
+    assert '/upload_recipes_excel' in response.location
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
     # Check for the specific flash message from the `openpyxl.utils.exceptions.InvalidFileException` catch
@@ -169,7 +169,8 @@ def test_upload_recipes_successful_simple(client):
     """Test uploading a valid Excel file with one simple recipe."""
     # Access the test-specific recipe manager via app context if needed for assertions
     # For route testing, the patched global one (main_app_module.recipe_mngr) is used by the route
-    test_recipe_manager = main_app_module.recipe_mngr
+    # Corrected to use the app's patched manager instance
+    test_recipe_manager = app.recipe_manager
 
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
@@ -184,7 +185,14 @@ def test_upload_recipes_successful_simple(client):
 
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
-    assert any('Successfully added 1 recipes' in message[1] for message in flashes)
+
+    expected_message = "Successfully added 1 recipes from the Excel file."
+    found_flash = False
+    for category, message in flashes:
+        if category == 'success' and expected_message in message:
+            found_flash = True
+            break
+    assert found_flash, f"Expected flash message '{expected_message}' not found or not 'success' category. Flashes: {flashes}"
 
     # Verify recipe in DB
     recipes = test_recipe_manager.get_all_recipes()
@@ -197,8 +205,8 @@ def test_upload_recipes_successful_simple(client):
 
 def test_upload_recipes_successful_with_all_fields(client):
     """Test uploading a recipe with all fields populated."""
-    test_recipe_manager = main_app_module.recipe_mngr
-    test_inventory_manager = main_app_module.manager
+    test_recipe_manager = app.recipe_manager # Corrected
+    test_inventory_manager = app.inventory_manager # Corrected
 
     header = [
         "Recipe Name", "Description", "Instructions",
@@ -242,7 +250,7 @@ def test_upload_recipes_successful_with_all_fields(client):
 
 def test_upload_recipes_missing_recipe_name(client):
     """Test a row with a missing Recipe Name."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
         ["", "Flour", "100g"] # Missing recipe name
@@ -260,7 +268,13 @@ def test_upload_recipes_missing_recipe_name(client):
     # If other data is present, it would be:
     # assert any("Recipe Name is missing but other data present. Skipped." in message[1] for message in flashes if message[0] == 'error_detail')
     # If the row is treated as blank and skipped silently:
-    assert any("No new recipes were found or added" in message[1] for message in flashes if message[0] == 'info')
+    expected_message = "No new recipes were found or added from the file. The file might be empty, data might start after row 2, or all recipes already exist."
+    found_flash = False
+    for category, message in flashes:
+        if category == 'info' and expected_message in message:
+            found_flash = True
+            break
+    assert found_flash, f"Expected flash message '{expected_message}' not found or not 'info' category. Flashes: {flashes}"
 
     recipes = test_recipe_manager.get_all_recipes()
     assert len(recipes) == 0
@@ -268,7 +282,7 @@ def test_upload_recipes_missing_recipe_name(client):
 
 def test_upload_recipes_output_product_not_found(client):
     """Test recipe with an output product name that does not exist."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Output Product Name", "Output Yield"]
     data = [
         ["Mystery Cake", "NonExistent Cake", "1"]
@@ -287,7 +301,7 @@ def test_upload_recipes_output_product_not_found(client):
 
 def test_upload_recipes_output_yield_missing(client):
     """Test recipe with Output Product Name but missing Output Yield."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Output Product Name", "Output Yield"]
     data = [
         ["Productive Recipe", "Cake Mix", ""] # Output Yield is blank
@@ -317,7 +331,7 @@ def test_upload_recipes_ingredient_name_not_found(client):
     this test needs to be adjusted.
     Based on `RecipeManager.add_recipe`, it tries to get product_id by name. If not found, it errors.
     """
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
         ["Mystery Ingredient Bread", "Unobtainium Flour", "100"]
@@ -330,14 +344,21 @@ def test_upload_recipes_ingredient_name_not_found(client):
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
     # The error comes from recipe_mngr.add_recipe
-    assert any("Failed to add recipe - Ingredient 'Unobtainium Flour' not found" in message[1] for message in flashes if message[0] == 'error_detail')
+    # The flashed message will be prefixed with "Row X ('Recipe Name'): "
+    expected_error_detail = "Failed to add recipe - Ingredient 'Unobtainium Flour' not found"
+    found_flash = False
+    for category, message in flashes:
+        if category == 'error_detail' and expected_error_detail in message:
+            found_flash = True
+            break
+    assert found_flash, f"Expected error detail containing '{expected_error_detail}' not found. Flashes: {flashes}"
 
     recipes = test_recipe_manager.get_all_recipes()
     assert len(recipes) == 0
 
 def test_upload_recipes_ingredient_quantity_missing(client):
     """Test recipe with an ingredient name but missing quantity."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
         ["Flour Only Bread", "Flour", ""] # Quantity is blank
@@ -356,7 +377,7 @@ def test_upload_recipes_ingredient_quantity_missing(client):
 
 def test_upload_recipes_multiple_recipes_mixed_validity(client):
     """Test uploading multiple recipes, some valid, some not."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity", "Description"]
     data = [
         ["Valid Bread", "Flour", "500", "Good bread"],
@@ -374,10 +395,30 @@ def test_upload_recipes_multiple_recipes_mixed_validity(client):
         flashes = sess.get('_flashes', [])
 
     # Check overall success message for the valid ones
-    assert any("Successfully added 2 recipes" in message[1] for message in flashes if message[0] == 'success')
+    expected_success_message = "Successfully added 2 recipes from the Excel file."
+    found_success_flash = False
+    for category, message in flashes:
+        if category == 'success' and expected_success_message in message:
+            found_success_flash = True
+            break
+    assert found_success_flash, f"Expected success message '{expected_success_message}' not found. Flashes: {flashes}"
 
     # Check error messages for invalid ones
-    assert any("Ingredient 1 Quantity is required for 'Sugar'" in message[1] for message in flashes if message[0] == 'error_detail')
+    # These will be prefixed like "Row X ('Recipe Name'): "
+    expected_error_qty = "Ingredient 1 Quantity is required for 'Sugar'"
+    expected_error_ing = "Failed to add recipe - Ingredient 'NonExistentItem' not found"
+    found_error_qty = False
+    found_error_ing = False
+    for category, message in flashes:
+        if category == 'error_detail':
+            if expected_error_qty in message:
+                found_error_qty = True
+            if expected_error_ing in message:
+                found_error_ing = True
+
+    assert found_error_qty, f"Expected error detail for missing quantity not found. Flashes: {flashes}"
+    assert found_error_ing, f"Expected error detail for non-existent ingredient not found. Flashes: {flashes}"
+#    assert any("Ingredient 1 Quantity is required for 'Sugar'" in message[1] for message in flashes if message[0] == 'error_detail')
     assert any("Failed to add recipe - Ingredient 'NonExistentItem' not found" in message[1] for message in flashes if message[0] == 'error_detail')
 
     recipes = test_recipe_manager.get_all_recipes()
@@ -399,7 +440,7 @@ def test_upload_recipes_excel_missing_mandatory_header(client):
     response = client.post('/upload_recipes_excel', data={'excel_file': (excel_bytes, 'missing_header.xlsx')})
 
     assert response.status_code == 302 # Redirects back to upload page
-    assert response.location == '/upload_recipes_excel'
+    assert '/upload_recipes_excel' in response.location
 
     with client.session_transaction() as sess:
         flashes = sess.get('_flashes', [])
@@ -407,7 +448,7 @@ def test_upload_recipes_excel_missing_mandatory_header(client):
 
 def test_upload_recipes_excel_empty_file(client):
     """Test uploading an empty Excel file (only headers, no data rows)."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [] # No data rows
     excel_bytes = create_excel_file_bytes(header, data)
@@ -426,7 +467,7 @@ def test_upload_recipes_excel_empty_file(client):
 
 def test_upload_recipes_with_optional_fields_blank(client):
     """Test a recipe where optional fields like description, instructions, notes are blank."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = [
         "Recipe Name", "Description", "Instructions",
         "Output Product Name", "Output Yield",
@@ -460,7 +501,7 @@ def test_upload_recipes_with_optional_fields_blank(client):
 
 def test_upload_recipes_numeric_conversion_errors(client):
     """Test various numeric conversion errors for yield and ingredient quantity."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Output Product Name", "Output Yield", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
         ["Bad Yield", "Cake Mix", "abc", "Flour", "100"],      # Non-numeric yield
@@ -489,7 +530,7 @@ def test_upload_recipes_numeric_conversion_errors(client):
 
 def test_upload_recipes_max_ingredients(client):
     """Test uploading a recipe with the maximum number of ingredients (15)."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name"]
     ingredients_data = []
     for i in range(1, 16):
@@ -520,7 +561,7 @@ def test_upload_recipes_max_ingredients(client):
 
 def test_upload_recipes_yield_without_output_product_warning(client):
     """Test that a warning is flashed if Output Yield is provided without Output Product Name."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Output Product Name", "Output Yield", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
         ["YieldNoProd", "", "5.0", "Flour", "100"] # Output Product Name is blank, Yield has value
@@ -544,7 +585,7 @@ def test_upload_recipes_yield_without_output_product_warning(client):
 
 def test_upload_recipes_ingredient_quantity_without_name_error(client):
     """Test that an error is flashed if Ingredient Quantity is provided without Ingredient Name."""
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = app.recipe_manager # Corrected
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [
         ["QtyNoName", "", "100"] # Ingredient Name is blank, Quantity has value

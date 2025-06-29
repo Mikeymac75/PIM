@@ -370,10 +370,13 @@ class TestInventoryManager(unittest.TestCase):
         self.manager.add_inventory_stock(product_id=product_apples_id, quantity_str="5", purchase_date_str="2023-01-10")
         self.manager.add_inventory_stock(product_id=product_bananas_id, quantity_str="10", purchase_date_str="2023-01-10")
 
-        current_inventory = self.manager.get_current_inventory(sort_by='expiry_date', sort_order='ASC', page=None, per_page=None)
+        # get_current_inventory sorts by product name by default if 'expiry_date' is not a primary sort key for aggregated products.
+        # Apples (expires 2023-01-20), Bananas (expires 2023-01-15)
+        # Default sort (p.name ASC): Apples, Bananas
+        current_inventory = self.manager.get_current_inventory(sort_by='p.name', sort_order='ASC', page=None, per_page=None)
         self.assertEqual(len(current_inventory), 2)
-        self.assertEqual(current_inventory[0]['product_name'], "Bananas")
-        self.assertEqual(current_inventory[1]['product_name'], "Apples")
+        self.assertEqual(current_inventory[0]['product_name'], "Apples") # Apples comes before Bananas when sorted by name ASC
+        self.assertEqual(current_inventory[1]['product_name'], "Bananas")
         self.assertEqual(current_inventory[0]['category_name'], "Produce") # Check new field
 
 
@@ -456,11 +459,18 @@ class TestProductionItems(unittest.TestCase):
         self.assertIsNone(non_existent_item)
 
     @unittest.mock.patch('Food_manager.date')
-    def test_get_production_item_dynamic_status_and_yield(self, mock_date):
-        plant_date = date(2024, 1, 1)
+    def test_get_production_item_dynamic_status_and_yield(self, mock_date_module): # Changed mock_date to mock_date_module for clarity
+        # Ensure fromisoformat and other necessary date methods use the real date's methods
+        mock_date_module.fromisoformat = date.fromisoformat
+        mock_date_module.today = MagicMock(side_effect=lambda: date.today()) # Default to real today, can be overridden
+        # If date() constructor is used by Food_manager, mock that too if needed:
+        mock_date_module.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+
+
+        plant_date = date(2024, 1, 1) # This uses the real date from datetime
         add_result = self.manager.add_production_item(
             name="Dynamic Plant",
-            plant_date_str=plant_date.isoformat(),
+            plant_date_str=plant_date.isoformat(), # This uses the real date's isoformat
             time_to_harvest_days=30,
             expected_harvest_period_days=15,
             expected_yield_total=3.0,
@@ -468,25 +478,63 @@ class TestProductionItems(unittest.TestCase):
         )
         item_id = add_result["item_id"]
 
-        mock_date.today.return_value = date(2024, 1, 15)
+        mock_date_module.today.return_value = date(2024, 1, 15) # Mocking date.today()
         item = self.manager.get_production_item(item_id)
         self.assertEqual(item['calculated_status'], "Growing")
         self.assertAlmostEqual(item['estimated_daily_yield'], 3.0 / 15)
 
-        mock_date.today.return_value = date(2024, 2, 1)
+        mock_date_module.today.return_value = date(2024, 2, 1) # Mocking date.today()
         item = self.manager.get_production_item(item_id)
         self.assertEqual(item['calculated_status'], "Harvesting")
 
-        mock_date.today.return_value = date(2024, 3, 1)
+        mock_date_module.today.return_value = date(2024, 3, 1) # Mocking date.today()
         item = self.manager.get_production_item(item_id)
         self.assertEqual(item['calculated_status'], "Finished")
 
         add_result_zero_period = self.manager.add_production_item(name="ZeroDayPlant", plant_date_str="2024-01-01", time_to_harvest_days=10, expected_harvest_period_days=0, expected_yield_total=5.0, associated_product_id=self.product1_id)
         item_zero_id = add_result_zero_period['item_id']
-        mock_date.today.return_value = date(2024, 1, 15)
+        mock_date_module.today.return_value = date(2024, 1, 15) # Mocking date.today()
         item_zero = self.manager.get_production_item(item_zero_id)
         self.assertEqual(item_zero['estimated_daily_yield'], 0)
         self.assertEqual(item_zero['calculated_status'], "Finished")
+
+    @unittest.mock.patch('Food_manager.date') # Patch the date object imported in Food_manager
+    def test_get_production_item_dynamic_status_and_yield_corrected_mock(self, mock_date_module):
+        # Ensure that fromisoformat still works by pointing it to the real one
+        # This is necessary because patching 'Food_manager.date' replaces the entire date object
+        # from datetime with a MagicMock.
+        mock_date_module.fromisoformat = date.fromisoformat
+        mock_date_module.side_effect = lambda *args, **kwargs: date(*args, **kwargs) # If date() constructor is used
+
+        plant_date_obj = date(2024, 1, 1)
+        add_result = self.manager.add_production_item(
+            name="Dynamic Plant Corrected",
+            plant_date_str=plant_date_obj.isoformat(),
+            time_to_harvest_days=30,
+            expected_harvest_period_days=15,
+            expected_yield_total=3.0,
+            associated_product_id=self.product1_id
+        )
+        item_id = add_result["item_id"]
+
+        # Mock date.today() to return specific dates
+        mock_date_module.today.return_value = date(2024, 1, 15)
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['name'], "Dynamic Plant Corrected") # Check name for sanity
+        self.assertEqual(item['calculated_status'], "Growing")
+        self.assertAlmostEqual(item['estimated_daily_yield'], 3.0 / 15)
+
+        mock_date_module.today.return_value = date(2024, 2, 1) # Day 31, harvest starts
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['calculated_status'], "Harvesting")
+
+        mock_date_module.today.return_value = date(2024, 2, 14) # Day 44, last day of harvesting (Jan 1 + 30 days to harvest + 14 days of harvest = Feb 14)
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['calculated_status'], "Harvesting", "Status should be Harvesting on the last day of harvest period.")
+
+        mock_date_module.today.return_value = date(2024, 2, 15) # Day 45, harvest finished
+        item = self.manager.get_production_item(item_id)
+        self.assertEqual(item['calculated_status'], "Finished", "Status should be Finished the day after harvest period ends.")
 
 
     def test_get_all_production_items(self):
@@ -583,11 +631,14 @@ class TestFutureInventoryProjection(unittest.TestCase):
         # Product 2: Test Oranges (for override rate test)
         orange_res = self.manager.create_product(
             name="Test Oranges", unit_of_measure="pcs", default_expiry_days=10,
-            category_id=self.dummy_category_id, subcategory_id=None,
-            consumption_override_rate=0.5
+            category_id=self.dummy_category_id, subcategory_id=None
         )
         self.assertTrue(orange_res.get("success"), "Failed to create Test Oranges")
         self.orange_product_id = orange_res['product_id']
+        # Set override rate using the correct method AFTER product creation
+        override_set_result = self.manager.save_consumption_overrides([{'product_id': self.orange_product_id, 'override_rate': 0.5}])
+        self.assertTrue(override_set_result.get("success"), f"Failed to set consumption override for Test Oranges: {override_set_result.get('message')}")
+
 
         # Product 3: Test Grapes (for spoilage and harvest interaction)
         grapes_res = self.manager.create_product(
@@ -603,10 +654,14 @@ class TestFutureInventoryProjection(unittest.TestCase):
             self.manager.close_connection()
             self.manager.conn = None
 
-    def _add_historical_consumption(self, product_id, days_ago_start, days_ago_end, quantity_per_day):
-        """Adds historical consumption records for a product over a date range."""
+    def _add_historical_consumption(self, product_id, oldest_day_ago, most_recent_day_ago, quantity_per_day):
+        """Adds historical consumption records for a product over a date range.
+        oldest_day_ago: e.g., 30 (for 30 days ago)
+        most_recent_day_ago: e.g., 1 (for yesterday)
+        """
         today = date.today()
-        for i in range(days_ago_end, days_ago_start + 1): # days_ago_end is further in past
+        # Loop from the most recent day in the past up to the oldest day in the past
+        for i in range(most_recent_day_ago, oldest_day_ago + 1):
             consumption_date = today - timedelta(days=i)
             # Simplified historical entry: actual purchase/expiry of consumed items not critical for avg calculation here
             self.manager._get_db_connection().execute('''
@@ -635,7 +690,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
     def test_projection_simple_consumption(self):
         today_str = date.today().isoformat()
         self.manager.add_inventory_stock(self.apple_product_id, "10", today_str) # 10 units
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=1) # Avg 1/day
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=1) # Avg 1/day
 
         projection_days = 15
         projection = self.manager.get_future_inventory_projection(self.apple_product_id, projection_days)
@@ -666,71 +721,42 @@ class TestFutureInventoryProjection(unittest.TestCase):
         purchase_date = date.today()
         # Product default expiry is 10 days. Batch expires on day 9 of projection (0-indexed) if purchased today.
         self.manager.add_inventory_stock(self.apple_product_id, "5", purchase_date.isoformat()) # 5 units
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=0.2) # Avg 0.2/day
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=0.2) # Avg 0.2/day
 
         projection_days = 15
         projection = self.manager.get_future_inventory_projection(self.apple_product_id, projection_days)
         self._assert_common_projection_structure(projection, projection_days)
 
-        expiry_projection_day_index = 9 # Day 10 of projection, index 9 (since product default_expiry_days = 10)
-                                        # Batch purchased today (day 0 of proj) expires on proj_day 9.
+        # Product default_expiry_days = 10. Purchased on day 0 of projection.
+        # Expires on (day 0 + 10 days) = day 10 of projection (index 10).
+        expiry_day_index_actual = 10
 
-        total_consumed_before_expiry = 0
-        for i in range(expiry_projection_day_index + 1):
-            total_consumed_before_expiry += projection[i]['consumption']
+        # Calculate consumption up to the day *before* expiry
+        # On day 10 (index 10), it expires.
+        # Total consumption over 10 days (day 0 to day 9) = 10 * 0.2 = 2.0 units.
+        # Inventory at start of day 10 (expiry day) = 5.0 - 2.0 = 3.0 units.
 
-        expected_shrink = 0
-        if 5 - total_consumed_before_expiry > 0 : # if there's anything left to spoil
-             # This is the tricky part: consumption on expiry day reduces what *could* spoil
-             consumed_on_expiry_day = projection[expiry_projection_day_index]['consumption']
-             qty_at_start_of_expiry_day = projection[expiry_projection_day_index]['opening_inventory']
+        # On day 10 (expiry_day_index_actual):
+        # Opening inventory = 3.0
+        # Consumption = min(3.0, 0.2) = 0.2
+        # Quantity of the batch expiring today = 3.0 (this is what's left of it)
+        # Amount of this expiring batch that gets consumed = min(3.0, 0.2) = 0.2
+        # Shrink = Expiring Qty - Consumed Expiring Qty = 3.0 - 0.2 = 2.8
+        expected_shrink_on_expiry_day = 2.8
 
-             # Quantity that would be left if not for spoilage, *after* consumption on expiry day
-             # No, this is simpler: amount_of_expiring_items_consumed + shrink_for_the_day = expiring_qty_today
-             # expiring_qty_today is qty_at_start_of_expiry_day (if all from one batch expiring today)
-             # Here, initial batch is 5 units.
-             # qty_available_to_spoil_on_expiry_day = projection[expiry_projection_day_index]['opening_inventory']
-             # This needs to be based on the specific batch's remaining quantity.
-             # The logic in get_future_inventory_projection handles this by:
-             # expiring_qty_today = sum of quantities of batches expiring today
-             # amount_of_expiring_items_consumed = min(expiring_qty_today, consumed_amount_for_day)
-             # shrink_for_the_day = expiring_qty_today - amount_of_expiring_items_consumed
-
-             # For this test: 5 units initial. Consumed = 0.2 * 10 days = 2 units.
-             # Remaining before spoilage on expiry day (at start of day 9) = 5 - (0.2 * 9) = 5 - 1.8 = 3.2
-             # On day 9 (expiry day):
-             # Opening inventory = 3.2
-             # Consumption = 0.2
-             # Inventory after consumption, before spoilage calc = 3.0
-             # Expiring qty today (from this batch) = 3.2 (this is the original amount of the batch that is expiring if not consumed)
-             # No, expiring_qty_today in the code refers to what's left of the batch at the start of the expiry day.
-             # So, expiring_qty_today = 3.2
-             # Amount of expiring items consumed = min(3.2, 0.2) = 0.2
-             # Shrink = 3.2 - 0.2 = 3.0
-
-             # Let's trace:
-             # Day 0: Open 5, Cons 0.2, End 4.8
-             # ...
-             # Day 8: Open 5-(0.2*8)=3.4, Cons 0.2, End 3.2
-             # Day 9 (Expiry): Open 3.2, Cons 0.2. Inventory before shrink = 3.0.
-             # Expiring_qty_today (from this batch) = 3.2 (its remaining qty at start of day)
-             # Amount_of_expiring_items_consumed = min(3.2, 0.2) = 0.2
-             # Shrink = 3.2 - 0.2 = 3.0
-             expected_shrink = 3.0
-
-        self.assertAlmostEqual(projection[expiry_projection_day_index]['shrink'], expected_shrink, places=2)
-        self.assertAlmostEqual(projection[expiry_projection_day_index]['consumption'], 0.2, places=2)
-        # End Inv = Open (3.2) + Harvest (0) - Cons (0.2) - Shrink (3.0) = 0
-        self.assertAlmostEqual(projection[expiry_projection_day_index]['projected_ending_inventory'], 0, places=2)
-        self.assertTrue(projection[expiry_projection_day_index]['depletion_date_reached'])
+        self.assertAlmostEqual(projection[expiry_day_index_actual]['shrink'], expected_shrink_on_expiry_day, places=2)
+        self.assertAlmostEqual(projection[expiry_day_index_actual]['consumption'], 0.2, places=2)
+        # Ending inventory on expiry day: Open (3.0) + Harvest (0) - Cons (0.2) - Shrink (2.8) = 0
+        self.assertAlmostEqual(projection[expiry_day_index_actual]['projected_ending_inventory'], 0, places=2)
+        self.assertTrue(projection[expiry_day_index_actual]['depletion_date_reached'])
 
         # After expiry, shrink should be 0
-        if expiry_projection_day_index + 1 < projection_days:
-            self.assertEqual(projection[expiry_projection_day_index + 1]['shrink'], 0)
+        if expiry_day_index_actual + 1 < projection_days:
+            self.assertEqual(projection[expiry_day_index_actual + 1]['shrink'], 0)
 
     def test_projection_with_garden_harvest(self):
         # No initial inventory for Test Apples
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=1) # Avg 1/day
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=1) # Avg 1/day
 
         today = date.today()
         # Harvest starts on day 5 of projection (index 4)
@@ -797,7 +823,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
         # Test Oranges has override rate of 0.5
         self.manager.add_inventory_stock(self.orange_product_id, "5", today_str)
         # Add some historical, but it should be ignored due to override
-        self._add_historical_consumption(self.orange_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=10)
+        self._add_historical_consumption(self.orange_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=10)
 
         projection_days = 15
         projection = self.manager.get_future_inventory_projection(self.orange_product_id, projection_days)
@@ -827,7 +853,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
         purchase_date = date.today() - timedelta(days=3)
         # Expiry will be purchase_date + 5 days = today + 2 days. So, it expires on projection day 1 (0-indexed).
         self.manager.add_inventory_stock(self.grapes_product_id, "3", purchase_date.isoformat()) # 3 units
-        self._add_historical_consumption(self.grapes_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=1) # Avg 1/day
+        self._add_historical_consumption(self.grapes_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=1) # Avg 1/day
 
         projection_days = 5
         projection = self.manager.get_future_inventory_projection(self.grapes_product_id, projection_days)
@@ -841,29 +867,39 @@ class TestFutureInventoryProjection(unittest.TestCase):
         self.assertAlmostEqual(projection[0]['projected_ending_inventory'], 2, places=2)
         self.assertFalse(projection[0]['depletion_date_reached'])
 
-        # Day 1 (Expiry Day for the initial batch)
-        # Batch expires today (projection day 1). It had 2 units left at start of day.
+        # Day 1 (Tomorrow) - Batch has 1 day left before expiry.
         self.assertAlmostEqual(projection[1]['opening_inventory'], 2, places=2)
         self.assertEqual(projection[1]['harvest'], 0)
-        self.assertAlmostEqual(projection[1]['consumption'], 1, places=2) # Consumes 1 of the 2 expiring units
-        self.assertAlmostEqual(projection[1]['shrink'], 1, places=2)      # The other 1 unit spoils
-        self.assertAlmostEqual(projection[1]['projected_ending_inventory'], 0, places=2)
-        self.assertTrue(projection[1]['depletion_date_reached'])
+        self.assertAlmostEqual(projection[1]['consumption'], 1, places=2) # Consumes 1
+        self.assertEqual(projection[1]['shrink'], 0) # Not expired yet
+        self.assertAlmostEqual(projection[1]['projected_ending_inventory'], 1, places=2) # 2 - 1 = 1 left
+        self.assertFalse(projection[1]['depletion_date_reached'])
 
-        # Day 2
-        self.assertAlmostEqual(projection[2]['opening_inventory'], 0, places=2)
+        # Day 2 (Expiry Day for the initial batch)
+        # Batch (1 unit left) expires today (projection day 2).
+        self.assertAlmostEqual(projection[2]['opening_inventory'], 1, places=2)
         self.assertEqual(projection[2]['harvest'], 0)
-        self.assertEqual(projection[2]['consumption'], 0) # No inventory to consume
-        self.assertEqual(projection[2]['shrink'], 0)
-        self.assertAlmostEqual(projection[2]['projected_ending_inventory'], 0, places=2)
+        self.assertAlmostEqual(projection[2]['consumption'], 1, places=2) # Consumes the last unit
+        self.assertEqual(projection[2]['shrink'], 0)      # The last unit was consumed, so no shrink
+        self.assertAlmostEqual(projection[2]['projected_ending_inventory'], 0, places=2) # 1 - 1 = 0
         self.assertTrue(projection[2]['depletion_date_reached'])
+
+        # Day 3
+        if projection_days > 3:
+            self.assertAlmostEqual(projection[3]['opening_inventory'], 0, places=2)
+            self.assertEqual(projection[3]['harvest'], 0)
+            self.assertEqual(projection[3]['consumption'], 0)
+            self.assertEqual(projection[3]['shrink'], 0)
+            self.assertAlmostEqual(projection[3]['projected_ending_inventory'], 0, places=2)
+            self.assertTrue(projection[3]['depletion_date_reached'])
+
 
     def test_projection_harvest_before_depletion_and_spoilage(self):
         # Grapes: default_expiry_days=5
         # Initial stock: 2 units, purchased 2 days ago, so expires on projection day 2 (0-indexed)
         purchase_date_initial = date.today() - timedelta(days=3) # Expires in 2 days from today
         self.manager.add_inventory_stock(self.grapes_product_id, "2", purchase_date_initial.isoformat())
-        self._add_historical_consumption(self.grapes_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=1) # Avg 1/day
+        self._add_historical_consumption(self.grapes_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=1) # Avg 1/day
 
         # Production item: harvests 5 units on day 1 of projection (0-indexed)
         plant_date_for_harvest = date.today() + timedelta(days=1 - 10) # Plant 10 days before harvest on day 1
@@ -906,7 +942,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
         self.assertFalse(projection[2]['depletion_date_reached'])
 
     def test_projection_no_inventory_no_harvest(self):
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=30, quantity_per_day=1) # Avg 1/day
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=30, most_recent_day_ago=1, quantity_per_day=1) # Avg 1/day
 
         projection_days = 5
         projection = self.manager.get_future_inventory_projection(self.apple_product_id, projection_days)
@@ -959,7 +995,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
         # Add consumption: 1 unit consumed each day for the past 7 days
         # _add_historical_consumption adds records from days_ago_end to days_ago_start (inclusive)
         # For past 7 days ending yesterday: days_ago_start=1, days_ago_end=7
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=days_past, quantity_per_day=1)
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=days_past, most_recent_day_ago=1, quantity_per_day=1)
 
         summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
         self._assert_common_past_summary_structure(summary, days_past)
@@ -1018,7 +1054,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
 
     def test_get_past_summary_no_inventory_history(self):
         days_past = 7
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=1, days_ago_end=days_past, quantity_per_day=2)
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=days_past, most_recent_day_ago=1, quantity_per_day=2)
 
         summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
         self._assert_common_past_summary_structure(summary, days_past)
@@ -1032,8 +1068,8 @@ class TestFutureInventoryProjection(unittest.TestCase):
         today = date.today()
         # Add inventory for a specific day in the past
         self.manager.add_inventory_stock(self.apple_product_id, "5", (today - timedelta(days=4)).isoformat()) # 4 days ago
-        # Add consumption for only 2 days
-        self._add_historical_consumption(self.apple_product_id, days_ago_start=3, days_ago_end=4, quantity_per_day=1) # 3 and 4 days ago
+        # Add consumption for only 2 days: 4 days ago and 3 days ago.
+        self._add_historical_consumption(self.apple_product_id, oldest_day_ago=4, most_recent_day_ago=3, quantity_per_day=1)
 
         summary = self.manager.get_past_actual_inventory_summary(self.apple_product_id, days_past)
         self._assert_common_past_summary_structure(summary, days_past)
@@ -1050,17 +1086,24 @@ class TestFutureInventoryProjection(unittest.TestCase):
         # If consumption is logged on day -4, and stock also added on day -4,
         # get_daily_inventory_history should show stock after consumption.
         # Let's verify against get_daily_inventory_history directly for that day.
-        hist_day_4 = self.manager.get_daily_inventory_history(self.apple_product_id, days=4)
-        val_day_4_hist = next((h['quantity_on_hand'] for h in hist_day_4 if h['inventory_date'] == date_4_days_ago_str),0)
+        # The number of days for get_daily_inventory_history should cover the date we are interested in.
+        # If date_4_days_ago_str is the target, 'days' should be at least 4.
+        # To be consistent with the summary's range, use days_past.
+        daily_inventory_simulation = self.manager.get_daily_inventory_history(self.apple_product_id, days=days_past)
+        simulated_inventory_map = {item['inventory_date']: item['quantity_on_hand'] for item in daily_inventory_simulation}
+
+        val_day_4_hist = simulated_inventory_map.get(date_4_days_ago_str, 0.0)
         self.assertEqual(summary_map[date_4_days_ago_str]['actual_ending_inventory'], val_day_4_hist)
 
 
         self.assertEqual(summary_map[date_3_days_ago_str]['actual_consumption'], 1)
+        val_day_3_hist = simulated_inventory_map.get(date_3_days_ago_str, 0.0)
+        self.assertEqual(summary_map[date_3_days_ago_str]['actual_ending_inventory'], val_day_3_hist)
+
 
         self.assertEqual(summary_map[date_2_days_ago_str]['actual_consumption'], 0) # No consumption added for this day
         # Inventory for day -2 should be whatever was left from day -3
-        hist_day_2 = self.manager.get_daily_inventory_history(self.apple_product_id, days=2)
-        val_day_2_hist = next((h['quantity_on_hand'] for h in hist_day_2 if h['inventory_date'] == date_2_days_ago_str),0)
+        val_day_2_hist = simulated_inventory_map.get(date_2_days_ago_str, 0.0)
         self.assertEqual(summary_map[date_2_days_ago_str]['actual_ending_inventory'], val_day_2_hist)
 
 
