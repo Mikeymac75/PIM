@@ -110,6 +110,9 @@
             <td>{{ product.purchase_location if product.purchase_location is not none else '' }}</td>
             <td>
                 <a href="{{ url_for('edit_product_view', product_id=product.id) }}" class="button button-small"><i class="fas fa-edit"></i> Edit</a>
+                <button class="button button-small add-to-sl-button" data-product-id="{{ product.id }}" data-product-name="{{ product.name }}">
+                    <i class="fas fa-cart-plus"></i> Add to SL
+                </button>
             </td>
         </tr>
         {% endfor %}

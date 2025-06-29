@@ -392,4 +392,138 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // --- Add to Shopping List Button Handlers ---
+
+    // Generic handler for ".add-to-sl-button" clicks (outside the modal)
+    document.body.addEventListener('click', function(event) {
+        if (event.target.matches('.add-to-sl-button')) {
+            event.preventDefault();
+            const button = event.target;
+            const productId = button.dataset.productId;
+            const productName = button.dataset.productName || `Product ID ${productId}`;
+
+            const quantityStr = prompt(`Enter quantity of '${productName}' to add to your shopping list:`, "1");
+            if (quantityStr === null) return; // User cancelled
+
+            const quantity = parseFloat(quantityStr);
+            if (isNaN(quantity) || quantity <= 0) {
+                alert("Invalid quantity. Please enter a positive number.");
+                return;
+            }
+
+            // Create a hidden form and submit
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/shopping_list/add_direct'; // URL for direct add
+
+            const productIdInput = document.createElement('input');
+            productIdInput.type = 'hidden';
+            productIdInput.name = 'product_id';
+            productIdInput.value = productId;
+            form.appendChild(productIdInput);
+
+            const quantityInput = document.createElement('input');
+            quantityInput.type = 'hidden';
+            quantityInput.name = 'quantity';
+            quantityInput.value = quantity;
+            form.appendChild(quantityInput);
+
+            // Add CSRF token if your app uses Flask-WTF or similar for CSRF protection on POSTs
+            // const csrfTokenInput = document.createElement('input');
+            // csrfTokenInput.type = 'hidden';
+            // csrfTokenInput.name = 'csrf_token';
+            // csrfTokenInput.value = '{{ csrf_token() }}'; // This template tag won't work in JS. Get from a meta tag or data attribute.
+            // For now, assuming no CSRF token needed for this specific AJAX endpoint or it's handled differently.
+
+            document.body.appendChild(form);
+            form.submit();
+            // No need to remove form as page will reload or redirect.
+            // If it were an AJAX submit here, you would handle response and remove form.
+        }
+    });
+
+    // Handler for the "Add to SL" button WITHIN the product modal
+    const modalAddToSLButton = document.getElementById('modalAddToSLButton');
+    const modalProductQuantityInput = document.getElementById('modalProductQuantity');
+
+    if (modalAddToSLButton && modalProductQuantityInput) {
+        modalAddToSLButton.addEventListener('click', async function() {
+            const productId = this.dataset.productId; // Assume product ID is set on this button when modal opens
+            const productName = this.dataset.productName || `Product ID ${productId}`;
+            const quantityStr = modalProductQuantityInput.value;
+
+            if (!productId) {
+                alert("Error: Product ID not found for modal 'Add to SL' button.");
+                return;
+            }
+
+            const quantity = parseFloat(quantityStr);
+            if (isNaN(quantity) || quantity <= 0) {
+                alert(`Invalid quantity for '${productName}'. Please enter a positive number.`);
+                modalProductQuantityInput.focus();
+                return;
+            }
+
+            try {
+                const formData = new FormData();
+                formData.append('product_id', productId);
+                formData.append('quantity', quantity);
+                // Add CSRF token if needed, similar to above.
+
+                const response = await fetch('/shopping_list/add_direct', {
+                    method: 'POST',
+                    body: formData
+                    // If sending JSON:
+                    // headers: { 'Content-Type': 'application/json' },
+                    // body: JSON.stringify({ product_id: productId, quantity: quantity })
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    alert(result.message || `Successfully added ${quantity} of '${productName}' to shopping list!`);
+                    // Optionally close modal or update UI
+                    // closeProductModal();
+                } else {
+                    alert(result.message || `Failed to add '${productName}' to shopping list.`);
+                }
+            } catch (error) {
+                console.error("Error adding item to shopping list via modal:", error);
+                alert(`An error occurred: ${error.message || "Could not connect to server."}`);
+            }
+        });
+    } else {
+        if (!modalAddToSLButton) console.warn("Modal 'Add to SL' button (modalAddToSLButton) not found.");
+        if (!modalProductQuantityInput) console.warn("Modal quantity input (modalProductQuantity) not found.");
+    }
+     // Ensure openProductModal sets the product ID on the modal's "Add to SL" button
+     // This is a modification of the existing openProductModal function
+    const originalOpenProductModal = window.openProductModal;
+    window.openProductModal = async function(productId) {
+        // Call the original function first
+        if (originalOpenProductModal) {
+            await originalOpenProductModal(productId); // Wait for it to complete
+        } else {
+            // Fallback or error if original is somehow not defined (should not happen if script order is correct)
+            console.error("Original openProductModal function not found. Cannot enhance.");
+            // Attempt to show basic modal content if original is missing
+            if (productDetailModal) productDetailModal.style.display = 'block';
+            if (modalProductName) modalProductName.textContent = `Product ID ${productId}`;
+            if (modalProductInfo) modalProductInfo.innerHTML = '<li>Details unavailable due to script error.</li>';
+        }
+
+
+        // Now, specifically set the product ID for the modal's "Add to SL" button
+        if (modalAddToSLButton) {
+            modalAddToSLButton.dataset.productId = productId;
+            // Fetch product name again if needed for the button's dataset, or rely on modalProductName
+            const productNameForButton = document.getElementById('modalProductName')?.textContent || `Product ID ${productId}`;
+            modalAddToSLButton.dataset.productName = productNameForButton;
+        }
+        if (modalProductQuantityInput) {
+            modalProductQuantityInput.value = "1"; // Default quantity to 1
+        }
+    };
+
 });

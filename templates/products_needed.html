@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Products Needed{% endblock %}
+
+{% block content %}
+<h1>Products Needed</h1>
+<p>This page lists products where your current stock is below the set Par Level, or items that might run out before your next typical shopping day for that store.</p>
+
+<div class="filters">
+    <form method="GET" action="{{ url_for('products_needed_view') }}">
+        <label for="store">Filter by Store:</label>
+        <select name="store" id="store">
+            <option value="" {% if not current_store_filter %}selected{% endif %}>All Stores</option>
+            <option value="Sobeys" {% if current_store_filter == 'Sobeys' %}selected{% endif %}>Sobeys</option>
+            <option value="Costco" {% if current_store_filter == 'Costco' %}selected{% endif %}>Costco</option>
+            {# Add other store options if they become available #}
+        </select>
+
+        <label for="search">Search by Name:</label>
+        <input type="text" name="search" id="search" value="{{ current_search_term or '' }}">
+
+        <button type="submit" class="button"><i class="fas fa-search"></i> Apply Filters</button>
+    </form>
+</div>
+
+<form method="POST" action="{{ url_for('add_products_needed_to_shopping_list_view') }}">
+<table class="table is-striped is-hoverable is-fullwidth">
+    <thead>
+        <tr>
+            <th><input type="checkbox" id="select_all_items_to_add" title="Select/Deselect All"></th>
+            <th>Product Name</th>
+            <th>Unit</th>
+            <th>Current Stock</th>
+            <th>Par Level</th>
+            <th>System Calculated Need</th>
+            <th>Quantity to Add to List</th>
+            <th>Store</th>
+            {# Other relevant info like earliest_expiry_date could be added if useful #}
+        </tr>
+    </thead>
+    <tbody>
+        {% if items %}
+            {% for item in items %} {# Each item is from the get_shopping_list_items (now products_needed) structure #}
+            <tr>
+                <td>
+                    <input type="checkbox" name="add_item_{{ loop.index0 }}" value="{{ item.product_id }}" class="item-add-checkbox">
+                    <input type="hidden" name="product_id_{{ loop.index0 }}" value="{{ item.product_id }}">
+                </td>
+                <td>
+                    <a href="#" class="product-modal-trigger" data-product-id="{{ item.product_id }}" data-product-name="{{ item.name }}">
+                        {{ item.name }}
+                    </a>
+                </td>
+                <td>{{ item.unit_of_measure }}</td>
+                <td>{{ "%.2f" | format(item.current_numeric_quantity) }}</td>
+                <td>{{ "%.2f" | format(item.par_level) }}</td>
+                <td>{{ "%.2f" | format(item.recommended_purchase_amount) }}</td> {# This is the system calculated need #}
+                <td>
+                    <input type="number" step="any" name="quantity_to_add_{{ loop.index0 }}"
+                           value="{{ "%.2f" | format(item.recommended_purchase_amount) }}"
+                           class="input is-small quantity-add-input" style="width: 100px;" disabled>
+                </td>
+                <td>{{ item.purchase_location }}</td>
+            </tr>
+            {% endfor %}
+        {% else %}
+            <tr>
+                <td colspan="8" style="text-align: center;">No products currently identified as needed. Adjust filters or check par levels.</td>
+            </tr>
+        {% endif %}
+    </tbody>
+</table>
+
+{% if items %}
+<div class="field is-grouped is-grouped-right" style="margin-top: 20px;">
+    <div class="control">
+        <button type="submit" class="button is-primary">
+            <i class="fas fa-plus-circle"></i>&nbsp;Add Selected to Actual Shopping List
+        </button>
+    </div>
+</div>
+{% endif %}
+</form> <!-- End of the main form -->
+
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const selectAllCheckbox = document.getElementById('select_all_items_to_add');
+    const itemCheckboxes = document.querySelectorAll('.item-add-checkbox');
+
+    // Function to enable/disable quantity input for a given row
+    function toggleQuantityInput(checkbox) {
+        const row = checkbox.closest('tr');
+        const quantityInput = row.querySelector('.quantity-add-input');
+        if (quantityInput) {
+            quantityInput.disabled = !checkbox.checked;
+            if (checkbox.checked) {
+                quantityInput.focus(); // Optional: focus the input when enabled
+            }
+        }
+    }
+
+    // Initial state: disable all quantity inputs
+    document.querySelectorAll('.quantity-add-input').forEach(input => input.disabled = true);
+
+    // Event listener for individual item checkboxes
+    itemCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', function () {
+            toggleQuantityInput(this);
+            // Update "Select All" checkbox state if it exists
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = Array.from(itemCheckboxes).every(cb => cb.checked);
+            }
+        });
+        // If a checkbox is somehow checked on load, enable its input.
+        if (checkbox.checked) {
+            toggleQuantityInput(checkbox);
+        }
+    });
+
+    // Event listener for "Select All" checkbox
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function () {
+            itemCheckboxes.forEach(checkbox => {
+                checkbox.checked = this.checked;
+                toggleQuantityInput(checkbox);
+            });
+        });
+    }
+});
+</script>
+
+{% endblock %}

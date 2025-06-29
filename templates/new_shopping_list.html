@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}Shopping List{% endblock %}
+
+{% block content %}
+<h1>Shopping List</h1>
+<p>This list contains items you have explicitly added. You can log purchases from here or export the list.</p>
+
+<div class="actions mb-3">
+    <a href="{{ url_for('export_new_shopping_list_excel_view') }}" class="button is-success">
+        <i class="fas fa-file-excel"></i>&nbsp;Export to Excel
+    </a>
+    <form method="POST" action="{{ url_for('clear_new_shopping_list_view') }}" style="display: inline-block; margin-left: 10px;">
+        <button type="submit" class="button is-danger" onclick="return confirm('Are you sure you want to clear the entire shopping list?');">
+            <i class="fas fa-trash-alt"></i>&nbsp;Clear Shopping List
+        </button>
+    </form>
+</div>
+
+<form method="POST" action="{{ url_for('log_purchases_view') }}">
+    <table class="table is-striped is-hoverable is-fullwidth">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="select_all_to_purchase" title="Select/Deselect All for Purchase"></th>
+                <th>Product Name</th>
+                <th>Category</th>
+                <th>Unit</th>
+                <th>Current On Hand</th>
+                <th>System Calculated Need</th>
+                <th>Qty Added to SL</th>
+                <th>Default Store</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if items %}
+                {% for item in items %}
+                <tr>
+                    <td>
+                        <input type="checkbox" name="include_item_{{ loop.index0 }}" value="{{ item.product_id }}" class="item-purchase-checkbox">
+                        <input type="hidden" name="product_id_{{ loop.index0 }}" value="{{ item.product_id }}">
+                        <input type="hidden" name="user_shopping_list_item_id_{{ loop.index0 }}" value="{{ item.user_shopping_list_item_id }}">
+                    </td>
+                    <td>
+                        <a href="#" class="product-modal-trigger" data-product-id="{{ item.product_id }}" data-product-name="{{ item.product_name }}">
+                            {{ item.product_name }}
+                        </a>
+                    </td>
+                    <td>{{ item.category_name or 'N/A' }}</td>
+                    <td>{{ item.unit_of_measure }}</td>
+                    <td>{{ "%.2f" | format(item.current_on_hand or 0) }}</td>
+                    <td>{{ "%.2f" | format(item.system_calculated_need or 0) }}</td>
+                    <td>
+                        <form method="POST" action="{{ url_for('update_new_shopping_list_item_quantity_view', item_id=item.user_shopping_list_item_id) }}" class="is-inline-form">
+                            <input type="number" step="any" name="quantity_added" value="{{ "%.2f" | format(item.quantity_added) }}" class="input is-small" style="width: 80px;">
+                            <button type="submit" class="button is-small is-info"><i class="fas fa-save"></i></button>
+                        </form>
+                    </td>
+                    <td>{{ item.default_purchase_location or 'N/A' }}</td>
+                    <td>
+                        <form method="POST" action="{{ url_for('remove_from_new_shopping_list_view', item_id=item.user_shopping_list_item_id) }}" style="display:inline;">
+                            <button type="submit" class="button is-small is-danger" onclick="return confirm('Remove this item?');"><i class="fas fa-times"></i></button>
+                        </form>
+                    </td>
+                </tr>
+                <tr class="purchase-details-row" id="purchase_details_{{ loop.index0 }}" style="display: none;">
+                    <td colspan="2"></td> {# Offset for checkbox and product name #}
+                    <td colspan="7"> {# Span remaining columns #}
+                        <div class="purchase-inputs-container field is-horizontal">
+                            <div class="field-label is-normal"><label class="label">Qty:</label></div>
+                            <div class="field-body">
+                                <div class="field">
+                                    <p class="control"><input type="number" step="any" name="quantity_purchased_{{ loop.index0 }}" value="{{ "%.2f" | format(item.quantity_added) }}" class="input is-small" style="width: 90px;"></p>
+                                </div>
+                            </div>
+                            <div class="field-label is-normal"><label class="label">Price/Unit:</label></div>
+                            <div class="field-body">
+                                <div class="field">
+                                    <p class="control"><input type="number" step="any" name="cost_per_unit_{{ loop.index0 }}" placeholder="0.00" class="input is-small" style="width: 90px;"></p>
+                                </div>
+                            </div>
+                            <div class="field-label is-normal"><label class="label">Store:</label></div>
+                            <div class="field-body">
+                                <div class="field">
+                                    <p class="control"><input type="text" name="vendor_{{ loop.index0 }}" value="{{ item.default_purchase_location or '' }}" class="input is-small" style="width: 120px;"></p>
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="9" style="text-align: center;">Your shopping list is currently empty. Add items from "Products Needed" or product pages.</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+
+    {% if items %}
+    <div class="field is-grouped is-grouped-right" style="margin-top: 20px;">
+        <div class="control">
+            <label for="purchase_date" class="label">Purchase Date for Logged Items:</label>
+            <input type="date" id="purchase_date" name="purchase_date" class="input" value="{{ today.isoformat() if today else '' }}" required>
+        </div>
+        <div class="control">
+            <button type="submit" class="button is-primary" style="margin-top: 28px;">
+                <i class="fas fa-cart-plus"></i>&nbsp;Log Selected Purchases
+            </button>
+        </div>
+    </div>
+    {% endif %}
+</form>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const selectAllCheckbox = document.getElementById('select_all_to_purchase');
+    const itemCheckboxes = document.querySelectorAll('.item-purchase-checkbox');
+
+    function togglePurchaseDetails(checkbox, index) {
+        const detailsRow = document.getElementById(`purchase_details_${index}`);
+        if (detailsRow) {
+            detailsRow.style.display = checkbox.checked ? 'table-row' : 'none';
+            // Enable/disable inputs within the details row
+            const inputsInDetailsRow = detailsRow.querySelectorAll('input');
+            inputsInDetailsRow.forEach(input => {
+                input.disabled = !checkbox.checked;
+            });
+        }
+    }
+
+    // Disable all purchase detail inputs initially
+    document.querySelectorAll('.purchase-details-row input').forEach(input => input.disabled = true);
+
+    itemCheckboxes.forEach((checkbox, index) => {
+        checkbox.addEventListener('change', function () {
+            togglePurchaseDetails(this, index);
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = Array.from(itemCheckboxes).every(cb => cb.checked);
+            }
+        });
+        // Initial check in case of page reload with checked boxes
+        if (checkbox.checked) {
+            togglePurchaseDetails(checkbox, index);
+        }
+    });
+
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function () {
+            itemCheckboxes.forEach((checkbox, index) => {
+                checkbox.checked = this.checked;
+                togglePurchaseDetails(checkbox, index);
+            });
+        });
+    }
+});
+</script>
+
+{% endblock %}
