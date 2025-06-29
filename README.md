@@ -71,44 +71,49 @@ This web application provides a comprehensive solution for managing food invento
     ```
 
 3.  **Install dependencies:**
+    The application now uses `python-dotenv` to manage environment variables through a `.env` file.
     ```bash
     pip install -r requirements.txt
     ```
 
 ## Configuration
 
-The application can be configured using environment variables. You can set these directly in your shell or use a `.env` file (by installing `python-dotenv` and adding `from dotenv import load_dotenv; load_dotenv()` at the beginning of `app.py`).
+The application is configured using environment variables, which are automatically loaded from a `.env` file in the project root if it exists (thanks to `python-dotenv`).
 
-*   **`FLASK_SECRET_KEY` (Required for sessions):**
-    A strong, random key for session management.
-    Example generation:
-    ```python
-    import os
-    os.urandom(24).hex()
-    ```
-    Set it in your environment:
+1.  **Create a `.env` file:**
+    Copy the example file `.env.example` to `.env`:
     ```bash
-    export FLASK_SECRET_KEY='your_generated_secret_key'
+    cp .env.example .env
     ```
+    Or create a new file named `.env` in the root of the project.
 
-*   **`DATABASE_FILE_PATH` (Optional):**
-    Specifies the path to the SQLite database file.
-    Defaults to `food_app.db` in the `instance` directory (e.g., `instance/food_app.db`). The `instance` folder will be created in the same directory as `app.py` if it doesn't exist.
-    Example:
-    ```bash
-    export DATABASE_FILE_PATH='/path/to/your/food_data.db'
-    ```
+2.  **Edit your `.env` file** with the necessary configurations:
 
-*   **`FLASK_ENABLE_ADMIN_ROUTES` (Optional):**
-    Set to `true` to enable admin routes for database backup and restore.
-    Example:
-    ```bash
-    export FLASK_ENABLE_ADMIN_ROUTES='true'
-    ```
+    *   **`FLASK_SECRET_KEY` (Required for sessions):**
+        A strong, random key for session management. You can generate one using:
+        ```python
+        import os
+        os.urandom(24).hex()
+        ```
+        Example line in `.env`:
+        `FLASK_SECRET_KEY='your_generated_secret_key_here'`
+
+    *   **`DATABASE_FILE_PATH` (Optional):**
+        Specifies the path to the SQLite database file.
+        If not set, it defaults to `food_app.db` inside an `instance` directory (e.g., `instance/food_app.db`). The `instance` folder will be created in the same directory as `app.py` if it doesn't exist.
+        Example line in `.env` (if you want to change the default):
+        `DATABASE_FILE_PATH='instance/my_custom_food_app.db'`
+
+    *   **`FLASK_ENABLE_ADMIN_ROUTES` (Optional):**
+        Set to `true` to enable admin routes for database backup and restore.
+        Example line in `.env`:
+        `FLASK_ENABLE_ADMIN_ROUTES='true'`
+
+    **Note:** The `.env` file should be added to your `.gitignore` if it's not already, to prevent committing sensitive information.
 
 ## Running the Application
 
-1.  **Ensure environment variables are set (especially `FLASK_SECRET_KEY`).**
+1.  **Ensure your `.env` file is created and configured (especially `FLASK_SECRET_KEY`).**
 
 2.  **Run the Flask application:**
     ```bash

@@ -1,6 +1,9 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
+from dotenv import load_dotenv
 from Food_manager import InventoryManager
 from RecipeManager import RecipeManager
+
+load_dotenv() # Load environment variables from .env file
 from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
 from io import BytesIO # For handling file streams in memory
