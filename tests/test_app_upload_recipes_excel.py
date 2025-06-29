@@ -7,7 +7,7 @@ from flask import session, get_flashed_messages
 # Assuming your Flask app instance is named 'app' in 'app.py'
 # and InventoryManager, RecipeManager are accessible
 from app import app, manager as global_manager, recipe_mngr as global_recipe_mngr
-from recipe_manager import RecipeManager
+from RecipeManager import RecipeManager # Corrected import
 from Food_manager import InventoryManager
 
 # Database path for testing
