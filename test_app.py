@@ -60,6 +60,7 @@ class TestAppProductList(unittest.TestCase):
         self.milk_subcat_id = self.subcat_milk_prod['subcategory_id']
         self.bread_loaves_subcat_id = self.subcat_bread_loaves['subcategory_id']
 
+        self.product_ids_setup = {} # Initialize product_ids_setup
 
         self.products_setup_data = [
             {'name': 'Apples', 'category_id': self.produce_cat_id, 'subcategory_id': self.fruit_subcat_id, 'unit_of_measure': 'kg', 'default_expiry_days': 10, 'purchase_location': 'Store A'},
@@ -76,7 +77,7 @@ class TestAppProductList(unittest.TestCase):
         
         for p_data in self.products_setup_data:
             # Ensure all necessary fields for create_product are present
-            app_manager.create_product(
+            create_result = app_manager.create_product(
                 name=p_data['name'],
                 category_id=p_data['category_id'],
                 subcategory_id=p_data.get('subcategory_id'), # Handles optional subcategory
@@ -86,6 +87,12 @@ class TestAppProductList(unittest.TestCase):
                 max_holding_amount=p_data.get('max_holding_amount', 0), # Add default
                 purchase_location=p_data.get('purchase_location')
             )
+            if create_result.get("success"):
+                self.product_ids_setup[p_data['name']] = create_result['product_id']
+            else:
+                # Optionally, raise an error or handle the case where product creation fails during setup
+                print(f"Warning: Failed to create product '{p_data['name']}' during test setup: {create_result.get('message')}")
+
 
     def tearDown(self):
         if app_manager.db_filepath == ":memory:" and hasattr(app_manager, 'conn') and app_manager.conn:

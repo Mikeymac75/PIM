@@ -29,7 +29,7 @@
                     </li>
 
                     <!-- Inventory & Usage Dropdown -->
-                    <li class="dropdown {% if request.endpoint in ['log_purchase_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view', 'inventory_batches_view'] %}current{% endif %}">
+                    <li class="dropdown {% if request.endpoint in ['log_purchase_view', 'current_inventory_view', 'historical_inventory_view', 'projections_view', 'consume_item_view', 'inventory_usage_links_view', 'inventory_batches_view', 'products_needed_view', 'new_shopping_list_view'] %}current{% endif %}">
                         <a href="{{ url_for('inventory_usage_links_view') }}" class="dropbtn"><i class="fas fa-warehouse"></i> Inventory & Usage <i class="fas fa-caret-down"></i></a>
                         <div class="dropdown-content">
                             <a href="{{ url_for('log_purchase_view') }}"><i class="fas fa-receipt"></i> Log Purchase</a>
@@ -38,6 +38,8 @@
                             <a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a>
                             <a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a>
                             <a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a>
+                            <a href="{{ url_for('products_needed_view') }}"><i class="fas fa-tasks"></i> Products Needed</a>
+                            <a href="{{ url_for('new_shopping_list_view') }}"><i class="fas fa-shopping-cart"></i> Shopping List</a>
                         </div>
                     </li>
 
@@ -96,6 +98,13 @@
                     <ul id="modalProductInfo">
                         <!-- Product attributes will be listed here by JS -->
                     </ul>
+                    <div class="modal-actions" style="margin-top: 15px;">
+                        <label for="modalProductQuantity">Quantity:</label>
+                        <input type="number" id="modalProductQuantity" value="1" min="0.1" step="any" style="width: 70px; padding: 5px;">
+                        <button id="modalAddToSLButton" class="button button-small" style="margin-left: 10px;">
+                            <i class="fas fa-cart-plus"></i> Add to SL
+                        </button>
+                    </div>
                 </div>
                 <div class="modal-right-panel">
                     <h4>Daily Consumption (Last 30 Days)</h4>

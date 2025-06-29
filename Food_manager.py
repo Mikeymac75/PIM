@@ -128,6 +128,17 @@ class InventoryManager:
                         UNIQUE (name, category_id)
                     )
                 ''')
+
+                # User Shopping List Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS user_shopping_list (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER NOT NULL,
+                        quantity_added REAL NOT NULL,
+                        added_timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (product_id) REFERENCES products (id)
+                    )
+                ''')
                 conn.commit()
         except sqlite3.Error as e:
             raise sqlite3.Error(f"Database initialization error: {e}")
@@ -4015,6 +4026,223 @@ class InventoryManager:
             "results_details": results_details
         }
 
+        # After successful logging, remove purchased items from user_shopping_list
+        if success_count > 0:
+            product_ids_purchased = [p['product_id'] for p in purchases_data_list if any(
+                rd['product_id'] == p['product_id'] and rd['success'] for rd in results_details
+            )]
+            for prod_id in product_ids_purchased:
+                self.remove_item_from_user_shopping_list_by_product_id(prod_id)
+                print(f"LOG: Removed product ID {prod_id} from user_shopping_list after purchase.")
+
+        return {
+            "overall_success": failure_count == 0,
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "results_details": results_details
+        }
+
+    # --- User Shopping List Methods ---
+    def add_item_to_user_shopping_list(self, product_id, quantity_added):
+        """Adds or updates an item in the user_shopping_list. If quantity_added <= 0, removes the item."""
+        try:
+            product_id = int(product_id)
+            quantity_added = float(quantity_added)
+        except (ValueError, TypeError):
+            return {"success": False, "message": "Invalid product ID or quantity format."}
+
+        if quantity_added <= 0:
+            return self.remove_item_from_user_shopping_list_by_product_id(product_id)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                # Check if product exists in products table
+                cursor.execute("SELECT id FROM products WHERE id = ?", (product_id,))
+                if not cursor.fetchone():
+                    return {"success": False, "message": f"Product with ID {product_id} not found."}
+
+                # Check if item already exists in user_shopping_list
+                cursor.execute("SELECT id, quantity_added FROM user_shopping_list WHERE product_id = ?", (product_id,))
+                existing_item = cursor.fetchone()
+
+                if existing_item:
+                    # Update quantity if it exists
+                    new_quantity = existing_item['quantity_added'] + quantity_added
+                    cursor.execute("UPDATE user_shopping_list SET quantity_added = ?, added_timestamp = CURRENT_TIMESTAMP WHERE id = ?",
+                                   (new_quantity, existing_item['id']))
+                    message = f"Updated quantity for product ID {product_id} in shopping list to {new_quantity}."
+                else:
+                    # Insert new item
+                    cursor.execute("INSERT INTO user_shopping_list (product_id, quantity_added) VALUES (?, ?)",
+                                   (product_id, quantity_added))
+                    message = f"Added product ID {product_id} with quantity {quantity_added} to shopping list."
+                conn.commit()
+                return {"success": True, "message": message}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error: {e}"}
+
+    def get_user_shopping_list_items(self):
+        """Fetches all items from the user_shopping_list, joined with product details."""
+        items = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                # Query to join user_shopping_list with products, categories, and subcategories
+                # Also calculates current_on_hand for each product.
+                query = """
+                    SELECT
+                        usl.id AS user_shopping_list_item_id,
+                        usl.product_id,
+                        usl.quantity_added,
+                        usl.added_timestamp,
+                        p.name AS product_name,
+                        p.unit_of_measure,
+                        p.purchase_location AS default_purchase_location,
+                        p.par_level,
+                        cat.name AS category_name,
+                        subcat.name AS subcategory_name,
+                        (SELECT SUM(CAST(ii.quantity AS REAL)) FROM inventory_items ii WHERE ii.product_id = p.id) AS current_on_hand
+                    FROM user_shopping_list usl
+                    JOIN products p ON usl.product_id = p.id
+                    LEFT JOIN categories cat ON p.category_id = cat.id
+                    LEFT JOIN subcategories subcat ON p.subcategory_id = subcat.id
+                    ORDER BY usl.added_timestamp DESC;
+                """
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                for row_data in rows:
+                    item = dict(row_data)
+                    # Calculate system_needed quantity (par - on_hand)
+                    par = item.get('par_level', 0.0) or 0.0
+                    on_hand = item.get('current_on_hand', 0.0) or 0.0
+                    item['system_calculated_need'] = max(0, par - on_hand)
+                    items.append(item)
+        except sqlite3.Error as e:
+            print(f"Database error fetching user shopping list items: {e}")
+            # Optionally, return an error structure or raise
+        return items
+
+    def remove_item_from_user_shopping_list(self, user_shopping_list_item_id):
+        """Removes an item from the user_shopping_list by its ID."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM user_shopping_list WHERE id = ?", (user_shopping_list_item_id,))
+                conn.commit()
+                if cursor.rowcount > 0:
+                    return {"success": True, "message": "Item removed from shopping list."}
+                else:
+                    return {"success": False, "message": "Item not found in shopping list."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error: {e}"}
+
+    def remove_item_from_user_shopping_list_by_product_id(self, product_id):
+        """Helper to remove an item from user_shopping_list by product_id."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM user_shopping_list WHERE product_id = ?", (product_id,))
+                conn.commit()
+                # No need to check rowcount here, as it's a helper.
+                # The calling function might want to know if something was deleted.
+                return {"success": True, "message": f"Attempted removal of product ID {product_id} from shopping list."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error removing by product_id: {e}"}
+
+    def clear_user_shopping_list(self):
+        """Removes all items from the user_shopping_list."""
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM user_shopping_list")
+                conn.commit()
+                return {"success": True, "message": "Shopping list cleared."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error: {e}"}
+
+    def update_user_shopping_list_item_quantity(self, user_shopping_list_item_id, new_quantity):
+        """Updates the quantity of an item in the user_shopping_list.
+           If new_quantity <= 0, removes the item."""
+        try:
+            new_quantity = float(new_quantity)
+        except (ValueError, TypeError):
+            return {"success": False, "message": "Invalid quantity format."}
+
+        if new_quantity <= 0:
+            return self.remove_item_from_user_shopping_list(user_shopping_list_item_id)
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE user_shopping_list SET quantity_added = ?, added_timestamp = CURRENT_TIMESTAMP WHERE id = ?",
+                               (new_quantity, user_shopping_list_item_id))
+                conn.commit()
+                if cursor.rowcount > 0:
+                    return {"success": True, "message": "Shopping list item quantity updated."}
+                else:
+                    return {"success": False, "message": "Item not found in shopping list to update."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error: {e}"}
+
+    # --- End User Shopping List Methods ---
+
+    def export_data_to_csv(self, filename_prefix="inventory_export_db"):
+        """Exports current and historical inventory, and projections to CSV files from DB."""
+        def write_to_csv_internal(filename, data_dicts, fieldnames):
+            try:
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for row_dict in data_dicts:
+                        # Convert date objects to ISO strings for CSV if they are date objects
+                        row_to_write = {k: (v.isoformat() if isinstance(v, date) else v) for k, v in row_dict.items()}
+                        writer.writerow(row_to_write)
+                print(f"Data successfully exported to '{filename}'.")
+            except IOError as e: print(f"Error exporting data to '{filename}': {e}")
+            except Exception as e: print(f"An unexpected error occurred during CSV export: {e}")
+
+        current_inv_data = self.get_current_inventory() # This method needs to be checked if it returns full item details or aggregated
+        # For current_fields, if get_current_inventory() is aggregated, we might need a different source for raw batch data.
+        # Assuming get_inventory_batches_for_product(product_id) would be used if exporting specific product batches.
+        # The original current_fields were ["id", "name", "quantity", "purchase_date", "expiry_date", "original_quantity_string"]
+        # which implies batch-level data. If get_current_inventory provides aggregated data, this export part might need adjustment
+        # or a different method call to get all batches of all products.
+        # For now, let's assume get_current_inventory() can provide some form of list of dicts suitable for export.
+        # A more robust export might iterate all products, then all batches for each.
+
+        # Let's use get_all_products() and then get_inventory_batches_for_product() for a more complete current inventory export.
+        all_prods_for_export = self.get_all_products()
+        all_current_batches_export = []
+        for prod in all_prods_for_export:
+            batches = self.get_inventory_batches_for_product(prod['id'])
+            all_current_batches_export.extend(batches)
+
+        if all_current_batches_export:
+            current_fields = ["id", "product_id", "product_name", "quantity", "purchase_date", "expiry_date", "original_quantity_string", "unit_of_measure"]
+            # Filter data to ensure only existing keys are written (safer for DictWriter)
+            filtered_current_export = []
+            for batch_dict in all_current_batches_export:
+                filtered_dict = {k: batch_dict.get(k) for k in current_fields if k in batch_dict}
+                filtered_current_export.append(filtered_dict)
+            write_to_csv_internal(f"{filename_prefix}_current_batches.csv", filtered_current_export, current_fields)
+        else: print("Current inventory (batches) empty. Skipping export.")
+
+
+        historical_inv_data = self.get_historical_inventory() # This should be fine.
+        if historical_inv_data:
+            hist_fields = ["id", "product_id", "product_display_name", "quantity_consumed_this_time", "original_quantity_string",
+                           "purchase_date", "expiry_date", "consumed_date", "unit_of_measure", "category_name", "subcategory_name"]
+            # Filter data for safety
+            filtered_hist_export = []
+            for hist_dict in historical_inv_data:
+                # Use product_display_name as 'name' for consistency if needed by CSV consumer
+                hist_dict['name'] = hist_dict.get('product_display_name', hist_dict.get('name'))
+                filtered_dict = {k: hist_dict.get(k) for k in hist_fields if k in hist_dict}
+                filtered_hist_export.append(filtered_dict)
+
+            write_to_csv_internal(f"{filename_prefix}_historical.csv", filtered_hist_export, hist_fields)
+        else: print("Historical inventory empty. Skipping export.")
 
         # Projections export:
         # The original code projected demand for items in current/historical.

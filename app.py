@@ -1551,49 +1551,81 @@ def save_overrides_view():
 
     return redirect(url_for('projections_view'))
 
-@app.route('/shopping_list')
-def shopping_list_view():
+# Renamed from /shopping_list and shopping_list_view
+@app.route('/products_needed')
+def products_needed_view():
     store_filter = request.args.get('store', '').strip()
     search_term = request.args.get('search', '').strip()
 
-    # Get shopping list items from the manager
-    # The manager.get_shopping_list_items method should handle None or empty strings for filters
-    shopping_list_items = manager.get_shopping_list_items(
+    # This method (manager.get_shopping_list_items) now effectively serves "Products Needed"
+    # It calculates items below par based on consumption, par levels, etc.
+    products_needed_items = manager.get_shopping_list_items(
         store_filter=store_filter if store_filter else None,
         search_term=search_term if search_term else None
     )
 
-    # Pass the items and current filter values to the template
-    return render_template('shopping_list.html',
-                           items=shopping_list_items,
+    return render_template('products_needed.html', # Changed template name
+                           items=products_needed_items,
                            current_store_filter=store_filter,
                            current_search_term=search_term,
-                           today=date.today()) # Added today's date
+                           today=date.today())
 
-@app.route('/shopping_list/log_purchases', methods=['POST'])
-def log_shopping_list_purchases_view():
+@app.route('/products_needed/add_to_shopping_list', methods=['POST'])
+def add_products_needed_to_shopping_list_view():
+    if request.method == 'POST':
+        items_added_count = 0
+        items_failed_count = 0
+        for key, value in request.form.items():
+            if key.startswith('product_id_'):
+                index = key.split('_')[-1]
+                if f'add_item_{index}' in request.form: # Check if checkbox was ticked
+                    try:
+                        product_id = int(value)
+                        quantity_to_add_str = request.form.get(f'quantity_to_add_{index}', '0').strip()
+                        quantity_to_add = float(quantity_to_add_str) if quantity_to_add_str else 0
+
+                        if quantity_to_add > 0:
+                            result = manager.add_item_to_user_shopping_list(product_id, quantity_to_add)
+                            if result.get("success"):
+                                items_added_count += 1
+                            else:
+                                items_failed_count +=1
+                                product_name = manager.get_product(product_id).get('name', f"ID {product_id}")
+                                flash(f"Failed to add '{product_name}' to shopping list: {result.get('message', 'Unknown error')}", 'error')
+                        # else: quantity is 0 or invalid, skip without error, or flash info if desired
+                    except ValueError:
+                        flash(f"Invalid data for product ID {value} or quantity.", 'error')
+                        items_failed_count += 1
+
+        if items_added_count > 0:
+            flash(f"Successfully added {items_added_count} item(s) to your shopping list.", 'success')
+        if items_failed_count == 0 and items_added_count == 0:
+            flash("No items were selected or quantities were zero.", 'info')
+
+    return redirect(url_for('products_needed_view'))
+
+
+# Renamed from log_shopping_list_purchases_view and route changed
+@app.route('/log_purchases', methods=['POST'])
+def log_purchases_view():
     if request.method == 'POST':
         purchase_date_str = request.form.get('purchase_date')
         form_errors = []
         purchases_to_log = []
-        processed_item_messages = [] # To store messages for each item processed
 
         if not purchase_date_str:
             form_errors.append("Purchase date is required for the batch.")
         else:
             try:
-                date.fromisoformat(purchase_date_str) # Validate date format
+                date.fromisoformat(purchase_date_str)
             except ValueError:
                 form_errors.append("Invalid purchase date format. Please use YYYY-MM-DD.")
 
         if form_errors:
             for error in form_errors:
                 flash(error, 'error')
-            return redirect(url_for('shopping_list_view')) # Redirect back to shopping list
+            return redirect(url_for('new_shopping_list_view')) # Redirect back to new shopping list
 
-        # Determine the number of items submitted
-        # This assumes items are indexed like product_id_0, product_id_1, etc.
-        # We can find the max index by checking form keys.
         max_item_index = -1
         for key in request.form.keys():
             if key.startswith('product_id_'):
@@ -1602,109 +1634,206 @@ def log_shopping_list_purchases_view():
                     if index > max_item_index:
                         max_item_index = index
                 except ValueError:
-                    continue # Should not happen with expected form structure
+                    continue
 
         item_count_on_form = max_item_index + 1
 
         for i in range(item_count_on_form):
             if f"include_item_{i}" not in request.form:
-                continue # This item was not selected for purchase
+                continue
 
             product_id_str = request.form.get(f"product_id_{i}")
             quantity_str = request.form.get(f"quantity_purchased_{i}")
             cost_str = request.form.get(f"cost_per_unit_{i}")
-            vendor_str = request.form.get(f"vendor_{i}", "").strip() # Default to empty string if not provided
+            vendor_str = request.form.get(f"vendor_{i}", "").strip()
+            user_shopping_list_item_id_str = request.form.get(f"user_shopping_list_item_id_{i}") # For removal
 
-            # Fetch product name for user-friendly messages (optional, but good UX)
             product_name_for_msg = f"Product ID {product_id_str}"
             if product_id_str:
                 try:
                     product_details = manager.get_product(int(product_id_str))
-                    if product_details:
-                        product_name_for_msg = product_details['name']
-                except ValueError:
-                    pass # Keep as Product ID X if conversion fails
+                    if product_details: product_name_for_msg = product_details['name']
+                except: pass
 
             item_errors = []
             product_id = None
             if product_id_str:
-                try:
-                    product_id = int(product_id_str)
-                except ValueError:
-                    item_errors.append(f"Invalid Product ID '{product_id_str}'.")
-            else:
-                item_errors.append("Product ID is missing.") # Should not happen if form is correct
+                try: product_id = int(product_id_str)
+                except ValueError: item_errors.append(f"Invalid Product ID '{product_id_str}'.")
+            else: item_errors.append("Product ID is missing.")
 
             quantity_float = None
             if quantity_str:
                 try:
                     quantity_float = float(quantity_str)
-                    if quantity_float <= 0:
-                        item_errors.append("Quantity purchased must be a positive number.")
-                except ValueError:
-                    item_errors.append("Quantity purchased must be a valid number.")
-            else:
-                item_errors.append("Quantity purchased is required.")
+                    if quantity_float <= 0: item_errors.append("Quantity purchased must be positive.")
+                except ValueError: item_errors.append("Quantity purchased must be a valid number.")
+            else: item_errors.append("Quantity purchased is required.")
 
             cost_float = None
             if cost_str:
                 try:
                     cost_float = float(cost_str)
-                    if cost_float < 0: # Allow 0 cost
-                        item_errors.append("Cost per unit cannot be negative.")
-                except ValueError:
-                    item_errors.append("Cost per unit must be a valid number.")
-            else:
-                item_errors.append("Cost per unit is required.")
+                    if cost_float < 0: item_errors.append("Cost per unit cannot be negative.")
+                except ValueError: item_errors.append("Cost per unit must be a valid number.")
+            else: item_errors.append("Cost per unit is required.")
+
+            user_shopping_list_item_id = None
+            if user_shopping_list_item_id_str:
+                try: user_shopping_list_item_id = int(user_shopping_list_item_id_str)
+                except ValueError: item_errors.append("Invalid shopping list item ID.")
+
 
             if item_errors:
-                for err in item_errors:
-                    flash(f"Error for {product_name_for_msg} (Item index {i}): {err}", 'error_detail')
-                continue # Skip this item, process others
+                for err in item_errors: flash(f"Error for {product_name_for_msg}: {err}", 'error_detail')
+                continue
 
             purchases_to_log.append({
                 "product_id": product_id,
                 "purchase_date_str": purchase_date_str,
                 "quantity_purchased_float": quantity_float,
                 "cost_per_unit_float": cost_float,
-                "vendor_str": vendor_str if vendor_str else None
+                "vendor_str": vendor_str if vendor_str else None,
+                "user_shopping_list_item_id": user_shopping_list_item_id # Pass this along
             })
 
         if not purchases_to_log:
             if not any(key.startswith("include_item_") for key in request.form):
                  flash("No items were selected for purchase.", "info")
-            else: # Items were selected, but all had validation errors
-                 flash("No items could be logged due to validation errors. See details above.", "warning")
-            return redirect(url_for('shopping_list_view'))
+            else:
+                 flash("No items could be logged due to validation errors.", "warning")
+            return redirect(url_for('new_shopping_list_view'))
 
-        # Call the manager method
-        batch_results = manager.log_multiple_purchases(purchases_to_log)
+        batch_results = manager.log_multiple_purchases(purchases_to_log) # This now also removes from user_shopping_list
 
-        # Flash messages based on batch_results
         if batch_results.get("success_count", 0) > 0:
             flash(f"Successfully logged {batch_results['success_count']} purchase(s).", 'success')
-
         if batch_results.get("failure_count", 0) > 0:
-            flash(f"Failed to log {batch_results['failure_count']} purchase(s). See details below:", 'error')
+            flash(f"Failed to log {batch_results['failure_count']} purchase(s).", 'error')
             for detail in batch_results.get("results_details", []):
                 if not detail.get("success"):
-                    product_name_for_err_msg = f"Product ID {detail.get('product_id')}"
-                    # Try to get product name for better error message
+                    # Try to get product name for error message
+                    prod_name_err = f"Product ID {detail.get('product_id')}"
                     if detail.get('product_id'):
                         try:
-                            p_details = manager.get_product(int(detail.get('product_id')))
-                            if p_details: product_name_for_err_msg = p_details['name']
+                            p_info = manager.get_product(int(detail.get('product_id')))
+                            if p_info: prod_name_err = p_info['name']
                         except: pass
-                    flash(f"Failed for {product_name_for_err_msg}: {detail.get('message')}", 'error_detail')
+                    flash(f"Failed for {prod_name_err}: {detail.get('message')}", 'error_detail')
 
-        if batch_results.get("overall_success"):
-            return redirect(url_for('current_inventory_view')) # Or shopping_list_view if preferred
+        return redirect(url_for('new_shopping_list_view'))
+
+    return redirect(url_for('new_shopping_list_view'))
+
+# --- New Shopping List Routes ---
+@app.route('/new_shopping_list')
+def new_shopping_list_view():
+    items = manager.get_user_shopping_list_items()
+    return render_template('new_shopping_list.html', items=items, today=date.today())
+
+@app.route('/new_shopping_list/remove/<int:item_id>', methods=['POST'])
+def remove_from_new_shopping_list_view(item_id):
+    result = manager.remove_item_from_user_shopping_list(item_id)
+    if result.get("success"):
+        flash("Item removed from shopping list.", 'success')
+    else:
+        flash(f"Failed to remove item: {result.get('message', 'Unknown error')}", 'error')
+    return redirect(url_for('new_shopping_list_view'))
+
+@app.route('/new_shopping_list/clear', methods=['POST'])
+def clear_new_shopping_list_view():
+    result = manager.clear_user_shopping_list()
+    if result.get("success"):
+        flash("Shopping list cleared.", 'success')
+    else:
+        flash(f"Failed to clear shopping list: {result.get('message', 'Unknown error')}", 'error')
+    return redirect(url_for('new_shopping_list_view'))
+
+@app.route('/new_shopping_list/update_quantity/<int:item_id>', methods=['POST'])
+def update_new_shopping_list_item_quantity_view(item_id):
+    new_quantity_str = request.form.get('quantity_added')
+    try:
+        new_quantity = float(new_quantity_str)
+        result = manager.update_user_shopping_list_item_quantity(item_id, new_quantity)
+        if result.get("success"):
+            flash("Item quantity updated.", 'success')
         else:
-            return redirect(url_for('shopping_list_view')) # Stay on shopping list if there were errors
+            flash(f"Failed to update quantity: {result.get('message', 'Unknown error')}", 'error')
+    except (ValueError, TypeError):
+        flash("Invalid quantity provided.", 'error')
+    return redirect(url_for('new_shopping_list_view'))
 
-    # Should not happen if methods=['POST']
-    return redirect(url_for('shopping_list_view'))
+@app.route('/new_shopping_list/export_excel', methods=['GET'])
+def export_new_shopping_list_excel_view():
+    items = manager.get_user_shopping_list_items()
+    if not items:
+        flash("Shopping list is empty. Nothing to export.", 'info')
+        return redirect(url_for('new_shopping_list_view'))
 
+    try:
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.title = "Shopping List"
+
+        headers = ["Product Name", "Category", "Unit", "Current On Hand", "System Calculated Need", "Qty To Buy (Added to SL)", "Default Store"]
+        sheet.append(headers)
+
+        for item in items:
+            row = [
+                item.get('product_name', 'N/A'),
+                item.get('category_name', 'N/A'),
+                item.get('unit_of_measure', 'N/A'),
+                item.get('current_on_hand', 0.0),
+                item.get('system_calculated_need', 0.0),
+                item.get('quantity_added', 0.0),
+                item.get('default_purchase_location', 'N/A')
+            ]
+            sheet.append(row)
+
+        excel_io = BytesIO()
+        workbook.save(excel_io)
+        excel_io.seek(0)
+
+        return send_file(
+            excel_io,
+            as_attachment=True,
+            download_name=f"shopping_list_{date.today().isoformat()}.xlsx",
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+    except Exception as e:
+        app.logger.error(f"Error exporting shopping list to Excel: {e}", exc_info=True)
+        flash(f"An error occurred while exporting to Excel: {str(e)}", "error")
+        return redirect(url_for('new_shopping_list_view'))
+
+@app.route('/shopping_list/add_direct', methods=['POST'])
+def add_to_shopping_list_direct_view():
+    product_id = request.form.get('product_id')
+    quantity_str = request.form.get('quantity')
+
+    if not product_id or not quantity_str:
+        return jsonify({"success": False, "message": "Product ID and quantity are required."}), 400
+
+    try:
+        product_id_int = int(product_id)
+        quantity_float = float(quantity_str)
+
+        if quantity_float <= 0:
+            return jsonify({"success": False, "message": "Quantity must be positive."}), 400
+
+        result = manager.add_item_to_user_shopping_list(product_id_int, quantity_float)
+
+        if result.get("success"):
+            product = manager.get_product(product_id_int)
+            product_name = product.get('name', f"ID {product_id_int}") if product else f"ID {product_id_int}"
+            return jsonify({"success": True, "message": f"Added {quantity_float} of '{product_name}' to your shopping list."})
+        else:
+            return jsonify({"success": False, "message": result.get("message", "Failed to add item to shopping list.")}), 500
+
+    except ValueError:
+        return jsonify({"success": False, "message": "Invalid product ID or quantity format."}), 400
+    except Exception as e:
+        app.logger.error(f"Error in /shopping_list/add_direct: {e}", exc_info=True)
+        return jsonify({"success": False, "message": "An unexpected server error occurred."}), 500
 
 # --- Garden & Harvest Routes ---
 @app.route('/garden', methods=['GET'])

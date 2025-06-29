@@ -1218,6 +1218,42 @@ class TestInventoryBatchesWithCost(unittest.TestCase):
         count = self.manager.get_inventory_batches_with_cost_count()
         self.assertEqual(count, 4)
 
+    def test_log_purchase_removes_from_user_shopping_list(self):
+        # Add Product A to the user shopping list first
+        self.manager.add_item_to_user_shopping_list(product_id=self.prod1_id, quantity_added=5.0)
+
+        # Verify it's in the shopping list
+        sl_items_before = self.manager.get_user_shopping_list_items()
+        item_in_sl_before = next((item for item in sl_items_before if item['product_id'] == self.prod1_id), None)
+        self.assertIsNotNone(item_in_sl_before, "Product A should be in user shopping list before logging purchase.")
+        self.assertEqual(item_in_sl_before['quantity_added'], 5.0)
+
+        # Log a purchase for Product A (this will create a new batch and trigger removal from SL)
+        # The log_purchase method itself calls add_inventory_stock, and log_multiple_purchases
+        # (which is what the app route uses) calls log_purchase and then handles SL removal.
+        # For this test, we are testing the effect of log_multiple_purchases indirectly via log_purchase
+        # if log_purchase is now the one also handling this, or directly testing log_multiple_purchases.
+        # Based on the plan, log_multiple_purchases is modified.
+        # So, let's simulate the data for log_multiple_purchases.
+
+        purchase_data = [{
+            "product_id": self.prod1_id,
+            "purchase_date_str": "2024-02-01", # A new purchase date
+            "quantity_purchased_float": 2.0,
+            "cost_per_unit_float": 1.50,
+            "vendor_str": "Test Vendor SL"
+        }]
+
+        # The modification was to log_multiple_purchases, so we call that.
+        log_multi_result = self.manager.log_multiple_purchases(purchase_data)
+        self.assertTrue(log_multi_result.get("overall_success"), "log_multiple_purchases should succeed.")
+        self.assertEqual(log_multi_result.get("success_count"), 1)
+
+        # Verify it's removed from the shopping list
+        sl_items_after = self.manager.get_user_shopping_list_items()
+        item_in_sl_after = next((item for item in sl_items_after if item['product_id'] == self.prod1_id), None)
+        self.assertIsNone(item_in_sl_after, "Product A should be removed from user shopping list after logging purchase via log_multiple_purchases.")
+
 
 if __name__ == '__main__':
     unittest.main(argv=['first-arg-is-ignored'], exit=False)
