@@ -59,9 +59,11 @@
                     </td>
                     <td>{{ item.default_purchase_location or 'N/A' }}</td>
                     <td>
-                        <form method="POST" action="{{ url_for('remove_from_new_shopping_list_view', item_id=item.user_shopping_list_item_id) }}" style="display:inline;">
-                            <button type="submit" class="button is-small is-danger" onclick="return confirm('Remove this item?');"><i class="fas fa-times"></i></button>
-                        </form>
+                        <button type="button" class="button is-small is-danger remove-item-button"
+                                data-action-url="{{ url_for('remove_from_new_shopping_list_view', item_id=item.user_shopping_list_item_id) }}"
+                                title="Remove this item">
+                            <i class="fas fa-times"></i>
+                        </button>
                     </td>
                 </tr>
                 <tr class="purchase-details-row" id="purchase_details_{{ loop.index0 }}" style="display: none;">
@@ -118,6 +120,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const selectAllCheckbox = document.getElementById('select_all_to_purchase');
     const itemCheckboxes = document.querySelectorAll('.item-purchase-checkbox');
     const updateQtyButtons = document.querySelectorAll('.update-sl-qty-button');
+    const removeItemButtons = document.querySelectorAll('.remove-item-button'); // Get new buttons
 
     function togglePurchaseDetails(checkbox, index) {
         const detailsRow = document.getElementById(`purchase_details_${index}`);
@@ -189,6 +192,34 @@ document.addEventListener('DOMContentLoaded', function () {
             tempForm.submit();
             // The form will be removed from the DOM automatically after submission
             // because the page reloads.
+        });
+    });
+
+    removeItemButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            if (confirm('Are you sure you want to remove this item from the shopping list?')) {
+                const actionUrl = this.dataset.actionUrl;
+
+                const tempForm = document.createElement('form');
+                tempForm.method = 'POST';
+                tempForm.action = actionUrl;
+
+                // Add CSRF token if your application uses Flask-WTF or similar for CSRF protection on POSTs
+                // This app does not seem to be using a standard CSRF token hidden input in other forms,
+                // but if it were, it would be added here:
+                // const csrfTokenInput = document.querySelector('input[name="csrf_token"]'); // Example
+                // if (csrfTokenInput) {
+                //    const csrfField = document.createElement('input');
+                //    csrfField.type = 'hidden';
+                //    csrfField.name = 'csrf_token';
+                //    csrfField.value = csrfTokenInput.value;
+                //    tempForm.appendChild(csrfField);
+                // }
+
+                document.body.appendChild(tempForm);
+                tempForm.submit();
+                // No need to explicitly remove tempForm, page will reload.
+            }
         });
     });
 });
