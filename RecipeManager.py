@@ -39,8 +39,6 @@ class RecipeManager:
                         name TEXT NOT NULL UNIQUE,
                         description TEXT,
                         instructions TEXT
-                        /* output_product_id INTEGER REFERENCES products(id) - Will be added via ALTER TABLE */
-                        /* output_yield REAL - Will be added via ALTER TABLE */
                     )
                 ''')
 
@@ -64,7 +62,7 @@ class RecipeManager:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         recipe_id INTEGER NOT NULL,
                         item_name TEXT NOT NULL,
-                        quantity TEXT,
+                        quantity REAL,  -- Changed to REAL
                         notes TEXT,
                         FOREIGN KEY (recipe_id) REFERENCES recipes (id)
                     )
@@ -85,6 +83,9 @@ class RecipeManager:
         if not recipe_data or 'name' not in recipe_data or 'ingredients' not in recipe_data:
             return {"success": False, "message": "Recipe name and ingredients are required."}
 
+        if not isinstance(recipe_data['ingredients'], list):
+            return {"success": False, "message": "Ingredients must be a list."}
+
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -96,16 +97,38 @@ class RecipeManager:
                 recipe_id = cursor.lastrowid
 
                 for ingredient in recipe_data['ingredients']:
-                    if not ingredient.get('item_name'):
-                        # Rollback or handle more gracefully if an ingredient is invalid
+                    if not isinstance(ingredient, dict):
+                        conn.rollback()
+                        return {"success": False, "message": "Each ingredient must be a dictionary."}
+
+                    item_name_for_ingredient = ingredient.get('item_name')
+                    if not item_name_for_ingredient:
                         conn.rollback()
                         return {"success": False, "message": "Ingredient item_name is required."}
+
+                    # Validate that the ingredient item_name exists as a product
+                    product_exists = self.manager.get_product_by_name(item_name_for_ingredient)
+                    if not product_exists:
+                        conn.rollback()
+                        return {"success": False, "message": f"Ingredient '{item_name_for_ingredient}' not found in products."}
+
+                    quantity_required_input = ingredient.get('quantity_required')
+                    quantity_to_store = None
+                    if quantity_required_input is not None:
+                        try:
+                            quantity_to_store = float(quantity_required_input)
+                        except ValueError:
+                            conn.rollback()
+                            # Try to get item_name for a more informative error, default if not available
+                            item_name_for_error = ingredient.get('item_name', 'Unknown Item')
+                            return {"success": False, "message": f"Invalid quantity format for ingredient '{item_name_for_error}': '{quantity_required_input}'."}
+
                     cursor.execute('''
                         INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
                         VALUES (?, ?, ?, ?)
-                    ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity_required'), ingredient.get('notes')))
+                    ''', (recipe_id, ingredient['item_name'], quantity_to_store, ingredient.get('notes')))
 
-                conn.commit()
+                # conn.commit() is handled by 'with' statement if no errors
                 return {"success": True, "message": "Recipe added successfully.", "recipe_id": recipe_id}
         except sqlite3.IntegrityError:
             return {"success": False, "message": f"Recipe name '{recipe_data['name']}' already exists."}
@@ -137,7 +160,7 @@ class RecipeManager:
                         ingredients.append({
                             'id': row['id'],
                             'item_name': row['item_name'],
-                            'quantity_required': row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'quantity_required': float(row['quantity']) if row['quantity'] is not None else None, # Convert to float
                             'notes': row['notes']
                         })
                     recipe['ingredients'] = ingredients
@@ -173,7 +196,7 @@ class RecipeManager:
                         ingredients.append({
                             'id': row['id'],
                             'item_name': row['item_name'],
-                            'quantity_required': row['quantity'], # Aliasing 'quantity' to 'quantity_required'
+                            'quantity_required': float(row['quantity']) if row['quantity'] is not None else None, # Convert to float
                             'notes': row['notes']
                         })
                     recipe['ingredients'] = ingredients
@@ -227,7 +250,7 @@ class RecipeManager:
                             ingredients.append({
                                 'id': ing_row['id'],
                                 'item_name': ing_row['item_name'],
-                                'quantity_required': ing_row['quantity'],
+                                'quantity_required': float(ing_row['quantity']) if ing_row['quantity'] is not None else None, # Convert to float
                                 'notes': ing_row['notes']
                             })
                         recipe['ingredients'] = ingredients
@@ -253,7 +276,7 @@ class RecipeManager:
         """
         Updates an existing recipe.
         recipe_data can contain name, description, instructions, output_product_id, output_yield.
-        Ingredients update is handled separately (e.g., by deleting old and adding new).
+        Ingredients update is handled by deleting old and adding new ones if provided in recipe_data.
         """
         if not recipe_data:
             return {"success": False, "message": "No data provided for update."}
@@ -261,67 +284,90 @@ class RecipeManager:
         fields_to_update = []
         params = []
 
-        if 'name' in recipe_data:
-            fields_to_update.append("name = ?")
-            params.append(recipe_data['name'])
-        if 'description' in recipe_data:
-            fields_to_update.append("description = ?")
-            params.append(recipe_data['description'])
-        if 'instructions' in recipe_data:
-            fields_to_update.append("instructions = ?")
-            params.append(recipe_data['instructions'])
-        if 'output_product_id' in recipe_data: # Can be None to clear it
-            fields_to_update.append("output_product_id = ?")
-            params.append(recipe_data['output_product_id'])
-        if 'output_yield' in recipe_data: # Can be None to clear it
-            fields_to_update.append("output_yield = ?")
-            params.append(recipe_data['output_yield'])
+        # Build the SET part of the UPDATE query for core recipe fields
+        core_fields = ['name', 'description', 'instructions', 'output_product_id', 'output_yield']
+        for field in core_fields:
+            if field in recipe_data:
+                fields_to_update.append(f"{field} = ?")
+                params.append(recipe_data[field])
 
-        if not fields_to_update:
-            return {"success": False, "message": "No valid fields to update for recipe details."}
-
-        params.append(recipe_id)
-        query = f"UPDATE recipes SET {', '.join(fields_to_update)} WHERE id = ?"
+        # Only proceed with core field update if there are fields to update
+        main_update_executed_and_successful = False
+        if fields_to_update:
+            update_query = f"UPDATE recipes SET {', '.join(fields_to_update)} WHERE id = ?"
+            final_params = tuple(params + [recipe_id])
+        else: # No core fields to update, but ingredients might be updated
+            update_query = None
+            final_params = None
 
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, tuple(params))
-                # Ingredient updates would typically be:
-                # 1. Delete existing ingredients for this recipe_id
-                # 2. Insert new ingredients from recipe_data['ingredients'] if provided
-                # This part is complex and depends on how UI handles ingredient editing.
-                # For now, focusing on updating the recipe table itself.
-                # If recipe_data includes 'ingredients', we can call a helper or implement here.
-                if 'ingredients' in recipe_data:
-                    # Delete old ingredients
+
+                main_update_rowcount = 0
+                if update_query:
+                    cursor.execute(update_query, final_params)
+                    main_update_rowcount = cursor.rowcount
+
+                ingredients_data_in_payload = 'ingredients' in recipe_data
+
+                if ingredients_data_in_payload:
+                    if not isinstance(recipe_data['ingredients'], list):
+                        conn.rollback() # Ensure rollback if ingredients format is wrong
+                        return {"success": False, "message": "Ingredients must be a list if provided."}
+
+                    # Delete old ingredients first, then add new ones
                     cursor.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))
-                    # Add new ingredients
-                    for ingredient in recipe_data['ingredients']:
-                        if not ingredient.get('item_name'):
-                            conn.rollback()
-                            return {"success": False, "message": "Ingredient item_name is required for update."}
-                        cursor.execute('''
-                            INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
-                            VALUES (?, ?, ?, ?)
-                        ''', (recipe_id, ingredient['item_name'], ingredient.get('quantity_required'), ingredient.get('notes')))
 
-                conn.commit()
-                if cursor.rowcount == 0 and not ('ingredients' in recipe_data and recipe_data['ingredients']):
-                    # Check rowcount only if ingredients were not the only thing changed
-                    # A bit complex logic here, if only ingredients changed, main table rowcount is 0
-                    # A more robust check might be needed, or rely on get_recipe_by_id to confirm existence
-                    # For now, if ingredients were updated, we assume success if no SQL error.
-                    # If no core fields updated and no ingredients, it might mean recipe_id not found.
-                    # This check is imperfect.
-                    # A better way: Check if recipe exists before attempting update.
-                    pass # Allow updates of only ingredients
+                    if recipe_data['ingredients']: # If new ingredients list is not empty
+                        for ingredient in recipe_data['ingredients']:
+                            if not isinstance(ingredient, dict):
+                                conn.rollback()
+                                return {"success": False, "message": "Each ingredient must be a dictionary."}
+                            if not ingredient.get('item_name'):
+                                conn.rollback()
+                                return {"success": False, "message": "Ingredient item_name is required."}
 
+                            quantity_required_input = ingredient.get('quantity_required')
+                            quantity_to_store = None
+                            if quantity_required_input is not None:
+                                try:
+                                    quantity_to_store = float(quantity_required_input)
+                                except ValueError:
+                                    conn.rollback()
+                                    item_name_for_error = ingredient.get('item_name', 'Unknown Item')
+                                    return {"success": False, "message": f"Invalid quantity format for ingredient '{item_name_for_error}': '{quantity_required_input}'."}
+
+                            cursor.execute('''
+                                INSERT INTO recipe_ingredients (recipe_id, item_name, quantity, notes)
+                                VALUES (?, ?, ?, ?)
+                            ''', (recipe_id, ingredient['item_name'], quantity_to_store, ingredient.get('notes')))
+
+                # Determine success:
+                # If core fields were updated (main_update_rowcount > 0), it's a success.
+                # If core fields were not updated (main_update_rowcount == 0) BUT ingredients were part of the payload
+                # (meaning an attempt to update them, even to an empty list, was made), it's also a success,
+                # assuming the recipe_id exists.
+                # If main_update_rowcount == 0 AND ingredients were NOT in payload, then check if recipe_id exists.
+                # If it doesn't exist, it's a "not found" error.
+
+                if main_update_rowcount == 0 and not ingredients_data_in_payload:
+                    # No core fields updated, and no ingredient update requested.
+                    # Check if the recipe ID even exists.
+                    existing_recipe_check = self.get_recipe_by_id(recipe_id)
+                    if not existing_recipe_check:
+                        return {"success": False, "message": f"Recipe ID {recipe_id} not found."}
+                    # If it exists, it means no changes were made, which is still a "successful" operation in a way.
+
+                # The 'with' statement handles commit on successful completion of the block,
+                # or rollback if an exception occurs within the block.
                 return {"success": True, "message": f"Recipe ID {recipe_id} updated successfully."}
-        except sqlite3.IntegrityError as e: # e.g. unique constraint on name
+
+        except sqlite3.IntegrityError as e: # e.g., unique constraint on name if name is changed
             return {"success": False, "message": f"Error updating recipe (e.g., name conflict): {e}"}
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error updating recipe: {e}"}
+
 
     def delete_recipe(self, recipe_id):
         """Deletes a recipe and its associated ingredients."""
@@ -332,9 +378,12 @@ class RecipeManager:
                 cursor.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))
                 # Then, delete the recipe itself
                 cursor.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
-                conn.commit()
-                if cursor.rowcount == 0: # Check if the recipe deletion affected any row
+
+                if cursor.rowcount == 0: # Check if the recipe deletion affected any row in 'recipes' table
+                    # conn.commit() # or rollback depending on desired behavior for partial delete
                     return {"success": False, "message": f"Recipe with ID {recipe_id} not found."}
+
+                # conn.commit() handled by 'with'
                 return {"success": True, "message": f"Recipe ID {recipe_id} and its ingredients deleted successfully."}
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error deleting recipe: {e}"}
