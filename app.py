@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
+import logging # Added for app-level logging
 from Food_manager import InventoryManager
 from RecipeManager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
@@ -1623,6 +1624,8 @@ def log_purchases_view():
         purchase_date_str = request.form.get('purchase_date')
         form_errors = []
         purchases_to_log = []
+        app.logger.debug(f"--- Starting /log_purchases POST processing ---")
+        app.logger.debug(f"Form data received: {request.form}")
 
         if not purchase_date_str:
             form_errors.append("Purchase date is required for the batch.")
@@ -1705,17 +1708,22 @@ def log_purchases_view():
                 "quantity_purchased_float": quantity_float,
                 "cost_per_unit_float": cost_float,
                 "vendor_str": vendor_str if vendor_str else None,
-                "user_shopping_list_item_id": user_shopping_list_item_id # Pass this along
+                "user_shopping_list_item_id": user_shopping_list_item_id
             })
+
+        app.logger.debug(f"Data prepared for manager.log_multiple_purchases: {purchases_to_log}")
 
         if not purchases_to_log:
             if not any(key.startswith("include_item_") for key in request.form):
                  flash("No items were selected for purchase.", "info")
+                 app.logger.info("No items selected for purchase in /log_purchases.")
             else:
                  flash("No items could be logged due to validation errors.", "warning")
+                 app.logger.warning("No items could be logged in /log_purchases due to validation errors.")
             return redirect(url_for('new_shopping_list_view'))
 
-        batch_results = manager.log_multiple_purchases(purchases_to_log) # This now also removes from user_shopping_list
+        batch_results = manager.log_multiple_purchases(purchases_to_log)
+        app.logger.debug(f"Result from manager.log_multiple_purchases: {batch_results}")
 
         if batch_results.get("success_count", 0) > 0:
             flash(f"Successfully logged {batch_results['success_count']} purchase(s).", 'success')
@@ -2518,21 +2526,20 @@ def log_purchase_view():
     # If pagination is needed here, pass page=None, per_page=None to fetch all,
     # or implement pagination controls for this product list.
     # For now, assuming we want all (filtered) products in the dropdown.
-    filter_args['page'] = None
-    filter_args['per_page'] = None
+    filter_args['page'] = None # Fetch all for dropdown
+    filter_args['per_page'] = None # Fetch all for dropdown
 
 
     products_for_dropdown = manager.get_all_products(**filter_args)
 
     form_data_get = {'purchase_date': date.today().isoformat()}
-    # If there were validation errors on POST, form_data might be passed from POST.
-    # For a clean GET, it's just the purchase_date.
-    # The template will use request.args for search_name and search_category values.
-    # Pass today's date for the template context
+
     return render_template('log_purchase.html',
                            products=products_for_dropdown,
                            all_categories=all_categories,
-                           form_data=form_data_get,
+                           form_data=form_data_get, # Contains default purchase_date
+                           search_name=search_name, # Pass search terms back for form repopulation
+                           search_category=search_category, # Pass search terms back
                            today=date.today())
 
 @app.route('/inventory/edit', methods=['GET', 'POST'])
