@@ -196,7 +196,7 @@ class TestInventoryManager(unittest.TestCase):
             category="Produce", subcategory="Fruit", unit_of_measure="kg"
         )
         self.assertTrue(result.get("success"), result.get("message"))
-        self.assertIn("Item 'Apples' added to inventory.", result.get("message"))
+        self.assertIn("Item 'Apples' added to inventory (no cost info).", result.get("message"))
         self.assertEqual(len(result.get("warnings", [])), 0) # No UoM or cat/subcat name mismatch
 
     def test_add_item_to_list_new_product_existing_cat_new_subcat_action_required(self):
@@ -237,7 +237,7 @@ class TestInventoryManager(unittest.TestCase):
             confirmed_action="confirm_new_category"
         )
         self.assertTrue(confirmed_result.get("success"), confirmed_result.get("message"))
-        self.assertIn("Item 'Kombucha' added to inventory.", confirmed_result.get("message"))
+        self.assertIn("Item 'Kombucha' added to inventory (no cost info).", confirmed_result.get("message"))
 
         # Verify product, category, and subcategory were created
         product = self.manager.get_product_by_name("Kombucha")
@@ -268,7 +268,7 @@ class TestInventoryManager(unittest.TestCase):
             temp_category_id=confirmation_details['category_id']
         )
         self.assertTrue(confirmed_result.get("success"), confirmed_result.get("message"))
-        self.assertIn("Item 'Mangoes' added to inventory.", confirmed_result.get("message"))
+        self.assertIn("Item 'Mangoes' added to inventory (no cost info).", confirmed_result.get("message"))
 
         product = self.manager.get_product_by_name("Mangoes")
         self.assertIsNotNone(product)
@@ -567,14 +567,15 @@ from datetime import timedelta # Ensure timedelta is imported
 class TestFutureInventoryProjection(unittest.TestCase):
     def setUp(self):
         self.manager = InventoryManager(db_filepath=":memory:")
-        # No categories needed for these specific tests unless products require them for creation.
-        # For simplicity, assuming create_product doesn't strictly require category_id for these tests,
-        # or passing None if it does. The method under test doesn't directly use category.
+        # Add a dummy category for products in these tests
+        dummy_cat_res = self.manager.add_category("Test Category for Projections")
+        self.assertTrue(dummy_cat_res.get("success"), "Failed to create dummy category for projection tests.")
+        self.dummy_category_id = dummy_cat_res['category_id']
 
         # Product 1: Test Apples (for general tests)
         apple_res = self.manager.create_product(
             name="Test Apples", unit_of_measure="pcs", default_expiry_days=10,
-            category_id=None, subcategory_id=None # Assuming these can be None
+            category_id=self.dummy_category_id, subcategory_id=None
         )
         self.assertTrue(apple_res.get("success"), "Failed to create Test Apples")
         self.apple_product_id = apple_res['product_id']
@@ -582,7 +583,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
         # Product 2: Test Oranges (for override rate test)
         orange_res = self.manager.create_product(
             name="Test Oranges", unit_of_measure="pcs", default_expiry_days=10,
-            category_id=None, subcategory_id=None,
+            category_id=self.dummy_category_id, subcategory_id=None,
             consumption_override_rate=0.5
         )
         self.assertTrue(orange_res.get("success"), "Failed to create Test Oranges")
@@ -591,7 +592,7 @@ class TestFutureInventoryProjection(unittest.TestCase):
         # Product 3: Test Grapes (for spoilage and harvest interaction)
         grapes_res = self.manager.create_product(
             name="Test Grapes", unit_of_measure="bunch", default_expiry_days=5, # Shorter expiry
-            category_id=None, subcategory_id=None
+            category_id=self.dummy_category_id, subcategory_id=None
         )
         self.assertTrue(grapes_res.get("success"), "Failed to create Test Grapes")
         self.grapes_product_id = grapes_res['product_id']
@@ -1114,7 +1115,8 @@ class TestInventoryBatchesWithCost(unittest.TestCase):
             cursor = conn.cursor()
             cursor.execute("UPDATE inventory_items SET quantity = '0' WHERE id = ?", (zero_qty_batch_res['stock_item_id'],))
             conn.commit()
-            conn.close()
+            # Do not close conn here if it's the shared in-memory connection; tearDown will handle it.
+            # conn.close()
 
 
     def tearDown(self):

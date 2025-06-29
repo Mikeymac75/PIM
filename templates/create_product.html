@@ -18,16 +18,16 @@
 <form method="POST" action="{{ url_for('create_product_view') }}">
     <div>
         <label for="name">Product Name:</label>
-        <input type="text" id="name" name="name" value="{{ form_data.name if form_data else '' }}" required>
+        <input type="text" id="name" name="name" value="{{ form_data.get('name', '') }}" required>
     </div>
 
     <div>
         <label for="category_id">Category:</label>
         <select id="category_id" name="category_id" required>
             <option value="">-- Select Category --</option>
-            {% for category in categories_data %}
-                <option value="{{ category.id }}" {% if form_data and form_data.category_id|int == category.id %}selected{% endif %}>
-                    {{ category.name }}
+            {% for category_item in categories_data %}
+                <option value="{{ category_item.id }}" {% if form_data and form_data.get('category_id')|int == category_item.id %}selected{% endif %}>
+                    {{ category_item.name }}
                 </option>
             {% endfor %}
         </select>
@@ -44,23 +44,23 @@
 
     <div>
         <label for="unit_of_measure">Unit of Measure:</label>
-        <input type="text" id="unit_of_measure" name="unit_of_measure" value="{{ form_data.unit_of_measure if form_data else '' }}" required>
+        <input type="text" id="unit_of_measure" name="unit_of_measure" value="{{ form_data.get('unit_of_measure', '') }}" required>
     </div>
     <div>
         <label for="default_expiry_days">Default Expiry Days:</label>
-        <input type="number" id="default_expiry_days" name="default_expiry_days" value="{{ form_data.default_expiry_days if form_data else '' }}" min="0" required>
+        <input type="number" id="default_expiry_days" name="default_expiry_days" value="{{ form_data.get('default_expiry_days', '') }}" min="0" required>
     </div>
     <div>
         <label for="par_level">Par Level:</label>
-        <input type="number" id="par_level" name="par_level" value="{{ form_data.par_level if form_data else '0' }}" min="0" step="any">
+        <input type="number" id="par_level" name="par_level" value="{{ form_data.get('par_level', '0') }}" min="0" step="any">
     </div>
     <div>
         <label for="max_holding_amount">Max Holding Amount:</label>
-        <input type="number" id="max_holding_amount" name="max_holding_amount" value="{{ form_data.max_holding_amount if form_data else '0' }}" min="0" step="any">
+        <input type="number" id="max_holding_amount" name="max_holding_amount" value="{{ form_data.get('max_holding_amount', '0') }}" min="0" step="any">
     </div>
     <div>
         <label for="purchase_location">Default Purchase Location:</label>
-        <input type="text" id="purchase_location" name="purchase_location" value="{{ form_data.purchase_location if form_data else '' }}">
+        <input type="text" id="purchase_location" name="purchase_location" value="{{ form_data.get('purchase_location', '') }}">
     </div>
     <div>
         <button type="submit" class="button"><i class="fas fa-plus-square"></i> Create Product</button>
@@ -70,8 +70,8 @@
 <script>
     // Embed categories data from Flask into JavaScript
     const categoriesData = {{ categories_data|tojson|safe }};
-    const selectedCategoryId = "{{ form_data.category_id if form_data else '' }}";
-    const selectedSubcategoryId = "{{ form_data.subcategory_id if form_data else '' }}";
+    const selectedCategoryId = "{{ form_data.get('category_id', '') }}";
+    const selectedSubcategoryId = "{{ form_data.get('subcategory_id', '') }}";
 
     document.addEventListener('DOMContentLoaded', function () {
         const categorySelect = document.getElementById('category_id');

@@ -916,7 +916,7 @@ class InventoryManager:
                     except (ValueError, TypeError) as e:
                         # Handle cases where date conversion or calculation might fail
                         item['calculated_status'] = item.get('status', 'Error calculating status') # Fallback to stored status
-                        item['estimated_daily_yield'] = 'Error'
+                        item['estimated_daily_yield'] = 0.0 # Default to 0.0 on error
                         print(f"Error calculating dynamic fields for production item {item_id}: {e}")
                     return item
                 return None
@@ -995,7 +995,7 @@ class InventoryManager:
 
                     except (ValueError, TypeError, KeyError) as e:
                         item['calculated_status'] = item.get('status', 'Error') # Fallback to stored status or 'Error'
-                        item['estimated_daily_yield'] = 'Error'
+                        item['estimated_daily_yield'] = 0.0 # Default to 0.0 on error
                         print(f"Error calculating dynamic fields for item ID {item.get('id')}: {e}")
 
                     items.append(item)
@@ -1440,11 +1440,21 @@ class InventoryManager:
         return past_summary_results
 
     def get_product_by_name(self, name):
-        """Retrieves a product by its name."""
+        """Retrieves a product by its name, including category and subcategory names."""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM products WHERE LOWER(name) = LOWER(?)", (name,))
+                # Join with categories and subcategories to fetch their names
+                cursor.execute("""
+                    SELECT
+                        p.*,
+                        c.name AS category_name,
+                        s.name AS subcategory_name
+                    FROM products p
+                    LEFT JOIN categories c ON p.category_id = c.id
+                    LEFT JOIN subcategories s ON p.subcategory_id = s.id
+                    WHERE LOWER(p.name) = LOWER(?)
+                """, (name,))
                 row = cursor.fetchone()
                 return dict(row) if row else None
         except sqlite3.Error as e:
@@ -4028,12 +4038,19 @@ class InventoryManager:
 
         # After successful logging, remove purchased items from user_shopping_list
         if success_count > 0:
-            product_ids_purchased = [p['product_id'] for p in purchases_data_list if any(
-                rd['product_id'] == p['product_id'] and rd['success'] for rd in results_details
-            )]
-            for prod_id in product_ids_purchased:
-                self.remove_item_from_user_shopping_list_by_product_id(prod_id)
-                print(f"LOG: Removed product ID {prod_id} from user_shopping_list after purchase.")
+            product_ids_to_remove = []
+            for detail in results_details:
+                if detail.get("success") and detail.get("product_id") is not None:
+                    product_ids_to_remove.append(detail.get("product_id"))
+
+            # Remove duplicates just in case, though product_id should be unique per entry in results_details
+            for prod_id in set(product_ids_to_remove):
+                removal_result = self.remove_item_from_user_shopping_list_by_product_id(prod_id)
+                # Optionally, log success/failure of removal for debugging, but don't let it affect overall purchase status
+                if removal_result.get("success"):
+                    print(f"LOG: Successfully processed removal of product ID {prod_id} from user_shopping_list after purchase.")
+                else:
+                    print(f"LOG_ERROR: Failed to remove product ID {prod_id} from user_shopping_list: {removal_result.get('message')}")
 
         return {
             "overall_success": failure_count == 0,

@@ -18,32 +18,52 @@ class TestRecipeManager(unittest.TestCase):
 
         self.db_filepath = ":memory:"
         self.recipe_mngr = RecipeManager(db_filepath=self.db_filepath)
+        # self.inventory_mngr is now self.recipe_mngr.manager
 
-        # Manually add some products for testing output_product_id
-        # This requires access to the same DB connection and cursor.
-        conn = sqlite3.connect(self.db_filepath)
-        cursor = conn.cursor()
-        # Ensure products table exists (it should due to RecipeManager's _initialize_db calling InventoryManager's schema parts)
-        # Or, more directly, ensure products table creation if not relying on InventoryManager's full init.
-        # For this test, we rely on the schema being initialized by RecipeManager,
-        # which should include products table if InventoryManager parts were correctly added to its init.
-        # Let's assume `products` table is available.
-        try:
-            cursor.execute("INSERT INTO products (name, category, unit_of_measure, default_expiry_days) VALUES (?, ?, ?, ?)",
-                           ("Tomato Puree", "Canned Goods", "grams", 365))
-            self.product1_id = cursor.lastrowid
-            cursor.execute("INSERT INTO products (name, category, unit_of_measure, default_expiry_days) VALUES (?, ?, ?, ?)",
-                           ("Pizza Dough", "Bakery", "ball", 3))
-            self.product2_id = cursor.lastrowid
-            conn.commit()
-        except sqlite3.Error as e:
-            # This might happen if products table isn't created by RecipeManager's init path.
-            # This indicates a potential issue in how _initialize_db is shared or structured if it fails.
-            # For now, we'll proceed assuming it works or these tests will reveal the problem.
-            print(f"Error setting up products for recipe tests: {e} - check DB initialization in RecipeManager")
-            pass # Allow tests to proceed and potentially fail if product IDs are crucial and missing
-        finally:
-            conn.close()
+        # Add categories needed for products
+        cat1_res = self.recipe_mngr.manager.add_category("Test Canned Goods")
+        self.assertTrue(cat1_res.get("success"), "Failed to create category 'Test Canned Goods'")
+        self.cat1_id = cat1_res['category_id']
+
+        cat2_res = self.recipe_mngr.manager.add_category("Test Bakery")
+        self.assertTrue(cat2_res.get("success"), "Failed to create category 'Test Bakery'")
+        self.cat2_id = cat2_res['category_id']
+
+        # Add products using the InventoryManager instance from RecipeManager
+        prod1_res = self.recipe_mngr.manager.create_product(
+            name="Tomato Puree", category_id=self.cat1_id, subcategory_id=None,
+            unit_of_measure="grams", default_expiry_days=365
+        )
+        self.assertTrue(prod1_res.get("success"), "Failed to create product 'Tomato Puree'")
+        self.product1_id = prod1_res['product_id']
+
+        prod2_res = self.recipe_mngr.manager.create_product(
+            name="Pizza Dough", category_id=self.cat2_id, subcategory_id=None,
+            unit_of_measure="ball", default_expiry_days=3
+        )
+        self.assertTrue(prod2_res.get("success"), "Failed to create product 'Pizza Dough'")
+        self.product2_id = prod2_res['product_id']
+
+        # Add a few more products that ingredients might reference
+        prod3_res = self.recipe_mngr.manager.create_product(name="Pasta", category_id=self.cat1_id, unit_of_measure="grams", default_expiry_days=730)
+        self.assertTrue(prod3_res.get("success"), "Failed to create product 'Pasta'")
+        self.pasta_product_id = prod3_res['product_id']
+
+        prod4_res = self.recipe_mngr.manager.create_product(name="Tomato Sauce", category_id=self.cat1_id, unit_of_measure="ml", default_expiry_days=365)
+        self.assertTrue(prod4_res.get("success"), "Failed to create product 'Tomato Sauce'")
+        self.tomatosauce_product_id = prod4_res['product_id']
+
+        prod5_res = self.recipe_mngr.manager.create_product(name="Old Item", category_id=self.cat1_id, unit_of_measure="pcs", default_expiry_days=100)
+        self.assertTrue(prod5_res.get("success"), "Failed to create product 'Old Item'")
+        self.olditem_product_id = prod5_res['product_id']
+
+        prod6_res = self.recipe_mngr.manager.create_product(name="New Item A", category_id=self.cat1_id, unit_of_measure="pcs", default_expiry_days=100)
+        self.assertTrue(prod6_res.get("success"), "Failed to create product 'New Item A'")
+        self.newitemA_product_id = prod6_res['product_id']
+
+        prod7_res = self.recipe_mngr.manager.create_product(name="New Item B", category_id=self.cat1_id, unit_of_measure="pcs", default_expiry_days=100)
+        self.assertTrue(prod7_res.get("success"), "Failed to create product 'New Item B'")
+        self.newitemB_product_id = prod7_res['product_id']
 
 
     def test_add_and_get_recipe(self):
