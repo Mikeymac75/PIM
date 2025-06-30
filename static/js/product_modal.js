@@ -412,34 +412,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Create a hidden form and submit
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/shopping_list/add_direct'; // URL for direct add
+            // Use fetch API instead of form submission
+            const formData = new FormData();
+            formData.append('product_id', productId);
+            formData.append('quantity', quantity);
+            // Add CSRF token if needed, similar to how it might be handled for modalAddToSLButton
 
-            const productIdInput = document.createElement('input');
-            productIdInput.type = 'hidden';
-            productIdInput.name = 'product_id';
-            productIdInput.value = productId;
-            form.appendChild(productIdInput);
-
-            const quantityInput = document.createElement('input');
-            quantityInput.type = 'hidden';
-            quantityInput.name = 'quantity';
-            quantityInput.value = quantity;
-            form.appendChild(quantityInput);
-
-            // Add CSRF token if your app uses Flask-WTF or similar for CSRF protection on POSTs
-            // const csrfTokenInput = document.createElement('input');
-            // csrfTokenInput.type = 'hidden';
-            // csrfTokenInput.name = 'csrf_token';
-            // csrfTokenInput.value = '{{ csrf_token() }}'; // This template tag won't work in JS. Get from a meta tag or data attribute.
-            // For now, assuming no CSRF token needed for this specific AJAX endpoint or it's handled differently.
-
-            document.body.appendChild(form);
-            form.submit();
-            // No need to remove form as page will reload or redirect.
-            // If it were an AJAX submit here, you would handle response and remove form.
+            fetch('/shopping_list/add_direct', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success) {
+                    alert(result.message || `Successfully added ${quantity} of '${productName}' to shopping list!`);
+                } else {
+                    alert(result.message || `Failed to add '${productName}' to shopping list.`);
+                }
+            })
+            .catch(error => {
+                console.error("Error adding item to shopping list:", error);
+                alert(`An error occurred: ${error.message || "Could not connect to server."}`);
+            });
         }
     });
 
