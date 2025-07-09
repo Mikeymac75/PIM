@@ -1,4 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from Food_manager import InventoryManager
 from RecipeManager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
@@ -13,6 +16,48 @@ app = Flask(__name__)
 # Configure secret key: Use an environment variable for production, with a fallback for development.
 # IMPORTANT: For production, set the FLASK_SECRET_KEY environment variable to a strong, random value.
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_fallback_secret_key')
+
+# Flask-Login setup
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login_view' # Name of the login route function
+
+# Flask-Limiter setup
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"], # General site limits
+    storage_uri="memory://", # Use memory for storage, consider redis for production
+    # strategy="fixed-window" # or "moving-window"
+)
+
+# --- User Class and Loader for Flask-Login ---
+class User(UserMixin):
+    def __init__(self, id):
+        self.id = id
+
+    @staticmethod
+    def get(user_id):
+        # In a real app, this would query a database.
+        # For this app, we check against environment variables.
+        # PIM_USERS format: "user1:pass1,user2:pass2"
+        users_str = os.environ.get('PIM_USERS')
+        if not users_str:
+            return None
+
+        credentials = {}
+        for user_pass_pair in users_str.split(','):
+            if ':' in user_pass_pair:
+                username, password = user_pass_pair.split(':', 1)
+                credentials[username] = password
+
+        if user_id in credentials:
+            return User(user_id)
+        return None
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.get(user_id)
 
 # Define allowed extensions for file upload
 ALLOWED_EXTENSIONS = {'xlsx'}
@@ -35,6 +80,80 @@ DATABASE_FILE = os.environ.get('DATABASE_FILE_PATH', 'food_app.db')
 manager = InventoryManager(db_filepath=DATABASE_FILE)
 recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
 
+# --- Login and Logout Routes ---
+@app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per minute", H_METHOD="POST", error_message="Too many login attempts. Please try again later.")
+def login_view():
+    if current_user.is_authenticated:
+        return redirect(url_for('home')) # Redirect if already logged in
+
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        # PIM_USERS environment variable is used for user authentication.
+        # Format: "username:password,username2:password2"
+        # Example: PIM_USERS="admin:strongpassword123,user:anotherpassword"
+        users_str = os.environ.get('PIM_USERS')
+        if not users_str:
+            flash('Login system not configured. No users found. Please set PIM_USERS environment variable.', 'error')
+            return render_template('login.html')
+
+        valid_credentials = {}
+        for user_pass_pair in users_str.split(','):
+            if ':' in user_pass_pair:
+                u, p = user_pass_pair.split(':', 1)
+                valid_credentials[u] = p
+
+        if username in valid_credentials and valid_credentials[username] == password:
+            user = User(username)
+            login_user(user)
+            flash('Logged in successfully!', 'success')
+            next_page = request.args.get('next')
+            return redirect(next_page or url_for('home'))
+        else:
+            flash('Invalid username or password.', 'error')
+            # For failed attempts, the limiter already tracks them by IP.
+            # If we wanted to exempt successful logins from the rate limit count for this IP,
+            # we would need more complex logic, perhaps using a different limiter for POST
+            # and only decrementing a custom counter on failure.
+            # The current setup limits based on POST requests to /login, regardless of success/failure.
+            # To specifically limit *failed* attempts, the decorator might need to be conditional
+            # or the check for failure would trigger a specific limiter.
+            # For now, "5 POSTs to /login per minute" is the effective limit.
+            # If Flask-Limiter has a built-in way to only count if the view function returns an error
+            # or a specific response, that would be cleaner.
+            # A common pattern is to have the limiter apply, and if the view logic determines it's a "countable" event (like a failed login),
+            # it would explicitly call something like `limiter.hit()` or similar.
+            # However, the simple decorator applies to the route entry.
+            # Let's refine the rate limit to only apply on failed attempts by moving the flash message
+            # for "Too many attempts" to be displayed if the limiter raises an exception.
+
+    return render_template('login.html')
+
+# Custom error handler for rate limit exceeded
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    # Flash the error message provided in the limit decorator
+    # The default Flask-Limiter behavior for @limiter.limit might already return a 429 response
+    # with the error_message. If we want to flash it and render our login page, we handle it here.
+    # However, directly flashing from here might be tricky if the response is already sent.
+    # A simpler way is to let Flask-Limiter return its default 429 response with the message.
+    # If we want to show the login page with a flashed message:
+    if request.endpoint == 'login_view': # Only for login route
+        flash(str(e.description), 'error') # e.description should contain our "Too many login attempts..." message
+        return render_template('login.html'), 429 # Return the login page with a 429 status
+    # For other rate-limited routes, they might have their own handlers or a default one.
+    return str(e.description), 429
+
+
+@app.route('/logout')
+@login_required
+def logout_view():
+    logout_user()
+    flash('You have been logged out.', 'success')
+    return redirect(url_for('login_view'))
+
 # --- Helper Functions ---
 def _get_unique_item_names(include_historical=False):
     """
@@ -49,14 +168,17 @@ def _get_unique_item_names(include_historical=False):
 
 # --- Flask Routes ---
 @app.route('/')
+@login_required
 def home():
     return render_template('home.html')
 
 @app.route('/inventory-usage-links/')
+@login_required
 def inventory_usage_links_view():
     return render_template('inventory_usage_links.html', title="Inventory & Usage Links")
 
 @app.route('/inventory/current')
+@login_required
 def current_inventory_view():
     # Retrieve filter and sort parameters from request.args
     search_term = request.args.get('search_term', '').strip()
@@ -162,6 +284,7 @@ def current_inventory_view():
     )
 
 @app.route('/inventory/historical')
+@login_required
 def historical_inventory_view():
     # Retrieve filter and sort parameters
     search_term = request.args.get('search_term', '').strip()
@@ -244,6 +367,7 @@ def historical_inventory_view():
     )
 
 @app.route('/inventory/batches')
+@login_required
 def inventory_batches_view():
     # This is a placeholder. Implementation will be added in subsequent steps.
     # For now, it will render a simple template.
@@ -359,6 +483,7 @@ def inventory_batches_view():
     )
 
 @app.route('/inventory/consume', methods=['GET', 'POST'])
+@login_required
 def consume_item_view():
     item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
     all_recipes = recipe_mngr.get_all_recipes() # Fetch recipes once for the view
@@ -477,6 +602,7 @@ def consume_item_view():
     return render_template('consume_item.html', item_names=item_names, recipes=all_recipes, form_data={}, today=date.today().isoformat())
 
 @app.route('/inventory/upload_excel', methods=['GET', 'POST'])
+@login_required
 def upload_excel_view():
     if request.method == 'POST':
         if 'excel_file' not in request.files:
@@ -724,6 +850,7 @@ def upload_excel_view():
     return render_template('upload_excel.html', upload_warnings=upload_warnings) # Pass warnings even for initial page load if any exist (e.g. from previous failed confirm)
 
 @app.route('/upload_recipes_excel', methods=['GET', 'POST'])
+@login_required
 def upload_recipes_excel_view():
     if request.method == 'POST':
         if 'excel_file' not in request.files:
@@ -904,6 +1031,7 @@ def upload_recipes_excel_view():
     return render_template('upload_recipes_excel.html')
 
 @app.route('/confirm_excel_uploads', methods=['POST'])
+@login_required
 def confirm_excel_uploads_view():
     items_to_process = session.pop('items_pending_confirmation', [])
     # Retrieve and immediately clear upload_warnings from the session, as they are about to be processed or re-added.
@@ -973,10 +1101,12 @@ def confirm_excel_uploads_view():
     return redirect(url_for('current_inventory_view'))
 
 @app.route('/recipes-links/')
+@login_required
 def recipes_links_view():
     return render_template('recipes_links.html', title="Recipe Links")
 
 @app.route('/recipes/add', methods=['GET', 'POST'])
+@login_required
 def add_recipe_view():
     form_data_to_repopulate = {} # For GET or if POST fails and re-renders
     all_db_products = manager.get_all_products(page=None, per_page=None) # For "Output Product" dropdown
@@ -1075,6 +1205,7 @@ def add_recipe_view():
     return render_template('add_recipe.html', form_data=form_data_to_repopulate, products=all_db_products)
 
 @app.route('/recipes/<int:recipe_id>/edit', methods=['GET', 'POST'])
+@login_required
 def edit_recipe_view(recipe_id):
     recipe = recipe_mngr.get_recipe_by_id(recipe_id) # Should now include output_product_id and output_yield
 
@@ -1183,6 +1314,7 @@ def edit_recipe_view(recipe_id):
     return render_template('edit_recipe.html', recipe=recipe, products=all_db_products, form_data={})
 
 @app.route('/recipes')
+@login_required
 def recipes_list_view():
     all_recipes = recipe_mngr.get_all_recipes()
     # Sort recipes by name for consistent display order
@@ -1190,6 +1322,7 @@ def recipes_list_view():
     return render_template('recipes_list.html', recipes=sorted_recipes)
 
 @app.route('/recipes/id/<int:recipe_id>')
+@login_required
 def recipe_detail_view_by_id(recipe_id):
     recipe = recipe_mngr.get_recipe_by_id(recipe_id)
     if not recipe:
@@ -1201,6 +1334,7 @@ def recipe_detail_view_by_id(recipe_id):
     return redirect(url_for('recipe_detail_view', recipe_name=recipe['name']))
 
 @app.route('/recipes/name/<path:recipe_name>') # Using path for flexibility with names
+@login_required
 def recipe_detail_view(recipe_name):
     # This function now serves as the canonical URL for recipe details by name.
     recipe = recipe_mngr.get_recipe_by_name(recipe_name)
@@ -1255,6 +1389,7 @@ def recipe_detail_view(recipe_name):
                            recipe_makeable=recipe_makeable)
 
 @app.route('/recipes/<path:recipe_name>/make', methods=['GET', 'POST'])
+@login_required
 def make_recipe_view(recipe_name):
     recipe = recipe_mngr.get_recipe_by_name(recipe_name)
     if not recipe:
@@ -1429,6 +1564,7 @@ def make_recipe_view(recipe_name):
 
 
 @app.route('/inventory/projections')
+@login_required
 def projections_view():
     # Retrieve filter, sort, and pagination parameters for the product list
     search_term = request.args.get('search_term', '').strip()
@@ -1524,6 +1660,7 @@ def projections_view():
     )
 
 @app.route('/projections/save_overrides', methods=['POST'])
+@login_required
 def save_overrides_view():
     if request.method == 'POST':
         overrides_to_save = []
@@ -1564,6 +1701,7 @@ def save_overrides_view():
 
 # Renamed from /shopping_list and shopping_list_view
 @app.route('/products_needed')
+@login_required
 def products_needed_view():
     store_filter = request.args.get('store', '').strip()
     search_term = request.args.get('search', '').strip()
@@ -1582,6 +1720,7 @@ def products_needed_view():
                            today=date.today())
 
 @app.route('/products_needed/add_to_shopping_list', methods=['POST'])
+@login_required
 def add_products_needed_to_shopping_list_view():
     if request.method == 'POST':
         items_added_count = 0
@@ -1618,6 +1757,7 @@ def add_products_needed_to_shopping_list_view():
 
 # Renamed from log_shopping_list_purchases_view and route changed
 @app.route('/log_purchases', methods=['POST'])
+@login_required
 def log_purchases_view():
     if request.method == 'POST':
         purchase_date_str = request.form.get('purchase_date')
@@ -1738,11 +1878,13 @@ def log_purchases_view():
 
 # --- New Shopping List Routes ---
 @app.route('/new_shopping_list')
+@login_required
 def new_shopping_list_view():
     items = manager.get_user_shopping_list_items()
     return render_template('new_shopping_list.html', items=items, today=date.today())
 
 @app.route('/new_shopping_list/remove/<int:item_id>', methods=['POST'])
+@login_required
 def remove_from_new_shopping_list_view(item_id):
     result = manager.remove_item_from_user_shopping_list(item_id)
     if result.get("success"):
@@ -1752,6 +1894,7 @@ def remove_from_new_shopping_list_view(item_id):
     return redirect(url_for('new_shopping_list_view'))
 
 @app.route('/new_shopping_list/clear', methods=['POST'])
+@login_required
 def clear_new_shopping_list_view():
     result = manager.clear_user_shopping_list()
     if result.get("success"):
@@ -1761,6 +1904,7 @@ def clear_new_shopping_list_view():
     return redirect(url_for('new_shopping_list_view'))
 
 @app.route('/new_shopping_list/update_quantity/<int:item_id>', methods=['POST'])
+@login_required
 def update_new_shopping_list_item_quantity_view(item_id):
     new_quantity_str = request.form.get('quantity_added')
     try:
@@ -1775,6 +1919,7 @@ def update_new_shopping_list_item_quantity_view(item_id):
     return redirect(url_for('new_shopping_list_view'))
 
 @app.route('/new_shopping_list/export_excel', methods=['GET'])
+@login_required
 def export_new_shopping_list_excel_view():
     items = manager.get_user_shopping_list_items()
     if not items:
@@ -1817,6 +1962,7 @@ def export_new_shopping_list_excel_view():
         return redirect(url_for('new_shopping_list_view'))
 
 @app.route('/shopping_list/add_direct', methods=['POST'])
+@login_required
 def add_to_shopping_list_direct_view():
     product_id = request.form.get('product_id')
     quantity_str = request.form.get('quantity')
@@ -1848,6 +1994,7 @@ def add_to_shopping_list_direct_view():
 
 # --- Garden & Harvest Routes ---
 @app.route('/garden', methods=['GET'])
+@login_required
 def garden_list_view():
     # Basic implementation: Get all items, sort by plant_date by default
     sort_by = request.args.get('sort_by', 'plant_date')
@@ -1907,6 +2054,7 @@ def garden_list_view():
                            per_page=per_page)
 
 @app.route('/garden/add', methods=['GET', 'POST'])
+@login_required
 def add_production_item_view():
     all_db_products = manager.get_all_products(page=None, per_page=None) # Get all products for dropdown
 
@@ -1990,6 +2138,7 @@ def add_production_item_view():
     return render_template('garden_edit.html', item={}, products=all_db_products, form_action_label='Add', current_page='garden_add')
 
 @app.route('/garden/<int:item_id>/edit', methods=['GET', 'POST'])
+@login_required
 def edit_production_item_view(item_id):
     production_item = manager.get_production_item(item_id) # This should already return a dict
     if not production_item:
@@ -2084,6 +2233,7 @@ def edit_production_item_view(item_id):
     return render_template('garden_edit.html', item=production_item, products=all_db_products, form_action_label='Edit', current_page='garden_edit')
 
 @app.route('/garden/<int:item_id>/harvest', methods=['POST'])
+@login_required
 def record_harvest_view(item_id):
     actual_harvest_amount_str = request.form.get('actual_harvest_amount')
     harvest_date_str = request.form.get('harvest_date', date.today().isoformat()) # Default to today
@@ -2126,10 +2276,12 @@ def record_harvest_view(item_id):
 
 # --- Product Management Routes ---
 @app.route('/products-links/')
+@login_required
 def products_links_view():
     return render_template('products_links.html', title="Products Links")
 
 @app.route('/products', methods=['GET'])
+@login_required
 def list_products_view():
     # Retrieve filter parameters
     search_term = request.args.get('search_term', '').strip()
@@ -2216,6 +2368,7 @@ def list_products_view():
     )
 
 @app.route('/products/create', methods=['GET', 'POST'])
+@login_required
 def create_product_view():
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
@@ -2308,6 +2461,7 @@ def create_product_view():
     return render_template('create_product.html', form_data={}, categories_data=all_categories_data)
 
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
+@login_required
 def edit_product_view(product_id):
     # product = manager.get_product(product_id) # Fetched in GET, no need to re-fetch before POST processing unless stale data is a concern
     # For POST, we primarily use form data. The product object is mainly for GET or repopulating form on error.
@@ -2426,6 +2580,7 @@ def edit_product_view(product_id):
 
 # --- Inventory Management Routes ---
 @app.route('/inventory/log_purchase', methods=['GET', 'POST'])
+@login_required
 def log_purchase_view():
     if request.method == 'POST':
         product_id_str = request.form.get('product_id')
@@ -2536,6 +2691,7 @@ def log_purchase_view():
                            today=date.today())
 
 @app.route('/inventory/edit', methods=['GET', 'POST'])
+@login_required
 def edit_inventory_view():
     products_for_dropdown = manager.get_all_products()
     selected_product_id = request.args.get('product_id')
@@ -2746,6 +2902,7 @@ def edit_inventory_view():
 
 # --- Category and Subcategory Management Route ---
 @app.route('/manage_categories', methods=['GET', 'POST'])
+@login_required
 def manage_categories_view():
     if request.method == 'POST':
         action_type = request.form.get('action_type')
@@ -2784,6 +2941,7 @@ def manage_categories_view():
     return render_template('manage_categories.html', categories_data=categories_data)
 
 @app.route('/product_modal_details/<int:product_id>', methods=['GET'])
+@login_required # This serves JSON but is part of the UI experience that should be protected.
 def product_modal_details(product_id):
     product_details = manager.get_product_details(product_id)
 
@@ -2877,6 +3035,7 @@ def product_modal_details(product_id):
 
 # --- Product Excel Upload Route ---
 @app.route('/upload_products_excel', methods=['GET', 'POST'])
+@login_required
 def upload_products_excel_view():
     if request.method == 'POST':
         if 'excel_file' not in request.files:
@@ -2928,6 +3087,7 @@ def upload_products_excel_view():
     return render_template('upload_products_excel.html', title="Upload Products from Excel")
 
 @app.route('/upload_historical_excel', methods=['GET', 'POST'])
+@login_required
 def upload_historical_excel_view():
     if request.method == 'POST':
         if 'excel_file' not in request.files:
@@ -2977,6 +3137,7 @@ def upload_historical_excel_view():
     return render_template('upload_historical_excel.html', title="Upload Historical Inventory from Excel")
 
 @app.route('/upload_production_items_excel', methods=['GET', 'POST'])
+@login_required
 def upload_production_items_excel_view():
     if request.method == 'POST':
         if 'excel_file' not in request.files:
@@ -3033,6 +3194,7 @@ def upload_production_items_excel_view():
 
 # --- Data Export Route ---
 @app.route('/export_data', methods=['GET', 'POST'])
+@login_required
 def export_data_view():
     if request.method == 'POST':
         selected_table = request.form.get('selected_table')
@@ -3333,8 +3495,12 @@ def export_data_view():
 from functools import wraps
 
 # --- Helper Decorator for Admin Routes ---
+# This decorator should now also implicitly require login,
+# as admin routes are a subset of protected routes.
+# However, Flask-Login's @login_required should be applied first if stacking.
 def admin_route_required(f):
     @wraps(f)
+    @login_required # Ensure user is logged in before checking admin rights
     def decorated_function(*args, **kwargs):
         if os.environ.get('FLASK_ENABLE_ADMIN_ROUTES', 'false').lower() != 'true':
             # flash("Admin functionality is disabled.", "error") # Option 1: Flash and redirect
@@ -3344,6 +3510,7 @@ def admin_route_required(f):
     return decorated_function
 
 # --- Backup and Restore Routes ---
+# The @admin_route_required decorator now handles @login_required internally.
 @app.route('/admin/backup_restore', methods=['GET'])
 @admin_route_required
 def backup_restore_view():

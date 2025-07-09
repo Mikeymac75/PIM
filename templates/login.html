@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Food Inventory Manager{% endblock %}
+
+{% block page_header %}
+    <h2>Login</h2>
+{% endblock %}
+
+{% block content %}
+<div class="form-container login-form">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                {% if category == 'error' %}
+                    <div class="flash-message flash-error">{{ message }}</div>
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <form method="POST" action="{{ url_for('login_view') }}">
+        {{ form.csrf_token if form and form.csrf_token }} {# Add this if you plan to use Flask-WTF for forms #}
+        <div class="form-group">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" class="form-control" required>
+        </div>
+        <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" class="form-control" required>
+        </div>
+        <div class="form-group">
+            <button type="submit" class="button">Login</button>
+        </div>
+    </form>
+</div>
+
+<style>
+.login-form {
+    max-width: 400px;
+    margin: 20px auto;
+    padding: 20px;
+    background-color: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+}
+.login-form h2 {
+    text-align: center;
+    margin-bottom: 20px;
+}
+.login-form .form-group {
+    margin-bottom: 15px;
+}
+.login-form label {
+    display: block;
+    margin-bottom: 5px;
+}
+.login-form input[type="text"],
+.login-form input[type="password"] {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; /* Ensures padding doesn't affect overall width */
+}
+.login-form .button {
+    width: 100%;
+    padding: 10px;
+}
+.flash-error {
+    color: red;
+    background-color: #ffe0e0;
+    border: 1px solid red;
+    padding: 10px;
+    margin-bottom: 15px;
+    border-radius: 4px;
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+    {# We don't want the full base.html scripts (like product_modal.js) on the login page #}
+    {# If you have specific JS for login, add it here. Otherwise, can be empty or inherit common minimal scripts #}
+{% endblock %}

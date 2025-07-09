@@ -67,6 +67,9 @@
                     </li>
                     <li class="{% if request.endpoint == 'garden_list_view' or request.endpoint == 'add_production_item_view' or request.endpoint == 'edit_production_item_view' %}current{% endif %}"><a href="{{ url_for('garden_list_view') }}"><i class="fas fa-leaf"></i> Garden & Harvest</a></li>
                     <li class="{% if request.endpoint == 'backup_restore_view' %}current{% endif %}"><a href="{{ url_for('backup_restore_view') }}"><i class="fas fa-save"></i> Backup/Restore</a></li>
+                    {% if current_user.is_authenticated %}
+                    <li><a href="{{ url_for('logout_view') }}"><i class="fas fa-sign-out-alt"></i> Logout ({{ current_user.id }})</a></li>
+                    {% endif %}
                 </ul>
             </nav>
         </div>
