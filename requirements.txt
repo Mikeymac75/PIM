@@ -1,3 +1,5 @@
 Flask
 openpyxl
 pytest
+Flask-Login
+Flask-Limiter
