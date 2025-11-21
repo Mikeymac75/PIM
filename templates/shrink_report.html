@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+    <h2>Spoilage & Shrink Report</h2>
+    <p class="lead text-muted">Items that are expired, expiring soon, or at risk of waste.</p>
+
+    {% if report %}
+    <div class="table-responsive">
+        <table class="table table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Product</th>
+                    <th>Quantity</th>
+                    <th>Expiry Date</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in report %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.quantity }}</td>
+                    <td>{{ item.expiry_date }}</td>
+                    <td>
+                        <span class="badge bg-{{ item.severity_class }}">{{ item.status }}</span>
+                    </td>
+                    <td>{{ item.reason }}</td>
+                    <td>
+                        <div class="btn-group" role="group">
+                            <a href="{{ url_for('consume_item_view', item_name=item.name) }}" class="btn btn-sm btn-outline-primary" title="Use this item">
+                                Use
+                            </a>
+                            <!-- Discard Button -->
+                            <form action="{{ url_for('discard_inventory_item', batch_id=item.id) }}" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure you want to discard this item? It will be removed from inventory and NOT count towards consumption stats.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Discard (Spoiled)">
+                                    Discard
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-success">
+        <h4>No Spoilage Concerns!</h4>
+        <p>Your inventory looks healthy. No expired or high-risk items found.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

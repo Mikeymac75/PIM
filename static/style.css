@@ -368,6 +368,18 @@ a:hover {
     color: #c62828;
     font-weight: bold;
 }
+.status-danger {
+    color: #dc3545;
+    font-weight: bold;
+}
+.status-warning {
+    color: #ffc107;
+    font-weight: bold;
+}
+.status-info {
+    color: #17a2b8;
+    font-weight: bold;
+}
 .button[disabled] {
     background-color: #ccc;
     cursor: not-allowed;
