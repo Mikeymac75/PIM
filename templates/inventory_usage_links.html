@@ -14,8 +14,10 @@
         <li><a href="{{ url_for('inventory_batches_view') }}"><i class="fas fa-cubes"></i> Inventory Batches (w/ Cost)</a></li>
         <li><a href="{{ url_for('historical_inventory_view') }}"><i class="fas fa-history"></i> Historical Inventory</a></li>
         <li><a href="{{ url_for('projections_view') }}"><i class="fas fa-chart-line"></i> Demand Projections</a></li>
-        <li><a href="{{ url_for('shopping_list_view') }}"><i class="fas fa-shopping-cart"></i> Shopping List</a></li>
+        <li><a href="{{ url_for('products_needed_view') }}"><i class="fas fa-shopping-cart"></i> Products Needed</a></li>
+        <li><a href="{{ url_for('new_shopping_list_view') }}"><i class="fas fa-list-alt"></i> Your Shopping List</a></li>
         <li><a href="{{ url_for('consume_item_view') }}"><i class="fas fa-utensils"></i> Consume Item</a></li>
+        <li><a href="{{ url_for('shrink_report_view') }}"><i class="fas fa-trash-alt"></i> Spoilage & Shrink Report</a></li>
     </ul>
 </div>
 {% endblock %}
