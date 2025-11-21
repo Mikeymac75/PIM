@@ -17,6 +17,9 @@ app = Flask(__name__)
 # IMPORTANT: For production, set the FLASK_SECRET_KEY environment variable to a strong, random value.
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_fallback_secret_key')
 
+# Disable login for Home Assistant usage
+app.config['LOGIN_DISABLED'] = True
+
 # Flask-Login setup
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -82,7 +85,7 @@ recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
 
 # --- Login and Logout Routes ---
 @app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("5 per minute", H_METHOD="POST", error_message="Too many login attempts. Please try again later.")
+@limiter.limit("5 per minute", methods=["POST"], error_message="Too many login attempts. Please try again later.")
 def login_view():
     if current_user.is_authenticated:
         return redirect(url_for('home')) # Redirect if already logged in

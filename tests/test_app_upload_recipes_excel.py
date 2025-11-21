@@ -25,6 +25,7 @@ def client(test_db_path):
     app.config['TESTING'] = True
     app.config['DATABASE_FILE_PATH'] = str(test_db_path)
     app.secret_key = 'test_secret_key'
+    app.config['LOGIN_DISABLED'] = True
 
     original_manager = main_app_module.manager
     original_recipe_mngr = main_app_module.recipe_mngr
