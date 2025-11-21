@@ -3573,7 +3573,8 @@ def create_backup_view():
         # but for simplicity, creating in the same dir as the app or a designated 'backups' folder.
         # For this example, let's assume we can write to a 'backups' subdir.
         # Ensure the backup directory exists
-        backup_dir = os.path.join(os.path.dirname(app.root_path), 'instance', 'backups') # Place backups in instance/backups
+        # Use app.instance_path which defaults to <root>/instance in Gunicorn or <root>/instance in dev
+        backup_dir = os.path.join(app.instance_path, 'backups')
         os.makedirs(backup_dir, exist_ok=True)
 
         backup_filename = f"food_app_backup_{timestamp}.db"
@@ -3610,7 +3611,7 @@ def restore_from_backup_view():
                 return redirect(url_for('backup_restore_view'))
 
             # Define backup directory
-            backup_dir = os.path.join(os.path.dirname(app.root_path), 'instance', 'backups')
+            backup_dir = os.path.join(app.instance_path, 'backups')
             os.makedirs(backup_dir, exist_ok=True)
 
             # 1. Backup the current database before overwriting (Safety Net)
