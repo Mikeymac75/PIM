@@ -3,3 +3,4 @@ openpyxl
 pytest
 Flask-Login
 Flask-Limiter
+gunicorn
