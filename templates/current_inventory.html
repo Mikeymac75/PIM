@@ -124,12 +124,17 @@
                     <td>{{ item.purchase_location if item.purchase_location else '--' }}</td>
                     {# Removed item.purchase_date and item.expiry_date cells #}
                     <td>
-                        {% if item.is_below_par %}
+                        {% if item.spoilage_status == 'EXPIRED' %}
+                            <span class="status-pill status-danger">EXPIRED</span>
+                        {% elseif item.spoilage_status == 'Projected Waste' %}
+                            <span class="status-pill status-warning">Waste Risk</span>
+                        {% elseif item.spoilage_status == 'Expiring Soon' %}
+                            <span class="status-pill status-info">Soon</span>
+                        {% elseif item.is_below_par %}
                             <span class="status-pill status-below-par">Below Par</span>
                         {% else %}
                             <span class="status-pill status-ok">OK</span>
                         {% endif %}
-                        {# Removed expiring soon logic for now #}
                     </td>
                 </tr>
                 {% endfor %}

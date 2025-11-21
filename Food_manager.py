@@ -3280,6 +3280,186 @@ class InventoryManager:
         print("---------------------------------------\n")
         return expiring_items_list
 
+    def get_spoilage_report(self):
+        """
+        Generates a report of items that are expired, expiring soon, or at risk of becoming waste.
+        Returns a list of dictionaries sorted by severity and date.
+        """
+        report = []
+        today = date.today()
+
+        # Fetch all inventory items first.
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT ii.id, ii.product_id, ii.name, ii.quantity, ii.expiry_date, ii.purchase_date, ii.original_quantity_string
+                    FROM inventory_items ii
+                    ORDER BY ii.expiry_date ASC
+                ''')
+                rows = cursor.fetchall()
+                all_items = [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            print(f"Database error in get_spoilage_report: {e}")
+            return []
+
+        # Calculate Total Stock per Product
+        product_total_stock = {}
+
+        for item in all_items:
+            pid = item['product_id']
+            qty = self._parse_quantity_string(item['quantity'])
+            item['numeric_quantity'] = qty # Store parsed quantity
+            product_total_stock[pid] = product_total_stock.get(pid, 0.0) + qty
+
+        # Calculate/Fetch Daily Rate per Product for involved products
+        product_ids = list(product_total_stock.keys())
+        product_daily_rates = self.get_bulk_consumption_rates(product_ids, lookback_days=30)
+
+        # Process each item
+        for item in all_items:
+            pid = item['product_id']
+            expiry_date_str = item['expiry_date']
+            try:
+                expiry_date = date.fromisoformat(expiry_date_str)
+            except ValueError:
+                continue # Skip invalid dates
+
+            days_until_expiry = (expiry_date - today).days
+
+            total_stock = product_total_stock.get(pid, 0.0)
+            daily_rate = product_daily_rates.get(pid, 0.0)
+
+            status = None
+            reason = None
+            severity_score = 0 # 3=High, 2=Medium, 1=Low
+
+            # Check EXPIRED
+            if days_until_expiry < 0:
+                status = "EXPIRED"
+                reason = f"Expired {abs(days_until_expiry)} days ago"
+                severity_score = 3
+
+            # Check Projected Waste
+            # Logic: Stock > 0 AND (Current Stock / Daily Rate) > Days until expiry
+            elif status is None: # Only check if not already EXPIRED
+                days_of_stock_left = float('inf')
+                if daily_rate > 0:
+                    days_of_stock_left = total_stock / daily_rate
+
+                if total_stock > 0 and daily_rate > 0 and days_of_stock_left > days_until_expiry:
+                     status = "Projected Waste"
+                     reason = f"Stock lasts {days_of_stock_left:.1f} days, expires in {days_until_expiry}"
+                     severity_score = 2
+                elif total_stock > 0 and daily_rate == 0:
+                     status = "Projected Waste"
+                     reason = "No consumption, will expire"
+                     severity_score = 2
+
+            # Check Expiring Soon
+            if status is None:
+                if days_until_expiry <= 7:
+                    status = "Expiring Soon"
+                    reason = f"Expires in {days_until_expiry} days"
+                    severity_score = 1
+
+            if status:
+                report_item = {
+                    "id": item['id'],
+                    "product_id": pid,
+                    "name": item['name'],
+                    "expiry_date": expiry_date_str,
+                    "days_until_expiry": days_until_expiry,
+                    "quantity": item['quantity'],
+                    "numeric_quantity": item['numeric_quantity'],
+                    "total_product_stock": total_stock,
+                    "daily_rate": daily_rate,
+                    "status": status,
+                    "reason": reason,
+                    "severity_score": severity_score,
+                    "severity_class": self._get_severity_class(status)
+                }
+                report.append(report_item)
+
+        # Sort: Severity Descending, then Expiry Date Ascending
+        report.sort(key=lambda x: (-x['severity_score'], x['days_until_expiry']))
+
+        return report
+
+    def _get_severity_class(self, status):
+        if status == "EXPIRED": return "danger" # Red
+        if status == "Projected Waste": return "warning" # Yellow
+        if status == "Expiring Soon": return "info" # Blue
+        return "success"
+
+    def get_bulk_consumption_rates(self, product_ids, lookback_days=30):
+        """
+        Calculates average daily consumption for multiple products in a single query.
+        Returns a dictionary {product_id: daily_rate}.
+        """
+        if not product_ids:
+            return {}
+
+        today = date.today()
+        lookback_start_dt = today - timedelta(days=lookback_days)
+        rates = {}
+
+        # Initialize rates to 0 or override values first (requires separate fetch or join)
+        # For simplicity, we'll fetch overrides and history separately but in bulk.
+
+        # 1. Fetch Overrides
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ','.join(['?'] * len(product_ids))
+
+                # Fetch overrides
+                cursor.execute(f'''
+                    SELECT id, consumption_override_rate
+                    FROM products
+                    WHERE id IN ({placeholders})
+                ''', product_ids)
+
+                overrides = {row['id']: row['consumption_override_rate'] for row in cursor.fetchall()}
+
+                # 2. Fetch Historical Consumption Sums
+                cursor.execute(f'''
+                    SELECT product_id, SUM(quantity_consumed_this_time) as total_consumed
+                    FROM historical_items
+                    WHERE product_id IN ({placeholders})
+                      AND consumed_date >= ?
+                      AND consumed_date <= ?
+                    GROUP BY product_id
+                ''', product_ids + [lookback_start_dt.isoformat(), today.isoformat()])
+
+                history_map = {row['product_id']: row['total_consumed'] for row in cursor.fetchall()}
+
+                # 3. Calculate final rates
+                for pid in product_ids:
+                    # Check override first
+                    override_val = overrides.get(pid)
+                    if override_val is not None:
+                        try:
+                            rates[pid] = float(override_val)
+                            continue
+                        except ValueError:
+                            pass # Fallback to history
+
+                    # Calculate from history
+                    total_consumed = history_map.get(pid, 0.0)
+                    if total_consumed is None: total_consumed = 0.0
+
+                    if lookback_days > 0:
+                        rates[pid] = float(total_consumed) / lookback_days
+                    else:
+                        rates[pid] = 0.0
+
+        except sqlite3.Error as e:
+            print(f"Database error in get_bulk_consumption_rates: {e}")
+            return {}
+
+        return rates
+
     def return_consumed_batch_to_stock(self, product_id, product_name, purchase_date_str, expiry_date_str,
                                        original_quantity_at_creation_str, # This might be the new quantity or original, clarify usage
                                        quantity_to_return_str, include_in_projections):
