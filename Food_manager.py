@@ -3,6 +3,7 @@ import csv
 from datetime import date, timedelta, datetime
 import os # For the demo part
 import logging
+import difflib
 
 # Configure basic logging for the module if no other configuration is set
 # This is a basic setup; a real application would configure this more centrally.
@@ -141,6 +142,16 @@ class InventoryManager:
                         product_id INTEGER NOT NULL,
                         quantity_added REAL NOT NULL,
                         added_timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (product_id) REFERENCES products (id)
+                    )
+                ''')
+
+                # Product Aliases Table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS product_aliases (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        product_id INTEGER NOT NULL,
+                        alias_name TEXT NOT NULL UNIQUE,
                         FOREIGN KEY (product_id) REFERENCES products (id)
                     )
                 ''')
@@ -1447,11 +1458,12 @@ class InventoryManager:
         return past_summary_results
 
     def get_product_by_name(self, name):
-        """Retrieves a product by its name, including category and subcategory names."""
+        """Retrieves a product by its name (or alias), including category and subcategory names."""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Join with categories and subcategories to fetch their names
+
+                # 1. Try exact match in products table
                 cursor.execute("""
                     SELECT
                         p.*,
@@ -1463,10 +1475,77 @@ class InventoryManager:
                     WHERE LOWER(p.name) = LOWER(?)
                 """, (name,))
                 row = cursor.fetchone()
-                return dict(row) if row else None
+                if row:
+                    return dict(row)
+
+                # 2. Try match in product_aliases table
+                cursor.execute("""
+                    SELECT product_id FROM product_aliases WHERE LOWER(alias_name) = LOWER(?)
+                """, (name,))
+                alias_row = cursor.fetchone()
+
+                if alias_row:
+                    # If found in aliases, fetch the full product details using the ID
+                    return self.get_product(alias_row['product_id'])
+
+                return None
         except sqlite3.Error as e:
             print(f"Database error getting product by name '{name}': {e}")
             return None
+
+    def add_alias(self, product_name, alias_name):
+        """Adds an alias for an existing product."""
+        product = self.get_product_by_name(product_name)
+        if not product:
+            return {"success": False, "message": f"Product '{product_name}' not found."}
+
+        product_id = product['id']
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO product_aliases (product_id, alias_name) VALUES (?, ?)", (product_id, alias_name))
+                conn.commit()
+                return {"success": True, "message": f"Alias '{alias_name}' added for product '{product['name']}'."}
+        except sqlite3.IntegrityError:
+            return {"success": False, "message": f"Alias '{alias_name}' already exists."}
+        except sqlite3.Error as e:
+            return {"success": False, "message": f"Database error adding alias: {e}"}
+
+    def get_similar_products(self, name, limit=3, cutoff=0.4):
+        """Finds similar product names or aliases using fuzzy matching."""
+        suggestions = set()
+
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+
+                # Get all product names
+                cursor.execute("SELECT name FROM products")
+                product_names = [row['name'] for row in cursor.fetchall()]
+
+                # Get all aliases
+                cursor.execute("SELECT alias_name FROM product_aliases")
+                aliases = [row['alias_name'] for row in cursor.fetchall()]
+
+                # Find matches in products
+                product_matches = difflib.get_close_matches(name, product_names, n=limit, cutoff=cutoff)
+                suggestions.update(product_matches)
+
+                # Find matches in aliases
+                alias_matches = difflib.get_close_matches(name, aliases, n=limit, cutoff=cutoff)
+                suggestions.update(alias_matches)
+
+                # Also try simple LIKE substring matching for stronger hints
+                cursor.execute("SELECT name FROM products WHERE name LIKE ?", (f"%{name}%",))
+                like_products = [row['name'] for row in cursor.fetchall()]
+                suggestions.update(like_products[:limit])
+
+        except sqlite3.Error as e:
+            print(f"Database error finding similar products: {e}")
+            return []
+
+        return list(suggestions)[:limit]
 
     def get_all_products(self, search_term=None, category=None, purchase_location=None,
                          sort_by='name', sort_order='ASC', page=None, per_page=None):
@@ -2997,7 +3076,17 @@ class InventoryManager:
 
         product_to_consume = self.get_product_by_name(item_name_to_consume)
         if not product_to_consume:
-            return {"success": False, "message": f"Product '{item_name_to_consume}' not found in products table."}
+            # Try to find similar products for suggestions
+            suggestions = self.get_similar_products(item_name_to_consume)
+            msg = f"Item '{item_name_to_consume}' not found."
+            if suggestions:
+                msg += f" Did you mean: {', '.join(suggestions)}?"
+
+            return {
+                "success": False,
+                "message": msg,
+                "suggestions": suggestions
+            }
 
         product_id_to_consume = product_to_consume['id']
         product_name_canonical = product_to_consume['name']

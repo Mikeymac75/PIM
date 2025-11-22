@@ -2028,6 +2028,75 @@ def add_to_shopping_list_direct_view():
         app.logger.error(f"Error in /shopping_list/add_direct: {e}", exc_info=True)
         return jsonify({"success": False, "message": "An unexpected server error occurred."}), 500
 
+@app.route('/shopping_list/add', methods=['POST'])
+@login_required
+def add_shopping_list_item_by_name():
+    """
+    Adds an item to the shopping list by name (or alias).
+    JSON Payload: { "product_name": "...", "quantity": 1 }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid JSON data."}), 400
+
+    product_name = data.get('product_name')
+    quantity = data.get('quantity', 1)
+
+    if not product_name:
+        return jsonify({"success": False, "message": "Product name is required."}), 400
+
+    try:
+        quantity_float = float(quantity)
+    except ValueError:
+        return jsonify({"success": False, "message": "Invalid quantity format."}), 400
+
+    # 1. Try to find the product (Exact or Alias)
+    product = manager.get_product_by_name(product_name)
+
+    if product:
+        # Found! Add to list using ID
+        result = manager.add_item_to_user_shopping_list(product['id'], quantity_float)
+        if result['success']:
+             # Enhance message to confirm what product was actually added (resolved name)
+             result['resolved_product_name'] = product['name']
+        return jsonify(result)
+    else:
+        # Not found. Get suggestions.
+        suggestions = manager.get_similar_products(product_name)
+        msg = f"Product '{product_name}' not found."
+        if suggestions:
+            msg += f" Did you mean: {', '.join(suggestions)}?"
+
+        return jsonify({
+            "success": False,
+            "message": msg,
+            "suggestions": suggestions
+        }), 404
+
+@app.route('/api/alias/add', methods=['POST'])
+@login_required
+def add_product_alias():
+    """
+    Adds an alias for an existing product.
+    JSON Payload: { "product_name": "...", "alias": "..." }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid JSON data."}), 400
+
+    product_name = data.get('product_name')
+    alias = data.get('alias')
+
+    if not product_name or not alias:
+        return jsonify({"success": False, "message": "Both 'product_name' and 'alias' are required."}), 400
+
+    result = manager.add_alias(product_name, alias)
+
+    if result['success']:
+        return jsonify(result)
+    else:
+        return jsonify(result), 400
+
 # --- Garden & Harvest Routes ---
 @app.route('/garden', methods=['GET'])
 @login_required
