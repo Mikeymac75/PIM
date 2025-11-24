@@ -1,6 +1,7 @@
 import sqlite3
 import csv
 from datetime import date, timedelta, datetime
+from contextlib import closing
 import os # For the demo part
 import logging
 import difflib
@@ -12,18 +13,30 @@ logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO").upper())
 class InventoryManager:
     def __init__(self, db_filepath="inventory.db"):
         self.db_filepath = db_filepath
-        self.conn = None  # For persistent in-memory connection
+        self._persistent_conn = None  # For persistent in-memory connection
         if self.db_filepath == ":memory:":
-            self.conn = sqlite3.connect(":memory:")
-            self.conn.row_factory = sqlite3.Row
+            self._persistent_conn = sqlite3.connect(":memory:")
+            self._persistent_conn.row_factory = sqlite3.Row
         self._initialize_db()
         # Garden produce is not part of this class for now
         # self.my_garden_produce = []
 
     def _get_db_connection(self):
         """Establishes and returns a database connection."""
-        if self.conn and self.db_filepath == ":memory:":
-            return self.conn
+        if self._persistent_conn and self.db_filepath == ":memory:":
+            class _PersistentDBConnection:
+                """Wrapper for persistent in-memory DB connection that ignores close()."""
+                def __init__(self, connection):
+                    self._connection = connection
+                def __getattr__(self, name):
+                    return getattr(self._connection, name)
+                def close(self):
+                    pass # Do nothing
+                def __enter__(self):
+                    return self
+                def __exit__(self, exc_type, exc_val, exc_tb):
+                    pass
+            return _PersistentDBConnection(self._persistent_conn)
         # For file-based databases, create a new connection each time
         conn = sqlite3.connect(self.db_filepath)
         conn.row_factory = sqlite3.Row # Access columns by name
@@ -31,14 +44,14 @@ class InventoryManager:
 
     def close_connection(self):
         """Closes the persistent connection if it exists (mainly for in-memory DBs)."""
-        if self.conn and self.db_filepath == ":memory:":
-            self.conn.close()
-            self.conn = None
+        if self._persistent_conn and self.db_filepath == ":memory:":
+            self._persistent_conn.close()
+            self._persistent_conn = None
 
     def _initialize_db(self):
         """Creates database tables if they don't already exist."""
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
 
                 # Products Table
@@ -168,7 +181,7 @@ class InventoryManager:
         """
         print("Starting migration of text categories to IDs...")
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
 
                 # --- a. Simulate Pre-existing Schema and Data ---
@@ -310,7 +323,7 @@ class InventoryManager:
         if not name or not isinstance(name, str) or not name.strip():
             return {"success": False, "message": "Category name must be a non-empty string."}
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("INSERT INTO categories (name) VALUES (?)", (name.strip(),))
                 conn.commit()
@@ -329,7 +342,7 @@ class InventoryManager:
              return {"success": False, "message": "Category ID must be an integer."}
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 # Check if category_id exists
                 cursor.execute("SELECT id FROM categories WHERE id = ?", (category_id,))
@@ -352,7 +365,7 @@ class InventoryManager:
         """
         categories_list = []
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT id, name FROM categories ORDER BY name ASC")
                 categories_rows = cursor.fetchall()
@@ -384,7 +397,7 @@ class InventoryManager:
         items = []
         query = "SELECT id, name FROM categories ORDER BY name ASC"
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
                 rows = cursor.fetchall()
@@ -412,7 +425,7 @@ class InventoryManager:
             ORDER BY category_name ASC, s.name ASC
         """
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
                 rows = cursor.fetchall()
@@ -666,7 +679,7 @@ class InventoryManager:
 
             # --- Database Insertion ---
             try:
-                with self._get_db_connection() as conn:
+                with closing(self._get_db_connection()) as conn:
                     cursor = conn.cursor()
                     cursor.execute('''
                         INSERT INTO historical_items
@@ -827,7 +840,7 @@ class InventoryManager:
         if not name or not isinstance(name, str) or not name.strip():
             return None
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT id, name FROM categories WHERE LOWER(name) = LOWER(?)", (name.strip(),))
                 row = cursor.fetchone()
@@ -841,7 +854,7 @@ class InventoryManager:
         if not subcategory_name or not isinstance(subcategory_name, str) or not subcategory_name.strip() or not isinstance(category_id, int):
             return None
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id, name, category_id
@@ -859,7 +872,7 @@ class InventoryManager:
         if not isinstance(category_id, int):
             return None
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM categories WHERE id = ?", (category_id,))
                 row = cursor.fetchone()
@@ -884,7 +897,7 @@ class InventoryManager:
             return {"success": False, "message": "Invalid plant_date format. Use YYYY-MM-DD."}
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO production_items
@@ -902,7 +915,7 @@ class InventoryManager:
     def get_production_item(self, item_id):
         """Retrieves a production item by its ID."""
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM production_items WHERE id = ?", (item_id,))
                 row = cursor.fetchone()
@@ -982,7 +995,7 @@ class InventoryManager:
         # No 'else' or 'elif' here: if conditions are not met, pagination is skipped.
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -1048,7 +1061,7 @@ class InventoryManager:
         query = f"UPDATE production_items SET {', '.join(fields)} WHERE id = ?"
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, tuple(params))
                 conn.commit()
@@ -1107,7 +1120,7 @@ class InventoryManager:
             ORDER BY pi.plant_date ASC, pi.name ASC
         """
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
                 rows = cursor.fetchall()
@@ -1130,7 +1143,7 @@ class InventoryManager:
             return {"success": False, "message": "Subcategory ID must be an integer if provided."}
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO products
@@ -1150,7 +1163,7 @@ class InventoryManager:
     def get_product(self, product_id):
         """Retrieves a product by its ID, including category and subcategory names."""
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT
@@ -1187,7 +1200,7 @@ class InventoryManager:
         # Find nearest_expiry_date
         nearest_expiry_date_str = "N/A"
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT expiry_date
@@ -1216,7 +1229,7 @@ class InventoryManager:
         today = date.today()
         start_date = today - timedelta(days=days)
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT
@@ -1265,7 +1278,7 @@ class InventoryManager:
         start_month_iso = target_month_date.isoformat()
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT
@@ -1300,7 +1313,7 @@ class InventoryManager:
         events = []
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
 
                 # Fetch purchase events
@@ -1458,12 +1471,22 @@ class InventoryManager:
         return past_summary_results
 
     def get_product_by_name(self, name):
-        """Retrieves a product by its name (or alias), including category and subcategory names."""
+        """
+        Retrieves a product by its name (or alias).
+        Lookup Order:
+        1. Exact match in 'products' table (name = search_name).
+        2. Exact match in 'product_aliases' table (alias_name = search_name) -> linked product.
+        """
+        if not name:
+            return None
+
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
 
-                # 1. Try exact match in products table
+                # Step 1: Search products table for name = search_name
+                # Using LOWER() for case-insensitive matching as is common practice,
+                # but can be strict if DB is case-sensitive. Assuming case-insensitive desire.
                 cursor.execute("""
                     SELECT
                         p.*,
@@ -1478,7 +1501,7 @@ class InventoryManager:
                 if row:
                     return dict(row)
 
-                # 2. Try match in product_aliases table
+                # Step 2: Search product_aliases table for alias_name = search_name
                 cursor.execute("""
                     SELECT product_id FROM product_aliases WHERE LOWER(alias_name) = LOWER(?)
                 """, (name,))
@@ -1486,6 +1509,12 @@ class InventoryManager:
 
                 if alias_row:
                     # If found in aliases, fetch the full product details using the ID
+                    # We can call get_product directly since we have the ID
+                    # But since we are already inside a connection context (or have one available),
+                    # and get_product opens its own, we should be careful about nested connections if not using a pool/shared one.
+                    # However, the current design opens a new connection per call.
+                    # It is safer to just query it here or call get_product (which opens another connection, fine for SQLite file).
+                    # To keep it clean and reuse the logic of fetching full details:
                     return self.get_product(alias_row['product_id'])
 
                 return None
@@ -1493,16 +1522,18 @@ class InventoryManager:
             print(f"Database error getting product by name '{name}': {e}")
             return None
 
-    def add_alias(self, product_name, alias_name):
+    def add_alias(self, product_id, alias_name):
         """Adds an alias for an existing product."""
-        product = self.get_product_by_name(product_name)
-        if not product:
-            return {"success": False, "message": f"Product '{product_name}' not found."}
+        if not product_id or not alias_name:
+             return {"success": False, "message": "Product ID and alias name are required."}
 
-        product_id = product['id']
+        # Verify product exists
+        product = self.get_product(product_id)
+        if not product:
+            return {"success": False, "message": f"Product with ID {product_id} not found."}
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("INSERT INTO product_aliases (product_id, alias_name) VALUES (?, ?)", (product_id, alias_name))
                 conn.commit()
@@ -1517,7 +1548,7 @@ class InventoryManager:
         suggestions = set()
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
 
                 # Get all product names
@@ -1620,7 +1651,7 @@ class InventoryManager:
         # No 'else' or 'elif' here: if conditions are not met, pagination is skipped.
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -1654,7 +1685,7 @@ class InventoryManager:
             ORDER BY p.name ASC
         """
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
                 rows = cursor.fetchall()
@@ -1706,7 +1737,7 @@ class InventoryManager:
         query += " ORDER BY ii.purchase_date ASC, ii.id ASC"
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
@@ -1743,7 +1774,7 @@ class InventoryManager:
             query += " WHERE " + " AND ".join(where_clauses)
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, tuple(params))
                 result = cursor.fetchone()
@@ -1757,7 +1788,7 @@ class InventoryManager:
         # This method now fetches from the dedicated 'categories' table.
         category_names = []
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM categories ORDER BY name ASC")
                 rows = cursor.fetchall()
@@ -1771,7 +1802,7 @@ class InventoryManager:
         """Retrieves all unique purchase location names from the products table."""
         locations = []
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT DISTINCT purchase_location FROM products WHERE purchase_location IS NOT NULL ORDER BY purchase_location ASC")
                 rows = cursor.fetchall()
@@ -1949,7 +1980,7 @@ class InventoryManager:
             return {"success": False, "message": f"Invalid date or expiry day format for product {product['name']}: {e}"}
 
         try:
-            with self._get_db_connection() as conn:
+            with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO inventory_items 

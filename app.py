@@ -2001,29 +2001,59 @@ def export_new_shopping_list_excel_view():
 @login_required
 def add_to_shopping_list_direct_view():
     product_id = request.form.get('product_id')
+    product_name = request.form.get('product_name')
     quantity_str = request.form.get('quantity')
 
-    if not product_id or not quantity_str:
-        return jsonify({"success": False, "message": "Product ID and quantity are required."}), 400
+    if not quantity_str:
+        return jsonify({"success": False, "message": "Quantity is required."}), 400
+
+    if not product_id and not product_name:
+        return jsonify({"success": False, "message": "Product ID or Product Name is required."}), 400
 
     try:
-        product_id_int = int(product_id)
         quantity_float = float(quantity_str)
-
         if quantity_float <= 0:
             return jsonify({"success": False, "message": "Quantity must be positive."}), 400
 
+        product_id_int = None
+
+        # Case 1: product_id is provided
+        if product_id:
+            try:
+                product_id_int = int(product_id)
+            except ValueError:
+                return jsonify({"success": False, "message": "Invalid product ID format."}), 400
+
+        # Case 2: product_id missing, try product_name
+        elif product_name:
+            product = manager.get_product_by_name(product_name)
+            if product:
+                product_id_int = product['id']
+            else:
+                # Not found, try suggestions
+                suggestions = manager.get_similar_products(product_name)
+                msg = f"Item '{product_name}' not found."
+                if suggestions:
+                    msg += f" Did you mean: {', '.join(suggestions)}?"
+
+                return jsonify({
+                    "success": False,
+                    "message": msg,
+                    "suggestions": suggestions
+                }), 404
+
+        # Proceed with addition
         result = manager.add_item_to_user_shopping_list(product_id_int, quantity_float)
 
         if result.get("success"):
             product = manager.get_product(product_id_int)
-            product_name = product.get('name', f"ID {product_id_int}") if product else f"ID {product_id_int}"
-            return jsonify({"success": True, "message": f"Added {quantity_float} of '{product_name}' to your shopping list."})
+            name_display = product.get('name', f"ID {product_id_int}") if product else f"ID {product_id_int}"
+            return jsonify({"success": True, "message": f"Added {quantity_float} of '{name_display}' to your shopping list."})
         else:
             return jsonify({"success": False, "message": result.get("message", "Failed to add item to shopping list.")}), 500
 
     except ValueError:
-        return jsonify({"success": False, "message": "Invalid product ID or quantity format."}), 400
+        return jsonify({"success": False, "message": "Invalid quantity format."}), 400
     except Exception as e:
         app.logger.error(f"Error in /shopping_list/add_direct: {e}", exc_info=True)
         return jsonify({"success": False, "message": "An unexpected server error occurred."}), 500
