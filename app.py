@@ -630,7 +630,7 @@ def consume_item_view():
                 try:
                     items_to_consume_resolved = resolve_consumption_items(items_to_consume)
                 except Exception as e:
-                    return jsonify({"success": False, "message": f"Error resolving items: {str(e)}"}), 400
+                    return jsonify({"success": False, "message": f"Error resolving items: {str(e)}"}), 200
 
                 results = manager.consume_multiple_items(items_to_consume_resolved, consumption_date_str=consumption_date_str)
 
@@ -642,11 +642,11 @@ def consume_item_view():
                 if failure_count == 0 and success_count > 0:
                     return jsonify({"success": True, "message": f"Successfully consumed {success_count} item(s).", "details": results})
                 elif success_count > 0 and failure_count > 0:
-                    return jsonify({"success": False, "message": f"Consumed {success_count} item(s), but failed for {failure_count} item(s).", "details": results}), 207 # Multi-Status
+                    return jsonify({"success": False, "message": f"Consumed {success_count} item(s), but failed for {failure_count} item(s).", "details": results}), 200
                 elif failure_count > 0 and success_count == 0:
-                     return jsonify({"success": False, "message": f"Failed to consume {failure_count} item(s).", "details": results}), 400
+                     return jsonify({"success": False, "message": f"Failed to consume {failure_count} item(s).", "details": results}), 200
                 else: # No items processed or other edge case
-                    return jsonify({"success": False, "message": "No items were processed.", "details": results}), 400
+                    return jsonify({"success": False, "message": "No items were processed.", "details": results}), 200
 
             else: # Traditional form submission for single item (fallback or if JS is disabled)
                 item_name = request.form.get('item_name')
@@ -2214,25 +2214,25 @@ def api_log_purchase():
 
     # Validation
     if not product_name:
-        return jsonify({"success": False, "message": "product_name is required."}), 400
+        return jsonify({"success": False, "message": "product_name is required."}), 200
     if quantity is None:
-        return jsonify({"success": False, "message": "quantity is required."}), 400
+        return jsonify({"success": False, "message": "quantity is required."}), 200
     if cost is None:
-        return jsonify({"success": False, "message": "cost is required."}), 400
+        return jsonify({"success": False, "message": "cost is required."}), 200
 
     try:
         quantity_float = float(quantity)
         if quantity_float <= 0:
-            return jsonify({"success": False, "message": "quantity must be positive."}), 400
+            return jsonify({"success": False, "message": "quantity must be positive."}), 200
     except (ValueError, TypeError):
-        return jsonify({"success": False, "message": "quantity must be a number."}), 400
+        return jsonify({"success": False, "message": "quantity must be a number."}), 200
 
     try:
         cost_float = float(cost)
         if cost_float < 0:
-            return jsonify({"success": False, "message": "cost cannot be negative."}), 400
+            return jsonify({"success": False, "message": "cost cannot be negative."}), 200
     except (ValueError, TypeError):
-        return jsonify({"success": False, "message": "cost must be a number."}), 400
+        return jsonify({"success": False, "message": "cost must be a number."}), 200
 
     if not purchase_date:
         purchase_date = date.today().isoformat()
@@ -2240,12 +2240,12 @@ def api_log_purchase():
         try:
             date.fromisoformat(purchase_date)
         except ValueError:
-            return jsonify({"success": False, "message": "Invalid purchase_date format. Use YYYY-MM-DD."}), 400
+            return jsonify({"success": False, "message": "Invalid purchase_date format. Use YYYY-MM-DD."}), 200
 
     # Resolve Product
     product = manager.get_product_by_name(product_name)
     if not product:
-        return jsonify({"success": False, "message": f"Product '{product_name}' not found."}), 404
+        return jsonify({"success": False, "message": f"Product '{product_name}' not found."}), 200
 
     product_id = product['id']
 
@@ -2267,7 +2267,7 @@ def api_log_purchase():
             "new_total": new_total
         })
     else:
-        return jsonify({"success": False, "message": result.get("message", "Error logging purchase.")}), 500
+        return jsonify({"success": False, "message": result.get("message", "Error logging purchase.")}), 200
 
 # --- Garden & Harvest Routes ---
 @app.route('/garden', methods=['GET'])
