@@ -169,6 +169,61 @@ def _get_unique_item_names(include_historical=False):
     unique_names = set(product['name'] for product in all_products if 'name' in product)
     return sorted(list(unique_names))
 
+def resolve_consumption_items(items, depth=0):
+    """
+    Recursively resolves a list of items to consume into a list of base products.
+    Logic:
+    1. Check if item is a Product. If yes, keep as is.
+    2. If not Product, check if it's a Recipe.
+    3. If Recipe, get ingredients, multiply quantities, and recurse.
+    4. If neither, keep as is (will likely fail validation later).
+    """
+    if depth > 10: # Safety break for infinite recursion
+        app.logger.error("Max recursion depth exceeded in resolve_consumption_items")
+        raise Exception("Max recursion depth exceeded resolving recipe items.")
+
+    resolved_items = []
+    for item in items:
+        name = item.get('item_name')
+        try:
+            qty = float(item.get('quantity', 0))
+        except (ValueError, TypeError):
+            # Keep invalid quantity to be caught by validator later
+            resolved_items.append(item)
+            continue
+
+        # 1. Check Product First
+        product = manager.get_product_by_name(name)
+        if product:
+            resolved_items.append(item)
+            continue
+
+        # 2. Check Recipe
+        recipe = recipe_mngr.get_recipe_by_name(name)
+        if recipe:
+            # Calculate ingredients
+            ingredients_to_process = []
+            for ing in recipe.get('ingredients', []):
+                # ing has 'item_name', 'quantity_required'
+                try:
+                    ing_qty_required = float(ing.get('quantity_required', 0))
+                    final_ing_qty = ing_qty_required * qty
+                    ingredients_to_process.append({'item_name': ing['item_name'], 'quantity': final_ing_qty})
+                except (ValueError, TypeError):
+                    # If ingredient data is bad, we can't process it correctly.
+                    # Adding it raw might show a better error later or just fail.
+                    ingredients_to_process.append({'item_name': ing.get('item_name', 'Unknown'), 'quantity': 0})
+
+            # Recurse
+            resolved_sub_items = resolve_consumption_items(ingredients_to_process, depth + 1)
+            resolved_items.extend(resolved_sub_items)
+            continue
+
+        # 3. Neither -> Keep it (will fail in consume_multiple_items with "not found")
+        resolved_items.append(item)
+
+    return resolved_items
+
 # --- Flask Routes ---
 @app.route('/')
 @login_required
@@ -571,7 +626,13 @@ def consume_item_view():
                     except ValueError:
                         return jsonify({"success": False, "message": f"Invalid consumption_date format: {consumption_date_str}. Use YYYY-MM-DD."}), 400
 
-                results = manager.consume_multiple_items(items_to_consume, consumption_date_str=consumption_date_str)
+                # Resolve recipes recursively
+                try:
+                    items_to_consume_resolved = resolve_consumption_items(items_to_consume)
+                except Exception as e:
+                    return jsonify({"success": False, "message": f"Error resolving items: {str(e)}"}), 400
+
+                results = manager.consume_multiple_items(items_to_consume_resolved, consumption_date_str=consumption_date_str)
 
                 # Process results for JSON response
                 # Could also summarize:
@@ -2126,6 +2187,87 @@ def add_product_alias():
         return jsonify(result)
     else:
         return jsonify(result), 400
+
+@app.route('/api/log_purchase', methods=['POST'])
+@login_required
+def api_log_purchase():
+    """
+    API Endpoint to log a purchase via JSON.
+    Expected Payload:
+    {
+        "product_name": "...",
+        "quantity": 1.0,
+        "cost": 2.99,
+        "vendor": "Store Name" (optional),
+        "purchase_date": "YYYY-MM-DD" (optional, defaults to today)
+    }
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "message": "Invalid JSON payload."}), 400
+
+    product_name = data.get('product_name')
+    quantity = data.get('quantity')
+    cost = data.get('cost')
+    vendor = data.get('vendor')
+    purchase_date = data.get('purchase_date')
+
+    # Validation
+    if not product_name:
+        return jsonify({"success": False, "message": "product_name is required."}), 400
+    if quantity is None:
+        return jsonify({"success": False, "message": "quantity is required."}), 400
+    if cost is None:
+        return jsonify({"success": False, "message": "cost is required."}), 400
+
+    try:
+        quantity_float = float(quantity)
+        if quantity_float <= 0:
+            return jsonify({"success": False, "message": "quantity must be positive."}), 400
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "quantity must be a number."}), 400
+
+    try:
+        cost_float = float(cost)
+        if cost_float < 0:
+            return jsonify({"success": False, "message": "cost cannot be negative."}), 400
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "cost must be a number."}), 400
+
+    if not purchase_date:
+        purchase_date = date.today().isoformat()
+    else:
+        try:
+            date.fromisoformat(purchase_date)
+        except ValueError:
+            return jsonify({"success": False, "message": "Invalid purchase_date format. Use YYYY-MM-DD."}), 400
+
+    # Resolve Product
+    product = manager.get_product_by_name(product_name)
+    if not product:
+        return jsonify({"success": False, "message": f"Product '{product_name}' not found."}), 404
+
+    product_id = product['id']
+
+    # Log Purchase
+    result = manager.log_purchase(
+        product_id=product_id,
+        purchase_date_str=purchase_date,
+        quantity_purchased_float=quantity_float,
+        cost_per_unit_float=cost_float,
+        vendor_str=vendor
+    )
+
+    if result.get("success"):
+        # Fetch new total inventory
+        new_total = manager.get_total_item_quantity(product_id)
+        return jsonify({
+            "success": True,
+            "message": result.get("message", "Purchase logged successfully."),
+            "new_total": new_total
+        })
+    else:
+        return jsonify({"success": False, "message": result.get("message", "Error logging purchase.")}), 500
 
 # --- Garden & Harvest Routes ---
 @app.route('/garden', methods=['GET'])
