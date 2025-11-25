@@ -26,13 +26,13 @@ login_manager.init_app(app)
 login_manager.login_view = 'login_view' # Name of the login route function
 
 # Flask-Limiter setup
-limiter = Limiter(
-    get_remote_address,
-    app=app,
-    default_limits=["200 per day", "50 per hour"], # General site limits
-    storage_uri="memory://", # Use memory for storage, consider redis for production
-    # strategy="fixed-window" # or "moving-window"
-)
+#limiter = Limiter(
+#    get_remote_address,
+#    app=app,
+#    default_limits=["200 per day", "50 per hour"], # General site limits
+#    storage_uri="memory://", # Use memory for storage, consider redis for production
+#    # strategy="fixed-window" # or "moving-window"
+#)
 
 # --- User Class and Loader for Flask-Login ---
 class User(UserMixin):
@@ -85,7 +85,7 @@ recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
 
 # --- Login and Logout Routes ---
 @app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("5 per minute", methods=["POST"], error_message="Too many login attempts. Please try again later.")
+#@limiter.limit("5 per minute", methods=["POST"], error_message="Too many login attempts. Please try again later.")
 def login_view():
     if current_user.is_authenticated:
         return redirect(url_for('home')) # Redirect if already logged in

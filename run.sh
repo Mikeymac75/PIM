@@ -13,7 +13,10 @@ PIM_USERS_STRING=$(echo "$USERS_JSON" | jq -r 'join(",")')
 export PIM_USERS="$PIM_USERS_STRING"
 export FLASK_SECRET_KEY="$SECRET"
 export DATABASE_FILE_PATH="/data/food_app.db"
+# Force Python to not buffer stdout/stderr
+export PYTHONUNBUFFERED=1
 
 # 3. Start the App using Gunicorn for stability
 # Binding to 0.0.0.0:8080 as required by config.yaml
-gunicorn --bind 0.0.0.0:8080 app:app
+# Added logfile flags to send logs to stdout/stderr
+gunicorn --bind 0.0.0.0:8080 --access-logfile - --error-logfile - app:app
