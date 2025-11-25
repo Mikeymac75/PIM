@@ -617,14 +617,14 @@ def consume_item_view():
                 consumption_date_str = data.get('consumption_date', date.today().isoformat()) # Optional date
 
                 if not items_to_consume or not isinstance(items_to_consume, list):
-                    return jsonify({"success": False, "message": "Invalid data: 'items' array is required."}), 400
+                    return jsonify({"success": False, "message": "Invalid data: 'items' array is required."}), 200
 
                 # Validate consumption_date_str format before passing to manager
                 if consumption_date_str:
                     try:
                         date.fromisoformat(consumption_date_str)
                     except ValueError:
-                        return jsonify({"success": False, "message": f"Invalid consumption_date format: {consumption_date_str}. Use YYYY-MM-DD."}), 400
+                        return jsonify({"success": False, "message": f"Invalid consumption_date format: {consumption_date_str}. Use YYYY-MM-DD."}), 200
 
                 # Resolve recipes recursively
                 try:
@@ -635,18 +635,34 @@ def consume_item_view():
                 results = manager.consume_multiple_items(items_to_consume_resolved, consumption_date_str=consumption_date_str)
 
                 # Process results for JSON response
-                # Could also summarize:
                 success_count = sum(1 for r in results if r.get("success"))
                 failure_count = len(results) - success_count
 
+                # If only one item was processed, create a more specific message for voice feedback
+                if len(results) == 1:
+                    result = results[0]
+                    if result.get("success"):
+                        # Use the original item name from the request for a more natural response
+                        original_item_name = items_to_consume[0].get('item_name', 'item')
+                        original_quantity = items_to_consume[0].get('quantity', 1)
+                        # Use the resolved product name from the result for accuracy
+                        final_item_name = result.get('product_name', original_item_name)
+                        return jsonify({"success": True, "message": f"Successfully consumed {original_quantity} of {final_item_name}."})
+                    else:
+                        # Return the specific error message from the manager
+                        return jsonify({"success": False, "message": result.get("message", "Failed to consume item.")}), 200
+
+                # Fallback for multiple items (if ever used by another client)
                 if failure_count == 0 and success_count > 0:
-                    return jsonify({"success": True, "message": f"Successfully consumed {success_count} item(s).", "details": results})
+                    return jsonify({"success": True, "message": f"Successfully consumed {success_count} items."})
                 elif success_count > 0 and failure_count > 0:
-                    return jsonify({"success": False, "message": f"Consumed {success_count} item(s), but failed for {failure_count} item(s).", "details": results}), 200
+                    first_error = next((r.get('message') for r in results if not r.get('success')), "Multiple errors occurred.")
+                    return jsonify({"success": False, "message": f"Partially consumed items. First error: {first_error}", "details": results}), 200
                 elif failure_count > 0 and success_count == 0:
-                     return jsonify({"success": False, "message": f"Failed to consume {failure_count} item(s).", "details": results}), 200
+                     first_error = next((r.get('message') for r in results if not r.get('success')), "Failed to consume items.")
+                     return jsonify({"success": False, "message": first_error, "details": results}), 200
                 else: # No items processed or other edge case
-                    return jsonify({"success": False, "message": "No items were processed.", "details": results}), 200
+                    return jsonify({"success": False, "message": "No items were processed."}), 200
 
             else: # Traditional form submission for single item (fallback or if JS is disabled)
                 item_name = request.form.get('item_name')
@@ -2128,18 +2144,20 @@ def add_shopping_list_item_by_name():
     """
     data = request.get_json()
     if not data:
-        return jsonify({"success": False, "message": "Invalid JSON data."}), 400
+        return jsonify({"success": False, "message": "Invalid JSON data."}), 200
 
     product_name = data.get('product_name')
     quantity = data.get('quantity', 1)
 
     if not product_name:
-        return jsonify({"success": False, "message": "Product name is required."}), 400
+        return jsonify({"success": False, "message": "Product name is required."}), 200
 
     try:
         quantity_float = float(quantity)
-    except ValueError:
-        return jsonify({"success": False, "message": "Invalid quantity format."}), 400
+        if quantity_float <= 0:
+            return jsonify({"success": False, "message": "Quantity must be a positive number."}), 200
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "message": "Invalid quantity format."}), 200
 
     # 1. Try to find the product (Exact or Alias)
     product = manager.get_product_by_name(product_name)
@@ -2214,25 +2232,28 @@ def api_log_purchase():
 
     # Validation
     if not product_name:
-        return jsonify({"success": False, "message": "product_name is required."}), 200
+        return jsonify({"success": False, "message": "Product name is required."}), 200
     if quantity is None:
-        return jsonify({"success": False, "message": "quantity is required."}), 200
-    if cost is None:
-        return jsonify({"success": False, "message": "cost is required."}), 200
+        return jsonify({"success": False, "message": "Quantity is required."}), 200
+
+    # Stricter validation for cost: reject if None (missing) or an empty string ""
+    if cost is None or str(cost).strip() == "":
+        return jsonify({"success": False, "message": "Cost is required."}), 200
 
     try:
         quantity_float = float(quantity)
         if quantity_float <= 0:
-            return jsonify({"success": False, "message": "quantity must be positive."}), 200
+            return jsonify({"success": False, "message": "Quantity must be positive."}), 200
     except (ValueError, TypeError):
-        return jsonify({"success": False, "message": "quantity must be a number."}), 200
+        return jsonify({"success": False, "message": "Quantity must be a valid number."}), 200
 
     try:
         cost_float = float(cost)
         if cost_float < 0:
-            return jsonify({"success": False, "message": "cost cannot be negative."}), 200
+            return jsonify({"success": False, "message": "Cost cannot be negative."}), 200
     except (ValueError, TypeError):
-        return jsonify({"success": False, "message": "cost must be a number."}), 200
+        # This will catch errors from float('') which is what happens if cost is an empty string
+        return jsonify({"success": False, "message": "Cost must be a valid number."}), 200
 
     if not purchase_date:
         purchase_date = date.today().isoformat()
@@ -2245,7 +2266,12 @@ def api_log_purchase():
     # Resolve Product
     product = manager.get_product_by_name(product_name)
     if not product:
-        return jsonify({"success": False, "message": f"Product '{product_name}' not found."}), 200
+        # Provide suggestions if the product is not found
+        suggestions = manager.get_similar_products(product_name)
+        msg = f"Product '{product_name}' not found."
+        if suggestions:
+            msg += f" Did you mean: {', '.join(suggestions)}?"
+        return jsonify({"success": False, "message": msg}), 200
 
     product_id = product['id']
 
@@ -2263,7 +2289,7 @@ def api_log_purchase():
         new_total = manager.get_total_item_quantity(product_id)
         return jsonify({
             "success": True,
-            "message": result.get("message", "Purchase logged successfully."),
+            "message": f"Purchase logged. You now have {new_total}.",
             "new_total": new_total
         })
     else:
