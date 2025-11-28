@@ -2,19 +2,39 @@ import sqlite3
 from datetime import date # Keep for potential future use
 
 class RecipeManager:
-    def __init__(self, db_filepath="inventory.db"): # Assuming it uses the same DB
+    def __init__(self, db_filepath="inventory.db", db_connection=None): # Assuming it uses the same DB
         self.db_filepath = db_filepath
+        self.db_connection = db_connection
         self.conn = None  # For persistent in-memory connection
-        if self.db_filepath == ":memory:":
+
+        if self.db_connection is None and self.db_filepath == ":memory:":
             self.conn = sqlite3.connect(":memory:")
             self.conn.row_factory = sqlite3.Row
+
         # Make InventoryManager accessible for schema and product interactions
         from Food_manager import InventoryManager # Import locally to avoid circular dependency at module level if any
-        self.manager = InventoryManager(db_filepath=self.db_filepath)
+        # Pass the shared connection to the internal InventoryManager as well
+        self.manager = InventoryManager(db_filepath=self.db_filepath, db_connection=self.db_connection)
         self._initialize_db()
 
     def _get_db_connection(self):
         """Establishes and returns a database connection."""
+        if self.db_connection:
+            # Reuse shared connection. Wrap it to protect against accidental closure via .close()
+            # while preserving transaction context manager behavior (__enter__/__exit__).
+            class _SharedDBConnection:
+                def __init__(self, connection):
+                    self._connection = connection
+                def __getattr__(self, name):
+                    return getattr(self._connection, name)
+                def close(self):
+                    pass # Do nothing, shared connection
+                def __enter__(self):
+                    return self._connection.__enter__()
+                def __exit__(self, exc_type, exc_val, exc_tb):
+                    return self._connection.__exit__(exc_type, exc_val, exc_tb)
+            return _SharedDBConnection(self.db_connection)
+
         if self.conn and self.db_filepath == ":memory:":
             return self.conn
         conn = sqlite3.connect(self.db_filepath)
