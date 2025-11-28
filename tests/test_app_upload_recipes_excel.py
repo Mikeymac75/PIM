@@ -23,43 +23,41 @@ def test_db_path(tmp_path):
 def client(test_db_path):
     """Configures the Flask app for testing and sets up a test client."""
     app.config['TESTING'] = True
+    # Explicitly set the database path in the global app config so get_db() uses it
     app.config['DATABASE_FILE_PATH'] = str(test_db_path)
     app.secret_key = 'test_secret_key'
     app.config['LOGIN_DISABLED'] = True
 
-    original_manager = main_app_module.manager
-    original_recipe_mngr = main_app_module.recipe_mngr
-
+    # Setup initial data manually using a separate manager instance on the test DB
     test_inventory_manager = InventoryManager(db_filepath=str(test_db_path))
-    test_recipe_manager = RecipeManager(db_filepath=str(test_db_path))
 
-    main_app_module.manager = test_inventory_manager
-    main_app_module.recipe_mngr = test_recipe_manager
+    with app.app_context():
+        # Tables should be created by app startup (or we ensure they exist)
+        # Since we just pointed app to a new DB path, the tables might not exist if app was already initialized
+        # So we force table creation via the test_inventory_manager which calls _initialize_db in init
+
+        products_to_add = [
+            {'name': 'Flour', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'kg', 'default_expiry_days': 365, 'par_level': 1, 'max_holding_amount': 5},
+            {'name': 'Sugar', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'kg', 'default_expiry_days': 730, 'par_level': 1, 'max_holding_amount': 3},
+            {'name': 'Eggs', 'category_id': 2, 'subcategory_id': None, 'unit_of_measure': 'dozen', 'default_expiry_days': 28, 'par_level': 1, 'max_holding_amount': 2},
+            {'name': 'Yeast', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'g', 'default_expiry_days': 180, 'par_level': 50, 'max_holding_amount': 100},
+            {'name': 'Butter', 'category_id': 2, 'subcategory_id': None, 'unit_of_measure': 'lb', 'default_expiry_days': 60, 'par_level': 1, 'max_holding_amount': 2},
+            {'name': 'Milk', 'category_id': 2, 'subcategory_id': None, 'unit_of_measure': 'L', 'default_expiry_days': 7, 'par_level': 1, 'max_holding_amount': 2},
+            {'name': 'Vanilla Extract', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'mL', 'default_expiry_days': 730, 'par_level': 100, 'max_holding_amount': 250},
+            {'name': 'Chocolate Chips', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'g', 'default_expiry_days': 365, 'par_level': 200, 'max_holding_amount': 500},
+            {'name': 'Cake Mix', 'category_id': 3, 'subcategory_id': None, 'unit_of_measure': 'box', 'default_expiry_days': 365, 'par_level': 2, 'max_holding_amount': 5},
+            {'name': 'Bread Loaf', 'category_id': 3, 'subcategory_id': None, 'unit_of_measure': 'loaf', 'default_expiry_days': 7, 'par_level': 1, 'max_holding_amount': 3},
+            {'name': 'Cookies Batch', 'category_id': 3, 'subcategory_id': None, 'unit_of_measure': 'batch', 'default_expiry_days': 14, 'par_level': 1, 'max_holding_amount': 3},
+        ]
+        test_inventory_manager.add_category("Baking Supplies")
+        test_inventory_manager.add_category("Dairy & Refrigerated")
+        test_inventory_manager.add_category("Finished Goods")
+        for prod_data in products_to_add:
+            test_inventory_manager.create_product(**prod_data)
 
     with app.test_client() as client:
-        with app.app_context():
-            products_to_add = [
-                {'name': 'Flour', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'kg', 'default_expiry_days': 365, 'par_level': 1, 'max_holding_amount': 5},
-                {'name': 'Sugar', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'kg', 'default_expiry_days': 730, 'par_level': 1, 'max_holding_amount': 3},
-                {'name': 'Eggs', 'category_id': 2, 'subcategory_id': None, 'unit_of_measure': 'dozen', 'default_expiry_days': 28, 'par_level': 1, 'max_holding_amount': 2},
-                {'name': 'Yeast', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'g', 'default_expiry_days': 180, 'par_level': 50, 'max_holding_amount': 100},
-                {'name': 'Butter', 'category_id': 2, 'subcategory_id': None, 'unit_of_measure': 'lb', 'default_expiry_days': 60, 'par_level': 1, 'max_holding_amount': 2},
-                {'name': 'Milk', 'category_id': 2, 'subcategory_id': None, 'unit_of_measure': 'L', 'default_expiry_days': 7, 'par_level': 1, 'max_holding_amount': 2},
-                {'name': 'Vanilla Extract', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'mL', 'default_expiry_days': 730, 'par_level': 100, 'max_holding_amount': 250},
-                {'name': 'Chocolate Chips', 'category_id': 1, 'subcategory_id': None, 'unit_of_measure': 'g', 'default_expiry_days': 365, 'par_level': 200, 'max_holding_amount': 500},
-                {'name': 'Cake Mix', 'category_id': 3, 'subcategory_id': None, 'unit_of_measure': 'box', 'default_expiry_days': 365, 'par_level': 2, 'max_holding_amount': 5},
-                {'name': 'Bread Loaf', 'category_id': 3, 'subcategory_id': None, 'unit_of_measure': 'loaf', 'default_expiry_days': 7, 'par_level': 1, 'max_holding_amount': 3},
-                {'name': 'Cookies Batch', 'category_id': 3, 'subcategory_id': None, 'unit_of_measure': 'batch', 'default_expiry_days': 14, 'par_level': 1, 'max_holding_amount': 3},
-            ]
-            test_inventory_manager.add_category("Baking Supplies")
-            test_inventory_manager.add_category("Dairy & Refrigerated")
-            test_inventory_manager.add_category("Finished Goods")
-            for prod_data in products_to_add:
-                test_inventory_manager.create_product(**prod_data)
         yield client
 
-    main_app_module.manager = original_manager
-    main_app_module.recipe_mngr = original_recipe_mngr
     if os.path.exists(str(test_db_path)):
         os.remove(str(test_db_path))
 
@@ -107,7 +105,8 @@ def test_upload_corrupted_excel_file(client):
     assert any("corrupted" in message.lower() and ("excel" in message.lower() or "file could not be opened" in message.lower()) for category, message in flashes if category == 'error'), f"Flashes: {flashes}"
 
 def test_upload_recipes_successful_simple(client):
-    test_recipe_manager = main_app_module.recipe_mngr
+    # Verify using a fresh manager connected to the test DB
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [["Test Bread", "Flour", "500g"]]
     excel_bytes = create_excel_file_bytes(header, data)
@@ -120,8 +119,8 @@ def test_upload_recipes_successful_simple(client):
     assert recipes[0]['name'] == "Test Bread"
 
 def test_upload_recipes_successful_with_all_fields(client):
-    test_recipe_manager = main_app_module.recipe_mngr
-    test_inventory_manager = main_app_module.manager
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
+    test_inventory_manager = InventoryManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header = ["Recipe Name", "Description", "Instructions", "Output Product Name", "Output Yield",
               "Ingredient 1 Name", "Ingredient 1 Quantity", "Ingredient 1 Notes"]
     data = [["Deluxe Cake", "Yummy", "Mix bake", "Cake Mix", "1", "Flour", "250", "Sifted"]]
@@ -138,7 +137,7 @@ def test_upload_recipes_successful_with_all_fields(client):
     assert recipe['output_yield'] == 1.0
 
 def test_upload_recipes_missing_recipe_name(client):
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [["", "Flour", "100g"]]
     excel_bytes = create_excel_file_bytes(header, data)
@@ -185,7 +184,7 @@ def test_upload_recipes_ingredient_quantity_missing(client):
     assert any("Ingredient 1 Quantity is required for 'Flour'" in message for cat, message in flashes if cat == 'error_detail')
 
 def test_upload_recipes_multiple_recipes_mixed_validity(client):
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header_fixed = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity", "Description"]
     data = [["Valid Bread", "Flour", "500", "Good"],
             ["Invalid Qty", "Sugar", "", "Bad"],
@@ -220,7 +219,7 @@ def test_upload_recipes_excel_empty_file(client):
     assert any("No new recipes were found or added" in message for cat, message in flashes if cat == 'info')
 
 def test_upload_recipes_with_optional_fields_blank(client):
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header = ["Recipe Name", "Description", "Instructions", "Output Product Name", "Output Yield",
               "Ingredient 1 Name", "Ingredient 1 Quantity", "Ingredient 1 Notes"]
     data = [["Minimal Recipe", "", "", "", "", "Flour", "100", ""]]
@@ -249,7 +248,7 @@ def test_upload_recipes_numeric_conversion_errors(client):
     assert any("4 rows/recipes had errors" in message for cat, message in flashes if cat == 'error')
 
 def test_upload_recipes_max_ingredients(client):
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header = ["Recipe Name"]
     ingredients_data = []
     for i in range(1, 16):
@@ -275,7 +274,7 @@ def test_upload_recipes_yield_without_output_product_warning(client):
     assert any("Successfully added 1 recipes" in message for cat, message in flashes if cat == 'success')
 
 def test_upload_recipes_ingredient_quantity_without_name_error(client):
-    test_recipe_manager = main_app_module.recipe_mngr
+    test_recipe_manager = RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     header = ["Recipe Name", "Ingredient 1 Name", "Ingredient 1 Quantity"]
     data = [["QtyNoName", "", "100"]]
     excel_bytes = create_excel_file_bytes(header, data)

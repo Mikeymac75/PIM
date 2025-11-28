@@ -11,18 +11,39 @@ import difflib
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO").upper())
 
 class InventoryManager:
-    def __init__(self, db_filepath="inventory.db"):
+    def __init__(self, db_filepath="inventory.db", db_connection=None):
         self.db_filepath = db_filepath
+        self.db_connection = db_connection
         self._persistent_conn = None  # For persistent in-memory connection
-        if self.db_filepath == ":memory:":
+
+        if self.db_connection is None and self.db_filepath == ":memory:":
             self._persistent_conn = sqlite3.connect(":memory:")
             self._persistent_conn.row_factory = sqlite3.Row
+
         self._initialize_db()
         # Garden produce is not part of this class for now
         # self.my_garden_produce = []
 
     def _get_db_connection(self):
         """Establishes and returns a database connection."""
+        if self.db_connection:
+            # If a connection was passed in __init__, reuse it.
+            # We wrap it to prevent 'with closing(...)' from closing the shared connection.
+            class _SharedDBConnection:
+                def __init__(self, connection):
+                    self._connection = connection
+                def __getattr__(self, name):
+                    return getattr(self._connection, name)
+                def close(self):
+                    pass # Do nothing, let the owner close it
+                def __enter__(self):
+                    # Delegate __enter__ to the underlying connection to support context manager behavior
+                    return self._connection.__enter__()
+                def __exit__(self, exc_type, exc_val, exc_tb):
+                    # Delegate __exit__ to the underlying connection to support transaction commit/rollback
+                    return self._connection.__exit__(exc_type, exc_val, exc_tb)
+            return _SharedDBConnection(self.db_connection)
+
         if self._persistent_conn and self.db_filepath == ":memory:":
             class _PersistentDBConnection:
                 """Wrapper for persistent in-memory DB connection that ignores close()."""
@@ -37,7 +58,7 @@ class InventoryManager:
                 def __exit__(self, exc_type, exc_val, exc_tb):
                     pass
             return _PersistentDBConnection(self._persistent_conn)
-        # For file-based databases, create a new connection each time
+        # For file-based databases, create a new connection each time if none provided
         conn = sqlite3.connect(self.db_filepath)
         conn.row_factory = sqlite3.Row # Access columns by name
         return conn
