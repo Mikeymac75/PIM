@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file, g, current_app
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -11,6 +11,7 @@ import os # For accessing environment variables
 import shutil # For file operations (backup/restore)
 import re # For parsing numeric quantities
 import zipfile # For BadZipFile exception
+import sqlite3
 
 app = Flask(__name__)
 # Configure secret key: Use an environment variable for production, with a fallback for development.
@@ -76,12 +77,37 @@ def allowed_file(filename):
 # Define the shared database file path
 # Use an environment variable for the database path, with a default for development.
 # IMPORTANT: For production or specific setups, set DATABASE_FILE_PATH environment variable.
-DATABASE_FILE = os.environ.get('DATABASE_FILE_PATH', 'food_app.db')
+# We set this in app.config so it can be accessed by request context
+app.config['DATABASE_FILE_PATH'] = os.environ.get('DATABASE_FILE_PATH', 'food_app.db')
 
-# Instantiate Managers globally, using the shared database file
-# The manager classes themselves will handle DB initialization (table creation IF NOT EXISTS)
-manager = InventoryManager(db_filepath=DATABASE_FILE)
-recipe_mngr = RecipeManager(db_filepath=DATABASE_FILE)
+def get_db():
+    if 'db' not in g:
+        db_path = current_app.config['DATABASE_FILE_PATH']
+        g.db = sqlite3.connect(db_path)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+@app.teardown_appcontext
+def close_db(e=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+
+def get_manager():
+    if 'manager' not in g:
+        g.manager = InventoryManager(db_filepath=current_app.config['DATABASE_FILE_PATH'], db_connection=get_db())
+    return g.manager
+
+def get_recipe_mngr():
+    if 'recipe_mngr' not in g:
+        g.recipe_mngr = RecipeManager(db_filepath=current_app.config['DATABASE_FILE_PATH'], db_connection=get_db())
+    return g.recipe_mngr
+
+# Instantiate Managers globally only to ensure tables are created on startup.
+# They will not be used in routes. Routes will use get_manager() and get_recipe_mngr().
+with app.app_context():
+    InventoryManager(db_filepath=app.config['DATABASE_FILE_PATH'])
+    RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
 
 # --- Login and Logout Routes ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -163,8 +189,8 @@ def _get_unique_item_names(include_historical=False):
     Helper to get sorted unique item names from the products table.
     The `include_historical` parameter is less relevant now as we fetch from a definitive product list.
     """
-    # manager.get_all_products() returns a list of product dictionaries
-    all_products = manager.get_all_products()
+    # get_manager().get_all_products() returns a list of product dictionaries
+    all_products = get_manager().get_all_products()
     # Assuming each product dict has a 'name' key
     unique_names = set(product['name'] for product in all_products if 'name' in product)
     return sorted(list(unique_names))
@@ -193,13 +219,13 @@ def resolve_consumption_items(items, depth=0):
             continue
 
         # 1. Check Product First
-        product = manager.get_product_by_name(name)
+        product = get_manager().get_product_by_name(name)
         if product:
             resolved_items.append(item)
             continue
 
         # 2. Check Recipe
-        recipe = recipe_mngr.get_recipe_by_name(name)
+        recipe = get_recipe_mngr().get_recipe_by_name(name)
         if recipe:
             # Calculate ingredients
             ingredients_to_process = []
@@ -238,14 +264,14 @@ def inventory_usage_links_view():
 @app.route('/inventory/shrink')
 @login_required
 def shrink_report_view():
-    report = manager.get_spoilage_report()
+    report = get_manager().get_spoilage_report()
     return render_template('shrink_report.html', report=report)
 
 @app.route('/inventory/discard/<int:batch_id>', methods=['POST'])
 @login_required
 def discard_inventory_item(batch_id):
     # Discard item: set quantity to 0, do NOT include in projections
-    result = manager.adjust_inventory_batch(batch_id, "0", include_in_projections=False)
+    result = get_manager().adjust_inventory_batch(batch_id, "0", include_in_projections=False)
 
     if result.get("success"):
         flash("Item discarded successfully (recorded as spoilage, not consumption).", "success")
@@ -285,7 +311,7 @@ def current_inventory_view():
 
     # Fetch data from manager using SQL-filterable parameters
     # Renamed inventory_items_raw to products_raw
-    products_raw = manager.get_current_inventory(
+    products_raw = get_manager().get_current_inventory(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         purchase_location=selected_purchase_location if selected_purchase_location else None,
@@ -296,14 +322,14 @@ def current_inventory_view():
     )
 
     # total_items is now the count of distinct products
-    total_items = manager.get_current_inventory_count(
+    total_items = get_manager().get_current_inventory_count(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         purchase_location=selected_purchase_location if selected_purchase_location else None
     )
 
     # Get spoilage report to map statuses
-    spoilage_report = manager.get_spoilage_report()
+    spoilage_report = get_manager().get_spoilage_report()
     spoilage_map = {}
     # The report is sorted by severity, so the first time we see a product, it's the highest severity status
     for item in spoilage_report:
@@ -340,14 +366,14 @@ def current_inventory_view():
     if page > total_pages and total_pages > 0:
         page = total_pages
         # Optionally re-fetch if strict item count per page is needed after Python filter.
-        # products_raw = manager.get_current_inventory(...) with new page
+        # products_raw = get_manager().get_current_inventory(...) with new page
         # then re-process for processed_products.
         # For now, we accept that the page might show fewer items if filtered in Python.
         # The user is on the 'last available page' according to DB count.
 
     # Fetch filter options
-    categories_options = manager.get_current_inventory_categories() # Still relevant
-    purchase_locations_options = manager.get_current_inventory_purchase_locations() # Still relevant
+    categories_options = get_manager().get_current_inventory_categories() # Still relevant
+    purchase_locations_options = get_manager().get_current_inventory_purchase_locations() # Still relevant
 
     today = date.today() # Still relevant for general display, not for expiry
     return render_template(
@@ -396,7 +422,7 @@ def historical_inventory_view():
         per_page = 20
 
     # Fetch data from manager
-    historical_items_data = manager.get_historical_inventory( # Renamed to avoid confusion in template if 'items' is ambiguous
+    historical_items_data = get_manager().get_historical_inventory( # Renamed to avoid confusion in template if 'items' is ambiguous
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         consumed_start_date=consumed_start_date if consumed_start_date else None,
@@ -410,7 +436,7 @@ def historical_inventory_view():
     # The historical_items_data already contains all necessary fields including cost_of_goods_used
     # No additional processing needed here for that field if the manager method includes it.
 
-    total_items = manager.get_historical_inventory_count(
+    total_items = get_manager().get_historical_inventory_count(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         consumed_start_date=consumed_start_date if consumed_start_date else None,
@@ -423,7 +449,7 @@ def historical_inventory_view():
     if page > total_pages and total_pages > 0:
         page = total_pages
         # Re-fetch for the new valid page
-        historical_items = manager.get_historical_inventory(
+        historical_items = get_manager().get_historical_inventory(
             search_term=search_term if search_term else None,
             category=selected_category if selected_category else None,
             consumed_start_date=consumed_start_date if consumed_start_date else None,
@@ -435,7 +461,7 @@ def historical_inventory_view():
         )
 
     # Fetch filter options
-    categories_options = manager.get_historical_inventory_categories()
+    categories_options = get_manager().get_historical_inventory_categories()
 
     return render_template(
         'historical_inventory.html',
@@ -482,7 +508,7 @@ def inventory_batches_view():
         per_page = 20
 
     # Placeholder: Fetch data using a new manager method (to be created)
-    # inventory_batches_data = manager.get_inventory_batches_with_cost(
+    # inventory_batches_data = get_manager().get_inventory_batches_with_cost(
     #     search_term=search_term if search_term else None,
     #     category=selected_category if selected_category else None,
     #     sort_by=sort_by,
@@ -490,7 +516,7 @@ def inventory_batches_view():
     #     page=page,
     #     per_page=per_page
     # )
-    # total_items = manager.get_inventory_batches_with_cost_count(
+    # total_items = get_manager().get_inventory_batches_with_cost_count(
     #     search_term=search_term if search_term else None,
     #     category=selected_category if selected_category else None,
     # )
@@ -506,7 +532,7 @@ def inventory_batches_view():
     end_expiry_date = request.args.get('end_expiry_date', '').strip()
 
     # Fetch data using the new manager method
-    inventory_batches_data = manager.get_inventory_batches_with_cost(
+    inventory_batches_data = get_manager().get_inventory_batches_with_cost(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         # purchase_location=selected_purchase_location if selected_purchase_location else None, # Add if filter is implemented
@@ -519,7 +545,7 @@ def inventory_batches_view():
         start_expiry_date=start_expiry_date if start_expiry_date else None,
         end_expiry_date=end_expiry_date if end_expiry_date else None
     )
-    total_items = manager.get_inventory_batches_with_cost_count(
+    total_items = get_manager().get_inventory_batches_with_cost_count(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         # purchase_location=selected_purchase_location if selected_purchase_location else None, # Add if filter is implemented
@@ -535,7 +561,7 @@ def inventory_batches_view():
         # Refetch data for the new valid page might be needed if strict item count per page is critical
         # For now, we accept that the last page might show fewer items if filters change total_items significantly
         # Or, if page was adjusted, re-fetch:
-        inventory_batches_data = manager.get_inventory_batches_with_cost(
+        inventory_batches_data = get_manager().get_inventory_batches_with_cost(
             search_term=search_term if search_term else None,
             category=selected_category if selected_category else None,
             sort_by=sort_by,
@@ -550,8 +576,8 @@ def inventory_batches_view():
 
 
     # Fetch filter options
-    categories_options = manager.get_all_categories() # Use existing method to get all category names
-    # purchase_locations_options = manager.get_all_purchase_locations() # Add if filter is implemented
+    categories_options = get_manager().get_all_categories() # Use existing method to get all category names
+    # purchase_locations_options = get_manager().get_all_purchase_locations() # Add if filter is implemented
 
 
     return render_template(
@@ -572,7 +598,7 @@ def inventory_batches_view():
 @login_required
 def consume_item_view():
     item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
-    all_recipes = recipe_mngr.get_all_recipes() # Fetch recipes once for the view
+    all_recipes = get_recipe_mngr().get_all_recipes() # Fetch recipes once for the view
 
     if request.method == 'POST':
         consumption_type = request.form.get('consumption_type', 'item') # Default to 'item'
@@ -632,7 +658,7 @@ def consume_item_view():
                 except Exception as e:
                     return jsonify({"success": False, "message": f"Error resolving items: {str(e)}"}), 200
 
-                results = manager.consume_multiple_items(items_to_consume_resolved, consumption_date_str=consumption_date_str)
+                results = get_manager().consume_multiple_items(items_to_consume_resolved, consumption_date_str=consumption_date_str)
 
                 # Process results for JSON response
                 success_count = sum(1 for r in results if r.get("success"))
@@ -694,7 +720,7 @@ def consume_item_view():
                 try:
                     # Pass consumption_date to consume_item if it's updated to accept it.
                     # For now, consume_item uses date.today() internally.
-                    result = manager.consume_item(item_name, numeric_quantity_consumed) #, consumption_date_str)
+                    result = get_manager().consume_item(item_name, numeric_quantity_consumed) #, consumption_date_str)
 
                     if result.get("success"):
                         flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
@@ -872,7 +898,7 @@ def upload_excel_view():
                             row_errors.append(f"Invalid Purchase Location '{purchase_location_val}'. If provided, must be one of: {', '.join(allowed_locations)}.")
                     
                     # Conditional requirement for unit_of_measure
-                    product_exists = manager.get_product_by_name(name)
+                    product_exists = get_manager().get_product_by_name(name)
                     if not product_exists and not unit_of_measure_val:
                         row_errors.append("Unit of Measure is required for new products.")
 
@@ -882,7 +908,7 @@ def upload_excel_view():
 
                     # If all validations pass for this row, attempt to add to inventory
                     try:
-                        result = manager.add_item_to_list(
+                        result = get_manager().add_item_to_list(
                             name=str(name),
                             quantity_str=str(quantity),
                             purchase_date_str=purchase_date_str,
@@ -915,7 +941,7 @@ def upload_excel_view():
 
                     except ValueError as ve: # Catch validation errors from add_item_to_list if it raises them
                          error_messages.append(f"Row {row_idx} ('{name}'): Validation Error - {str(ve)}")
-                    except Exception as e: # Catch other errors from manager.add_item_to_list
+                    except Exception as e: # Catch other errors from get_manager().add_item_to_list
                         error_messages.append(f"Row {row_idx} ('{name}'): Error adding to inventory - {str(e)}")
 
                 session['items_pending_confirmation'] = items_pending_confirmation
@@ -1034,7 +1060,7 @@ def upload_recipes_excel_view():
                     output_yield_float = None
 
                     if output_product_name_str:
-                        product = manager.get_product_by_name(output_product_name_str)
+                        product = get_manager().get_product_by_name(output_product_name_str)
                         if not product:
                             row_specific_errors.append(f"Output Product Name '{output_product_name_str}' not found in system.")
                         else:
@@ -1060,7 +1086,7 @@ def upload_recipes_excel_view():
 
                         if ing_name_str:
                             # Validate ingredient product exists (optional, recipe_mngr might handle it)
-                            # For now, let's assume recipe_mngr.add_recipe handles unknown ingredient names by flagging/erroring.
+                            # For now, let's assume get_recipe_mngr().add_recipe handles unknown ingredient names by flagging/erroring.
                             if not ing_qty_str:
                                 row_specific_errors.append(f"Ingredient {i} Quantity is required for '{ing_name_str}'.")
                             else:
@@ -1089,7 +1115,7 @@ def upload_recipes_excel_view():
                         error_messages.append(f"Row {row_idx} ('{recipe_name}'): " + "; ".join(row_specific_errors))
                         continue # Skip this recipe due to errors
 
-                    # Prepare data for recipe_mngr.add_recipe()
+                    # Prepare data for get_recipe_mngr().add_recipe()
                     recipe_data_for_manager = {
                         "name": recipe_name,
                         "description": description if description else "",
@@ -1100,7 +1126,7 @@ def upload_recipes_excel_view():
                     }
 
                     try:
-                        result = recipe_mngr.add_recipe(recipe_data_for_manager)
+                        result = get_recipe_mngr().add_recipe(recipe_data_for_manager)
                         if result.get("success"):
                             recipes_added_count += 1
                         else:
@@ -1167,8 +1193,8 @@ def confirm_excel_uploads_view():
         action_required = item_data_package['action_required']
 
         # Call add_item_to_list again, this time with confirmation details
-        # Food_manager.add_item_to_list is expected to handle these confirmed_action and temp_category_id
-        result = manager.add_item_to_list(
+        # Food_get_manager().add_item_to_list is expected to handle these confirmed_action and temp_category_id
+        result = get_manager().add_item_to_list(
             name=product_data['name'],
             quantity_str=product_data['quantity_str'],
             purchase_date_str=product_data['purchase_date_str'],
@@ -1222,7 +1248,7 @@ def recipes_links_view():
 @login_required
 def add_recipe_view():
     form_data_to_repopulate = {} # For GET or if POST fails and re-renders
-    all_db_products = manager.get_all_products(page=None, per_page=None) # For "Output Product" dropdown
+    all_db_products = get_manager().get_all_products(page=None, per_page=None) # For "Output Product" dropdown
 
     if request.method == 'POST':
         app.logger.info(f"Add Recipe - Form data: output_product_id='{request.form.get('output_product_id')}', output_yield='{request.form.get('output_yield')}'")
@@ -1248,7 +1274,7 @@ def add_recipe_view():
                     # No, `add_recipe` in RecipeManager processes `quantity_required` from this form.
                     # The form should submit `quantity_required` or the route should adapt.
                     # The current `add_recipe_view` (before this change) uses `quantity_required`.
-                    # Let's stick to `quantity_required` for clarity with the manager.
+                    # Let's stick to `quantity_required` for clarity with the get_manager().
                     # The template might name it `ingredient_X_quantity` for user display.
                     ing_qty_float = float(ing_qty_str)
                     if ing_qty_float <= 0:
@@ -1304,8 +1330,8 @@ def add_recipe_view():
             "output_yield": output_yield
         }
         app.logger.info(f"Add Recipe - Processed recipe_data for add_recipe: {recipe_data}")
-        # recipe_mngr.add_recipe was updated to handle output_product_id and output_yield
-        result = recipe_mngr.add_recipe(recipe_data)
+        # get_recipe_mngr().add_recipe was updated to handle output_product_id and output_yield
+        result = get_recipe_mngr().add_recipe(recipe_data)
         
         if result.get("success"):
             flash(result['message'], 'success')
@@ -1320,13 +1346,13 @@ def add_recipe_view():
 @app.route('/recipes/<int:recipe_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_recipe_view(recipe_id):
-    recipe = recipe_mngr.get_recipe_by_id(recipe_id) # Should now include output_product_id and output_yield
+    recipe = get_recipe_mngr().get_recipe_by_id(recipe_id) # Should now include output_product_id and output_yield
 
     if not recipe:
         flash(f"Recipe with ID {recipe_id} not found.", 'error')
         return redirect(url_for('recipes_list_view'))
 
-    all_db_products = manager.get_all_products(page=None, per_page=None)
+    all_db_products = get_manager().get_all_products(page=None, per_page=None)
 
     if request.method == 'POST':
         app.logger.info(f"Edit Recipe (ID: {recipe_id}) - Form data: output_product_id='{request.form.get('output_product_id')}', output_yield='{request.form.get('output_yield')}'")
@@ -1410,7 +1436,7 @@ def edit_recipe_view(recipe_id):
             "output_yield": output_yield
         }
         app.logger.info(f"Edit Recipe (ID: {recipe_id}) - Processed updated_recipe_data for update_recipe: {updated_recipe_data}")
-        result = recipe_mngr.update_recipe(recipe_id, updated_recipe_data)
+        result = get_recipe_mngr().update_recipe(recipe_id, updated_recipe_data)
 
         if result.get("success"):
             flash(result.get('message', "Recipe updated successfully!"), 'success')
@@ -1429,7 +1455,7 @@ def edit_recipe_view(recipe_id):
 @app.route('/recipes')
 @login_required
 def recipes_list_view():
-    all_recipes = recipe_mngr.get_all_recipes()
+    all_recipes = get_recipe_mngr().get_all_recipes()
     # Sort recipes by name for consistent display order
     sorted_recipes = sorted(all_recipes, key=lambda r: r['name'].lower())
     return render_template('recipes_list.html', recipes=sorted_recipes)
@@ -1437,7 +1463,7 @@ def recipes_list_view():
 @app.route('/recipes/id/<int:recipe_id>')
 @login_required
 def recipe_detail_view_by_id(recipe_id):
-    recipe = recipe_mngr.get_recipe_by_id(recipe_id)
+    recipe = get_recipe_mngr().get_recipe_by_id(recipe_id)
     if not recipe:
         flash(f"Recipe with ID {recipe_id} not found.", 'error')
         return redirect(url_for('recipes_list_view'))
@@ -1450,7 +1476,7 @@ def recipe_detail_view_by_id(recipe_id):
 @login_required
 def recipe_detail_view(recipe_name):
     # This function now serves as the canonical URL for recipe details by name.
-    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
+    recipe = get_recipe_mngr().get_recipe_by_name(recipe_name)
 
     if not recipe:
         flash(f"Recipe '{recipe_name}' not found.", 'error')
@@ -1465,7 +1491,7 @@ def recipe_detail_view(recipe_name):
             required_qty = float(ing['quantity_required'])
             
             # Use the new helper method from InventoryManager
-            available_qty = manager.get_total_item_quantity(item_name)
+            available_qty = get_manager().get_total_item_quantity(item_name)
             
             remaining_qty = available_qty - required_qty
             sufficient = remaining_qty >= 0
@@ -1474,7 +1500,7 @@ def recipe_detail_view(recipe_name):
                 recipe_makeable = False # Mark recipe as not makeable
 
             # Fetch product details to get unit_of_measure
-            product_details = manager.get_product_by_name(item_name)
+            product_details = get_manager().get_product_by_name(item_name)
             product_unit_of_measure = 'units' # Default unit
             ingredient_product_id = None # Default to None
             if product_details:
@@ -1504,7 +1530,7 @@ def recipe_detail_view(recipe_name):
 @app.route('/recipes/<path:recipe_name>/make', methods=['GET', 'POST'])
 @login_required
 def make_recipe_view(recipe_name):
-    recipe = recipe_mngr.get_recipe_by_name(recipe_name)
+    recipe = get_recipe_mngr().get_recipe_by_name(recipe_name)
     if not recipe:
         flash(f"Recipe '{recipe_name}' not found.", 'error')
         return redirect(url_for('recipes_list_view'))
@@ -1548,9 +1574,9 @@ def make_recipe_view(recipe_name):
                 return redirect(url_for('recipe_detail_view', recipe_name=recipe_name))
 
             total_required_qty = qty_per_batch * num_batches
-            available_qty = manager.get_total_item_quantity(item_name)
+            available_qty = get_manager().get_total_item_quantity(item_name)
 
-            product_details = manager.get_product_by_name(item_name)
+            product_details = get_manager().get_product_by_name(item_name)
             unit_of_measure = product_details.get('unit_of_measure', 'units') if product_details else 'units'
 
             if available_qty < total_required_qty:
@@ -1603,7 +1629,7 @@ def make_recipe_view(recipe_name):
                 successful_consumptions_info.append(f"Skipped '{item_name}' as 0 quantity was available/to be consumed.")
                 continue
 
-            consumption_result = manager.consume_item(item_name, qty_to_consume)
+            consumption_result = get_manager().consume_item(item_name, qty_to_consume)
             
             if not consumption_result.get("success"):
                 all_consumed_successfully = False
@@ -1638,13 +1664,13 @@ def make_recipe_view(recipe_name):
                 if output_yield_per_batch_float > 0:
                     total_output_yield = output_yield_per_batch_float * num_batches
                     purchase_date_str = date.today().isoformat()
-                    production_result = manager.add_inventory_stock(
+                    production_result = get_manager().add_inventory_stock(
                         product_id=output_product_id,
                         quantity_str=str(total_output_yield),
                         purchase_date_str=purchase_date_str
                     )
                     if production_result.get("success"):
-                        output_product_details = manager.get_product(output_product_id)
+                        output_product_details = get_manager().get_product(output_product_id)
                         output_product_name = output_product_details.get('name', f"ID {output_product_id}") if output_product_details else f"ID {output_product_id}"
                         flash(f"Produced {total_output_yield:.2f} of '{output_product_name}' and added to inventory.", 'success')
                     else:
@@ -1702,7 +1728,7 @@ def projections_view():
         per_page = 10
 
     # Fetch total count of products for pagination of the product list
-    total_products_for_list = manager.get_products_for_projection_list_count(
+    total_products_for_list = get_manager().get_products_for_projection_list_count(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         purchase_location=selected_purchase_location if selected_purchase_location else None
@@ -1719,7 +1745,7 @@ def projections_view():
 
 
     # Fetch the paginated list of products
-    products_on_page = manager.get_products_for_projection_list(
+    products_on_page = get_manager().get_products_for_projection_list(
         search_term=search_term if search_term else None,
         category=selected_category if selected_category else None,
         purchase_location=selected_purchase_location if selected_purchase_location else None,
@@ -1735,7 +1761,7 @@ def projections_view():
     if products_on_page:
         for product_dict in products_on_page:
             # Using product ID for project_demand is more robust
-            projection_data = manager.project_demand(product_dict['id'])
+            projection_data = get_manager().project_demand(product_dict['id'])
             if projection_data: # project_demand returns a dict, might include success status
                  # Ensure item_name is consistently set from product_name for template
                 if 'product_name' in projection_data and 'item_name' not in projection_data:
@@ -1752,8 +1778,8 @@ def projections_view():
 
 
     # Fetch filter options for product attributes
-    categories_options = manager.get_all_categories() # Reusing existing method for product categories
-    purchase_locations_options = manager.get_all_purchase_locations() # Reusing existing method
+    categories_options = get_manager().get_all_categories() # Reusing existing method for product categories
+    purchase_locations_options = get_manager().get_all_purchase_locations() # Reusing existing method
 
     return render_template(
         'projections.html',
@@ -1801,7 +1827,7 @@ def save_overrides_view():
         if not overrides_to_save and not request.form:
              flash("No override data submitted.", 'info')
         elif overrides_to_save:
-            result = manager.save_consumption_overrides(overrides_to_save)
+            result = get_manager().save_consumption_overrides(overrides_to_save)
             if result.get("success"):
                 flash(result.get("message", "Consumption overrides saved successfully."), 'success')
             else:
@@ -1819,9 +1845,9 @@ def products_needed_view():
     store_filter = request.args.get('store', '').strip()
     search_term = request.args.get('search', '').strip()
 
-    # This method (manager.get_shopping_list_items) now effectively serves "Products Needed"
+    # This method (get_manager().get_shopping_list_items) now effectively serves "Products Needed"
     # It calculates items below par based on consumption, par levels, etc.
-    products_needed_items = manager.get_shopping_list_items(
+    products_needed_items = get_manager().get_shopping_list_items(
         store_filter=store_filter if store_filter else None,
         search_term=search_term if search_term else None
     )
@@ -1848,12 +1874,12 @@ def add_products_needed_to_shopping_list_view():
                         quantity_to_add = float(quantity_to_add_str) if quantity_to_add_str else 0
 
                         if quantity_to_add > 0:
-                            result = manager.add_item_to_user_shopping_list(product_id, quantity_to_add)
+                            result = get_manager().add_item_to_user_shopping_list(product_id, quantity_to_add)
                             if result.get("success"):
                                 items_added_count += 1
                             else:
                                 items_failed_count +=1
-                                product_name = manager.get_product(product_id).get('name', f"ID {product_id}")
+                                product_name = get_manager().get_product(product_id).get('name', f"ID {product_id}")
                                 flash(f"Failed to add '{product_name}' to shopping list: {result.get('message', 'Unknown error')}", 'error')
                         # else: quantity is 0 or invalid, skip without error, or flash info if desired
                     except ValueError:
@@ -1915,7 +1941,7 @@ def log_purchases_view():
             product_name_for_msg = f"Product ID {product_id_str}"
             if product_id_str:
                 try:
-                    product_details = manager.get_product(int(product_id_str))
+                    product_details = get_manager().get_product(int(product_id_str))
                     if product_details: product_name_for_msg = product_details['name']
                 except: pass
 
@@ -1968,7 +1994,7 @@ def log_purchases_view():
                  flash("No items could be logged due to validation errors.", "warning")
             return redirect(url_for('new_shopping_list_view'))
 
-        batch_results = manager.log_multiple_purchases(purchases_to_log) # This now also removes from user_shopping_list
+        batch_results = get_manager().log_multiple_purchases(purchases_to_log) # This now also removes from user_shopping_list
 
         if batch_results.get("success_count", 0) > 0:
             flash(f"Successfully logged {batch_results['success_count']} purchase(s).", 'success')
@@ -1980,7 +2006,7 @@ def log_purchases_view():
                     prod_name_err = f"Product ID {detail.get('product_id')}"
                     if detail.get('product_id'):
                         try:
-                            p_info = manager.get_product(int(detail.get('product_id')))
+                            p_info = get_manager().get_product(int(detail.get('product_id')))
                             if p_info: prod_name_err = p_info['name']
                         except: pass
                     flash(f"Failed for {prod_name_err}: {detail.get('message')}", 'error_detail')
@@ -1993,13 +2019,13 @@ def log_purchases_view():
 @app.route('/new_shopping_list')
 @login_required
 def new_shopping_list_view():
-    items = manager.get_user_shopping_list_items()
+    items = get_manager().get_user_shopping_list_items()
     return render_template('new_shopping_list.html', items=items, today=date.today())
 
 @app.route('/new_shopping_list/remove/<int:item_id>', methods=['POST'])
 @login_required
 def remove_from_new_shopping_list_view(item_id):
-    result = manager.remove_item_from_user_shopping_list(item_id)
+    result = get_manager().remove_item_from_user_shopping_list(item_id)
     if result.get("success"):
         flash("Item removed from shopping list.", 'success')
     else:
@@ -2009,7 +2035,7 @@ def remove_from_new_shopping_list_view(item_id):
 @app.route('/new_shopping_list/clear', methods=['POST'])
 @login_required
 def clear_new_shopping_list_view():
-    result = manager.clear_user_shopping_list()
+    result = get_manager().clear_user_shopping_list()
     if result.get("success"):
         flash("Shopping list cleared.", 'success')
     else:
@@ -2022,7 +2048,7 @@ def update_new_shopping_list_item_quantity_view(item_id):
     new_quantity_str = request.form.get('quantity_added')
     try:
         new_quantity = float(new_quantity_str)
-        result = manager.update_user_shopping_list_item_quantity(item_id, new_quantity)
+        result = get_manager().update_user_shopping_list_item_quantity(item_id, new_quantity)
         if result.get("success"):
             flash("Item quantity updated.", 'success')
         else:
@@ -2034,7 +2060,7 @@ def update_new_shopping_list_item_quantity_view(item_id):
 @app.route('/new_shopping_list/export_excel', methods=['GET'])
 @login_required
 def export_new_shopping_list_excel_view():
-    items = manager.get_user_shopping_list_items()
+    items = get_manager().get_user_shopping_list_items()
     if not items:
         flash("Shopping list is empty. Nothing to export.", 'info')
         return redirect(url_for('new_shopping_list_view'))
@@ -2103,12 +2129,12 @@ def add_to_shopping_list_direct_view():
 
         # Case 2: product_id missing, try product_name
         elif product_name:
-            product = manager.get_product_by_name(product_name)
+            product = get_manager().get_product_by_name(product_name)
             if product:
                 product_id_int = product['id']
             else:
                 # Not found, try suggestions
-                suggestions = manager.get_similar_products(product_name)
+                suggestions = get_manager().get_similar_products(product_name)
                 msg = f"Item '{product_name}' not found."
                 if suggestions:
                     msg += f" Did you mean: {', '.join(suggestions)}?"
@@ -2120,10 +2146,10 @@ def add_to_shopping_list_direct_view():
                 }), 404
 
         # Proceed with addition
-        result = manager.add_item_to_user_shopping_list(product_id_int, quantity_float)
+        result = get_manager().add_item_to_user_shopping_list(product_id_int, quantity_float)
 
         if result.get("success"):
-            product = manager.get_product(product_id_int)
+            product = get_manager().get_product(product_id_int)
             name_display = product.get('name', f"ID {product_id_int}") if product else f"ID {product_id_int}"
             return jsonify({"success": True, "message": f"Added {quantity_float} of '{name_display}' to your shopping list."})
         else:
@@ -2160,18 +2186,18 @@ def add_shopping_list_item_by_name():
         return jsonify({"success": False, "message": "Invalid quantity format."}), 200
 
     # 1. Try to find the product (Exact or Alias)
-    product = manager.get_product_by_name(product_name)
+    product = get_manager().get_product_by_name(product_name)
 
     if product:
         # Found! Add to list using ID
-        result = manager.add_item_to_user_shopping_list(product['id'], quantity_float)
+        result = get_manager().add_item_to_user_shopping_list(product['id'], quantity_float)
         if result['success']:
              # Enhance message to confirm what product was actually added (resolved name)
              result['resolved_product_name'] = product['name']
         return jsonify(result)
     else:
         # Not found. Get suggestions.
-        suggestions = manager.get_similar_products(product_name)
+        suggestions = get_manager().get_similar_products(product_name)
         msg = f"Product '{product_name}' not found."
         if suggestions:
             msg += f" Did you mean: {', '.join(suggestions)}?"
@@ -2199,7 +2225,7 @@ def add_product_alias():
     if not product_name or not alias:
         return jsonify({"success": False, "message": "Both 'product_name' and 'alias' are required."}), 400
 
-    result = manager.add_alias(product_name, alias)
+    result = get_manager().add_alias(product_name, alias)
 
     if result['success']:
         return jsonify(result)
@@ -2264,10 +2290,10 @@ def api_log_purchase():
             return jsonify({"success": False, "message": "Invalid purchase_date format. Use YYYY-MM-DD."}), 200
 
     # Resolve Product
-    product = manager.get_product_by_name(product_name)
+    product = get_manager().get_product_by_name(product_name)
     if not product:
         # Provide suggestions if the product is not found
-        suggestions = manager.get_similar_products(product_name)
+        suggestions = get_manager().get_similar_products(product_name)
         msg = f"Product '{product_name}' not found."
         if suggestions:
             msg += f" Did you mean: {', '.join(suggestions)}?"
@@ -2276,7 +2302,7 @@ def api_log_purchase():
     product_id = product['id']
 
     # Log Purchase
-    result = manager.log_purchase(
+    result = get_manager().log_purchase(
         product_id=product_id,
         purchase_date_str=purchase_date,
         quantity_purchased_float=quantity_float,
@@ -2286,7 +2312,7 @@ def api_log_purchase():
 
     if result.get("success"):
         # Fetch new total inventory
-        new_total = manager.get_total_item_quantity(product_id)
+        new_total = get_manager().get_total_item_quantity(product_id)
         return jsonify({
             "success": True,
             "message": f"Purchase logged. You now have {new_total}.",
@@ -2327,9 +2353,9 @@ def garden_list_view():
     # The get_all_production_items method should handle pagination and sorting.
     # It also calculates dynamic status and yield.
     # For now, total count for pagination is not implemented for production_items, so pass None for page/per_page
-    # to fetch all and then manually paginate if needed, or add count method to manager.
+    # to fetch all and then manually paginate if needed, or add count method to get_manager().
     # For simplicity in this step, fetching all. Pagination can be added fully later.
-    all_items_raw = manager.get_all_production_items(
+    all_items_raw = get_manager().get_all_production_items(
         filters=filters if filters else None,
         sort_by=sort_by,
         sort_order=sort_order,
@@ -2359,7 +2385,7 @@ def garden_list_view():
 @app.route('/garden/add', methods=['GET', 'POST'])
 @login_required
 def add_production_item_view():
-    all_db_products = manager.get_all_products(page=None, per_page=None) # Get all products for dropdown
+    all_db_products = get_manager().get_all_products(page=None, per_page=None) # Get all products for dropdown
 
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
@@ -2421,7 +2447,7 @@ def add_production_item_view():
                 flash(error, 'error')
             return render_template('garden_edit.html', item=request.form, products=all_db_products, form_action_label='Add', current_page='garden_add')
 
-        result = manager.add_production_item(
+        result = get_manager().add_production_item(
             name=name,
             associated_product_id=associated_product_id, # This can be None
             plant_date_str=plant_date_str,
@@ -2443,12 +2469,12 @@ def add_production_item_view():
 @app.route('/garden/<int:item_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_production_item_view(item_id):
-    production_item = manager.get_production_item(item_id) # This should already return a dict
+    production_item = get_manager().get_production_item(item_id) # This should already return a dict
     if not production_item:
         flash(f"Production item with ID {item_id} not found.", 'error')
         return redirect(url_for('garden_list_view'))
 
-    all_db_products = manager.get_all_products(page=None, per_page=None)
+    all_db_products = get_manager().get_all_products(page=None, per_page=None)
 
     if request.method == 'POST':
         # Create a mutable copy of the form data for modification
@@ -2522,7 +2548,7 @@ def edit_production_item_view(item_id):
         # or are not meant to be updated directly this way (e.g., calculated fields if they were in form)
         # For now, assuming all keys in data_to_update (after cleaning) are valid for update_production_item
 
-        result = manager.update_production_item(item_id, data_to_update)
+        result = get_manager().update_production_item(item_id, data_to_update)
         if result.get("success"):
             flash(result['message'], 'success')
             return redirect(url_for('garden_list_view'))
@@ -2565,7 +2591,7 @@ def record_harvest_view(item_id):
         for error in errors:
             flash(error, 'error')
     else:
-        result = manager.record_harvest(
+        result = get_manager().record_harvest(
             production_item_id=item_id,
             actual_harvest_amount=actual_harvest_amount,
             harvest_date_str=harvest_date_str
@@ -2611,7 +2637,7 @@ def list_products_view():
         per_page = 20
 
     # Get products with filtering, sorting, and pagination
-    products = manager.get_all_products(
+    products = get_manager().get_all_products(
         search_term=search_term if search_term else None,
         category=category if category else None,
         purchase_location=purchase_location if purchase_location else None,
@@ -2626,11 +2652,11 @@ def list_products_view():
     if products:
         for p in products:
             product_dict = dict(p) # Convert Row object to dict if necessary, or work with it directly
-            product_dict['weighted_average_cost'] = manager.get_weighted_average_cost(product_dict['id'])
+            product_dict['weighted_average_cost'] = get_manager().get_weighted_average_cost(product_dict['id'])
             products_enhanced.append(product_dict)
 
     # Get total product count for pagination
-    total_products = manager.get_product_count(
+    total_products = get_manager().get_product_count(
         search_term=search_term if search_term else None,
         category=category if category else None,
         purchase_location=purchase_location if purchase_location else None
@@ -2640,7 +2666,7 @@ def list_products_view():
     if page > total_pages and total_pages > 0 : # If current page is beyond total pages (e.g. after filters change)
         page = total_pages # Go to last valid page
         # Re-fetch products for the new valid page
-        products = manager.get_all_products(
+        products = get_manager().get_all_products(
             search_term=search_term if search_term else None,
             category=category if category else None,
             purchase_location=purchase_location if purchase_location else None,
@@ -2652,8 +2678,8 @@ def list_products_view():
 
 
     # Get filter options
-    all_categories = manager.get_all_categories()
-    all_purchase_locations = manager.get_all_purchase_locations()
+    all_categories = get_manager().get_all_categories()
+    all_purchase_locations = get_manager().get_all_purchase_locations()
 
     return render_template(
         'list_products.html',
@@ -2731,16 +2757,16 @@ def create_product_view():
                 errors.append("Max holding amount must be a valid number.")
 
         # Optional: Validate purchase_location against a predefined list if necessary
-        # For now, allowing free text based on Food_manager.py structure
+        # For now, allowing free text based on Food_get_manager().py structure
 
         if errors:
             for error in errors:
                 flash(error, 'error')
             # Fetch categories again for re-rendering the form with dropdowns
-            all_categories_data = manager.get_all_categories_with_subcategories()
+            all_categories_data = get_manager().get_all_categories_with_subcategories()
             return render_template('create_product.html', form_data=request.form, categories_data=all_categories_data)
 
-        result = manager.create_product(
+        result = get_manager().create_product(
             name=name,
             category_id=category_id,
             subcategory_id=subcategory_id, # Will be None if not provided or empty
@@ -2756,27 +2782,27 @@ def create_product_view():
             return redirect(url_for('list_products_view'))
         else:
             flash(result.get("message", "An error occurred creating the product."), 'error')
-            all_categories_data = manager.get_all_categories_with_subcategories()
+            all_categories_data = get_manager().get_all_categories_with_subcategories()
             return render_template('create_product.html', form_data=request.form, categories_data=all_categories_data)
 
     # GET request
-    all_categories_data = manager.get_all_categories_with_subcategories()
+    all_categories_data = get_manager().get_all_categories_with_subcategories()
     return render_template('create_product.html', form_data={}, categories_data=all_categories_data)
 
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_product_view(product_id):
-    # product = manager.get_product(product_id) # Fetched in GET, no need to re-fetch before POST processing unless stale data is a concern
+    # product = get_manager().get_product(product_id) # Fetched in GET, no need to re-fetch before POST processing unless stale data is a concern
     # For POST, we primarily use form data. The product object is mainly for GET or repopulating form on error.
 
-    all_categories_data = manager.get_all_categories_with_subcategories() # Needed for GET and for POST error repopulation
+    all_categories_data = get_manager().get_all_categories_with_subcategories() # Needed for GET and for POST error repopulation
 
     if request.method == 'POST':
         # Fetch product again here if needed to merge with form data upon error,
         # or rely on product object fetched if this view were structured differently.
         # For this structure, product is fetched initially for GET.
         # If POST fails, we use the product object that was passed to the template.
-        product_for_repopulation_on_error = manager.get_product(product_id)
+        product_for_repopulation_on_error = get_manager().get_product(product_id)
 
 
         name = request.form.get('name', '').strip()
@@ -2848,8 +2874,8 @@ def edit_product_view(product_id):
             product_data_for_template = {**product_for_repopulation_on_error, **form_data}
             return render_template('edit_product.html', product=product_data_for_template, categories_data=all_categories_data)
 
-        # manager.update_product was already updated to expect category_id and subcategory_id
-        result = manager.update_product(
+        # get_manager().update_product was already updated to expect category_id and subcategory_id
+        result = get_manager().update_product(
             product_id=product_id,
             name=name,
             category_id=category_id, # This is now an int or None
@@ -2874,7 +2900,7 @@ def edit_product_view(product_id):
 
     # GET request: pass the fetched product data (which includes cat/subcat names and IDs)
     # and all_categories_data (for dropdowns) to the template.
-    product_display_data = manager.get_product(product_id) # Ensure fresh data for GET display
+    product_display_data = get_manager().get_product(product_id) # Ensure fresh data for GET display
     if not product_display_data: # Should be caught by initial check, but good practice
         flash(f"Product with ID {product_id} not found.", 'error')
         return redirect(url_for('list_products_view'))
@@ -2936,13 +2962,13 @@ def log_purchase_view():
         if errors:
             for error in errors:
                 flash(error, 'error')
-            products_for_dropdown = manager.get_all_products()
+            products_for_dropdown = get_manager().get_all_products()
             # Pass all_categories for consistency with GET, though not strictly needed for error repopulation logic here
-            all_categories = manager.get_all_categories()
+            all_categories = get_manager().get_all_categories()
             return render_template('log_purchase.html', products=products_for_dropdown, all_categories=all_categories, form_data=request.form, today=date.today())
 
         # If validation passes, call the new log_purchase method
-        result = manager.log_purchase(
+        result = get_manager().log_purchase(
             product_id=product_id,
             purchase_date_str=purchase_date_str,
             quantity_purchased_float=quantity_purchased_float,
@@ -2955,15 +2981,15 @@ def log_purchase_view():
             return redirect(url_for('current_inventory_view'))
         else:
             flash(result.get("message", "An error occurred logging the purchase."), 'error')
-            products_for_dropdown = manager.get_all_products()
-            all_categories = manager.get_all_categories()
+            products_for_dropdown = get_manager().get_all_products()
+            all_categories = get_manager().get_all_categories()
             return render_template('log_purchase.html', products=products_for_dropdown, all_categories=all_categories, form_data=request.form, today=date.today())
 
     # GET request
     search_name = request.args.get('search_name', '').strip()
     search_category = request.args.get('search_category', '').strip()
 
-    all_categories = manager.get_all_categories()
+    all_categories = get_manager().get_all_categories()
 
     # Prepare arguments for get_all_products, only pass if values exist
     filter_args = {}
@@ -2980,7 +3006,7 @@ def log_purchase_view():
     filter_args['per_page'] = None
 
 
-    products_for_dropdown = manager.get_all_products(**filter_args)
+    products_for_dropdown = get_manager().get_all_products(**filter_args)
 
     form_data_get = {'purchase_date': date.today().isoformat()}
     # If there were validation errors on POST, form_data might be passed from POST.
@@ -2996,7 +3022,7 @@ def log_purchase_view():
 @app.route('/inventory/edit', methods=['GET', 'POST'])
 @login_required
 def edit_inventory_view():
-    products_for_dropdown = manager.get_all_products()
+    products_for_dropdown = get_manager().get_all_products()
     selected_product_id = request.args.get('product_id')
     inventory_batches = []
     selected_product_name = None
@@ -3005,7 +3031,7 @@ def edit_inventory_view():
         try:
             # Fetch current and last 3 lines (total 4), ordered by id descending
             # to get the most recently added batches.
-            inventory_batches = manager.get_inventory_batches_for_product(
+            inventory_batches = get_manager().get_inventory_batches_for_product(
                 product_id=int(selected_product_id),
                 limit=4,
                 order_by_id_desc=True
@@ -3014,7 +3040,7 @@ def edit_inventory_view():
             # The template iterates as is (most recent first). If oldest of these 4 should be first,
             # they would need to be reversed here: inventory_batches.reverse()
 
-            selected_product = manager.get_product(int(selected_product_id))
+            selected_product = get_manager().get_product(int(selected_product_id))
             if selected_product:
                 selected_product_name = selected_product['name']
         except ValueError: # Handles error from int(selected_product_id)
@@ -3060,7 +3086,7 @@ def edit_inventory_view():
 
             try:
                 batch_id = int(batch_id_str)
-                result = manager.adjust_inventory_batch(
+                result = get_manager().adjust_inventory_batch(
                     batch_id=batch_id,
                     new_quantity_str=new_quantity_str, # adjust_inventory_batch handles if this is None or empty
                     new_purchase_date_str=new_purchase_date_str if new_purchase_date_str else None,
@@ -3106,7 +3132,7 @@ def edit_inventory_view():
                 # Validate product_id and quantity
                 product_id_int = int(product_id_str)
                 # The manager's _parse_quantity_string can handle various quantity string formats
-                # quantity_to_return_float = manager._parse_quantity_string(return_quantity_str) # Not ideal to call private method
+                # quantity_to_return_float = get_manager()._parse_quantity_string(return_quantity_str) # Not ideal to call private method
 
                 # Basic float conversion for quantity to return
                 quantity_to_return_float = 0.0
@@ -3128,7 +3154,7 @@ def edit_inventory_view():
                 # The consumed_original_qty_str_{{ loop.index0 }} is the original quantity of the batch
                 # *from which items were consumed*. This might be useful for context if the manager method
                 # is ever enhanced to use it, but for now, the new batch's original quantity is `return_quantity_str`.
-                return_result = manager.return_consumed_batch_to_stock(
+                return_result = get_manager().return_consumed_batch_to_stock(
                     product_id=product_id_int,
                     product_name=product_name,
                     purchase_date_str=purchase_date_str, # This is original purchase date of consumed item
@@ -3164,7 +3190,7 @@ def edit_inventory_view():
 
     # GET Request: Fetch data for the page
     # Fetch products for the dropdown
-    products_for_dropdown = manager.get_all_products() # Assuming this fetches all product names and IDs
+    products_for_dropdown = get_manager().get_all_products() # Assuming this fetches all product names and IDs
 
     selected_product_id_from_arg = request.args.get('product_id')
     active_inventory_batches = [] # Renamed from inventory_batches for clarity
@@ -3176,7 +3202,7 @@ def edit_inventory_view():
             product_id_int_for_get = int(selected_product_id_from_arg)
 
             # Fetch active inventory batches for editing
-            active_inventory_batches = manager.get_inventory_batches_for_product(
+            active_inventory_batches = get_manager().get_inventory_batches_for_product(
                 product_id=product_id_int_for_get,
                 limit=4, # Keep existing limit for active batches
                 order_by_id_desc=True # Most recent first
@@ -3184,12 +3210,12 @@ def edit_inventory_view():
 
             # Fetch recently consumed batch history for "Return to Stock"
             # This method needs to be implemented in FoodManager
-            recently_consumed_batches = manager.get_recently_consumed_batch_info(
+            recently_consumed_batches = get_manager().get_recently_consumed_batch_info(
                 product_id=product_id_int_for_get,
                 limit=5 # Example: show up to 5 recently consumed distinct batch origins
             )
 
-            selected_product_details = manager.get_product(product_id_int_for_get)
+            selected_product_details = get_manager().get_product(product_id_int_for_get)
             if selected_product_details:
                 selected_product_name_display = selected_product_details['name']
         except ValueError:
@@ -3212,7 +3238,7 @@ def manage_categories_view():
         if action_type == 'add_category':
             category_name = request.form.get('category_name', '').strip()
             if category_name:
-                result = manager.add_category(category_name)
+                result = get_manager().add_category(category_name)
                 if result.get('success'):
                     flash(result['message'], 'success')
                 else:
@@ -3226,7 +3252,7 @@ def manage_categories_view():
             if subcategory_name and category_id_str:
                 try:
                     category_id = int(category_id_str)
-                    result = manager.add_subcategory(subcategory_name, category_id)
+                    result = get_manager().add_subcategory(subcategory_name, category_id)
                     if result.get('success'):
                         flash(result['message'], 'success')
                     else:
@@ -3240,23 +3266,23 @@ def manage_categories_view():
         return redirect(url_for('manage_categories_view'))
 
     # GET request
-    categories_data = manager.get_all_categories_with_subcategories()
+    categories_data = get_manager().get_all_categories_with_subcategories()
     return render_template('manage_categories.html', categories_data=categories_data)
 
 @app.route('/product_modal_details/<int:product_id>', methods=['GET'])
 @login_required # This serves JSON but is part of the UI experience that should be protected.
 def product_modal_details(product_id):
-    product_details = manager.get_product_details(product_id)
+    product_details = get_manager().get_product_details(product_id)
 
     if not product_details:
         return jsonify({"error": "Product not found"}), 404
 
     # get_daily_consumption defaults to 30 days
-    daily_consumption = manager.get_daily_consumption(product_id)
+    daily_consumption = get_manager().get_daily_consumption(product_id)
     # get_monthly_consumption defaults to 12 months
-    monthly_consumption = manager.get_monthly_consumption(product_id)
+    monthly_consumption = get_manager().get_monthly_consumption(product_id)
     # Get daily inventory history (defaults to 30 days)
-    daily_inventory_history = manager.get_daily_inventory_history(product_id)
+    daily_inventory_history = get_manager().get_daily_inventory_history(product_id)
 
     # Ensure all date/datetime objects are converted to ISO format strings for JSON serialization
     # For product_details, this depends on its structure. Assuming it's a dict from DB Row.
@@ -3265,9 +3291,9 @@ def product_modal_details(product_id):
     # --- New data for modal ---
     recipes_containing_product = []
     if product_details.get('name'):
-        recipes_containing_product = recipe_mngr.get_recipes_for_product(product_details['name'])
+        recipes_containing_product = get_recipe_mngr().get_recipes_for_product(product_details['name'])
 
-    inventory_concerns = manager.get_inventory_concerns(product_id)
+    inventory_concerns = get_manager().get_inventory_concerns(product_id)
 
     # Calculate shopping_list_amount_today
     shopping_list_amount_today = 0.0 # Default to 0
@@ -3289,7 +3315,7 @@ def product_modal_details(product_id):
 
     if par_level > 0 and projection_days_for_item > 0:
         # Use a distinct variable name for this specific demand projection call
-        demand_projection_for_shopping = manager.project_demand(
+        demand_projection_for_shopping = get_manager().project_demand(
             product_id,
             lookback_days=30, # Standard lookback
             projection_days=projection_days_for_item
@@ -3304,7 +3330,7 @@ def product_modal_details(product_id):
 
     # --- Future Inventory Projection ---
     # Call the new projection method
-    future_projection_result = manager.get_future_inventory_projection(product_id, projection_days=FUTURE_PROJECTION_HORIZON)
+    future_projection_result = get_manager().get_future_inventory_projection(product_id, projection_days=FUTURE_PROJECTION_HORIZON)
 
     final_future_projection_data = [] # Default to empty list
     if isinstance(future_projection_result, dict) and future_projection_result.get("success") is False:
@@ -3313,7 +3339,7 @@ def product_modal_details(product_id):
         final_future_projection_data = future_projection_result
 
     # --- Past Actuals Summary ---
-    past_actuals_result = manager.get_past_actual_inventory_summary(product_id, days_past=PAST_ACTUALS_HORIZON)
+    past_actuals_result = get_manager().get_past_actual_inventory_summary(product_id, days_past=PAST_ACTUALS_HORIZON)
 
     final_past_actual_data = [] # Default to empty list
     if isinstance(past_actuals_result, dict) and past_actuals_result.get("success") is False:
@@ -3353,8 +3379,8 @@ def upload_products_excel_view():
         if file and allowed_file(file.filename):
             overwrite_logic = request.form.get('overwrite_logic_choice', 'skip') # Default to 'skip'
             try:
-                # Assuming openpyxl is imported in Food_manager.py where it's used
-                result = manager.upload_products_excel(file.stream, overwrite_logic)
+                # Assuming openpyxl is imported in Food_get_manager().py where it's used
+                result = get_manager().upload_products_excel(file.stream, overwrite_logic)
 
                 if result.get("errors"):
                     for error_msg in result["errors"][:10]: # Show up to 10 errors
@@ -3405,7 +3431,7 @@ def upload_historical_excel_view():
         if file and allowed_file(file.filename):
             try:
                 # The manager method 'upload_historical_inventory_excel' handles openpyxl
-                result = manager.upload_historical_inventory_excel(file.stream)
+                result = get_manager().upload_historical_inventory_excel(file.stream)
 
                 errors = result.get("errors", [])
                 added_count = result.get("added", 0)
@@ -3454,7 +3480,7 @@ def upload_production_items_excel_view():
 
         if file and allowed_file(file.filename):
             try:
-                result = manager.upload_production_items_excel(file.stream)
+                result = get_manager().upload_production_items_excel(file.stream)
 
                 errors = result.get("errors", [])
                 added_count = result.get("added", 0)
@@ -3506,7 +3532,7 @@ def export_data_view():
 
         if selected_table == "products":
             try:
-                products_data = manager.get_all_products_export()
+                products_data = get_manager().get_all_products_export()
                 if not products_data:
                     flash("No product data found to export.", "info")
                     return redirect(url_for('export_data_view'))
@@ -3545,7 +3571,7 @@ def export_data_view():
             export_start_date = request.form.get('export_start_date')
             export_end_date = request.form.get('export_end_date')
             try:
-                batches_data = manager.get_all_inventory_batches_export(
+                batches_data = get_manager().get_all_inventory_batches_export(
                     start_date_str=export_start_date if export_start_date else None,
                     end_date_str=export_end_date if export_end_date else None
                 )
@@ -3584,7 +3610,7 @@ def export_data_view():
             export_end_date = request.form.get('export_end_date')
             try:
                 # Use historical_items_data variable name consistent with the view function
-                historical_data = manager.get_historical_inventory(
+                historical_data = get_manager().get_historical_inventory(
                     export_all=True, # This flag implies fetching all data for export
                     export_start_date_str=export_start_date if export_start_date else None, # Use specific params for export dates
                     export_end_date_str=export_end_date if export_end_date else None
@@ -3622,7 +3648,7 @@ def export_data_view():
         elif selected_table == "recipes":
             try:
                 # Call get_all_recipes with export_all=True to get only header data
-                recipes_data = recipe_mngr.get_all_recipes(export_all=True)
+                recipes_data = get_recipe_mngr().get_all_recipes(export_all=True)
 
                 if not recipes_data:
                     flash("No recipes found to export.", "info")
@@ -3659,7 +3685,7 @@ def export_data_view():
 
         elif selected_table == "recipe_ingredients":
             try:
-                ingredients_data = recipe_mngr.get_all_recipe_ingredients_export()
+                ingredients_data = get_recipe_mngr().get_all_recipe_ingredients_export()
                 if not ingredients_data:
                     flash("No recipe ingredients found to export.", "info")
                     return redirect(url_for('export_data_view'))
@@ -3692,7 +3718,7 @@ def export_data_view():
 
         elif selected_table == "production_items":
             try:
-                production_data = manager.get_all_production_items_export()
+                production_data = get_manager().get_all_production_items_export()
                 if not production_data:
                     flash("No production items (garden) found to export.", "info")
                     return redirect(url_for('export_data_view'))
@@ -3725,7 +3751,7 @@ def export_data_view():
 
         elif selected_table == "categories":
             try:
-                categories_data = manager.get_all_categories_export()
+                categories_data = get_manager().get_all_categories_export()
                 if not categories_data:
                     flash("No categories found to export.", "info")
                     return redirect(url_for('export_data_view'))
@@ -3758,7 +3784,7 @@ def export_data_view():
 
         elif selected_table == "subcategories":
             try:
-                subcategories_data = manager.get_all_subcategories_export()
+                subcategories_data = get_manager().get_all_subcategories_export()
                 if not subcategories_data:
                     flash("No subcategories found to export.", "info")
                     return redirect(url_for('export_data_view'))
@@ -3826,7 +3852,7 @@ def create_backup_view():
     """Creates a timestamped backup of the database and offers it for download."""
     try:
         # Ensure the manager is using the correct, potentially configured DB file
-        source_db_path = manager.db_filepath
+        source_db_path = get_manager().db_filepath
         if source_db_path == ":memory:":
             flash("Cannot backup an in-memory database.", "error")
             return redirect(url_for('backup_restore_view'))
@@ -3872,7 +3898,7 @@ def restore_from_backup_view():
 
     if file and file.filename.endswith('.db'):
         try:
-            current_db_path = manager.db_filepath
+            current_db_path = get_manager().db_filepath
             if current_db_path == ":memory:":
                 flash("Cannot restore an in-memory database.", "error")
                 return redirect(url_for('backup_restore_view'))
@@ -3896,12 +3922,12 @@ def restore_from_backup_view():
             # Close existing DB connections if possible. This is tricky with global managers.
             # Forcing a restart of the application after restore is the most robust way
             # to ensure the new database is loaded correctly without connection conflicts.
-            # manager.close_connection() # If manager had a method to close its persistent connection
-            # recipe_mngr.close_connection()
+            # get_manager().close_connection() # If manager had a method to close its persistent connection
+            # get_recipe_mngr().close_connection()
 
             # Replace the current database file with the uploaded one
             # The `DATABASE_FILE` constant points to where the app expects the DB.
-            # `current_db_path` (from manager.db_filepath) should be this path.
+            # `current_db_path` (from get_manager().db_filepath) should be this path.
             file.save(current_db_path) # Overwrites the existing DB file
 
             flash(f"Database successfully restored from '{file.filename}'. Please restart the application for changes to take effect.", "success")

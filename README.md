@@ -161,3 +161,83 @@ Contributions are welcome! Please feel free to open an issue to discuss potentia
 ## License
 
 This project is currently unlicensed. (Or specify a license if one is chosen, e.g., MIT License).
+
+## Home Assistant Integration
+
+To integrate this PIM application with Home Assistant (e.g., for voice commands via Assist), add the following to your Home Assistant `configuration.yaml`.
+
+**Important:** Ensure you access the response using `.json` (e.g., `pim_response.json.message`) rather than `.content`, as `content` is the raw string body.
+
+```yaml
+# Connect to the PIM App
+rest_command:
+  pim_add_shopping_list:
+    url: "http://<PIM_IP_ADDRESS>:8080/shopping_list/add"
+    method: POST
+    payload: '{"product_name": "{{ item_name }}", "quantity": "{{ quantity }}"}'
+    content_type: 'application/json'
+    timeout: 30
+
+  pim_consume_item:
+    url: "http://<PIM_IP_ADDRESS>:8080/inventory/consume"
+    method: POST
+    payload: '{"items": [{"item_name": "{{ item_name }}", "quantity": "{{ quantity }}"}]}'
+    content_type: 'application/json'
+    timeout: 30
+
+  pim_log_purchase:
+    url: "http://<PIM_IP_ADDRESS>:8080/api/log_purchase"
+    method: POST
+    payload: '{"product_name": "{{ item_name }}", "quantity": "{{ quantity }}", "cost": "{{ cost | default("") }}", "vendor": "{{ vendor | default("") }}"}'
+    content_type: 'application/json'
+    timeout: 30
+
+# Voice Command Actions
+intent_script:
+  PimAddShoppingList:
+    action:
+      - service: rest_command.pim_add_shopping_list
+        data:
+          item_name: "{{ item_name }}"
+          quantity: "1"
+        response_variable: pim_response
+    speech:
+      text: >
+        {% if pim_response is defined and pim_response.json is defined %}
+          {{ pim_response.json.message }}
+        {% else %}
+          Done, but the PIM did not send a confirmation message.
+        {% endif %}
+
+  PimConsumeItem:
+    action:
+      - service: rest_command.pim_consume_item
+        data:
+          item_name: "{{ item_name }}"
+          quantity: "{{ quantity | default(1) }}"
+        response_variable: pim_response
+    speech:
+      text: >
+        {% if pim_response is defined and pim_response.json is defined %}
+          {{ pim_response.json.message }}
+        {% else %}
+          Done, but the PIM did not send a confirmation message.
+        {% endif %}
+
+  PimLogPurchase:
+    action:
+      - service: rest_command.pim_log_purchase
+        data:
+          item_name: "{{ item_name }}"
+          quantity: "{{ quantity }}"
+          cost: "{{ cost }}"
+          vendor: "{{ vendor }}"
+        response_variable: pim_response
+    speech:
+      text: >
+        {% if pim_response is defined and pim_response.json is defined %}
+          {{ pim_response.json.message }}
+        {% else %}
+          Done, but the PIM did not send a confirmation message.
+        {% endif %}
+```
