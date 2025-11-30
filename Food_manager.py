@@ -3216,7 +3216,8 @@ class InventoryManager:
         elif consumed_amount_total_overall == 0 and quantity_to_consume_float > 0:
              final_message = f"No quantity of '{product_name_canonical}' could be consumed (possibly none in stock or issue with parsing quantity)."
         
-        print(final_message)
+        # Logging this info instead of printing to stdout, to avoid cluttering logs or confusing integrations
+        logging.info(final_message)
         return {"success": consumed_amount_total_overall > 0, "message": final_message, "details": log_messages}
 
     def consume_multiple_items(self, items_to_consume: list, consumption_date_str: str = None):
