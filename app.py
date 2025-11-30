@@ -7,6 +7,7 @@ from RecipeManager import RecipeManager
 from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
 from io import BytesIO # For handling file streams in memory
+import json
 import os # For accessing environment variables
 import shutil # For file operations (backup/restore)
 import re # For parsing numeric quantities
@@ -194,6 +195,39 @@ def _get_unique_item_names(include_historical=False):
     # Assuming each product dict has a 'name' key
     unique_names = set(product['name'] for product in all_products if 'name' in product)
     return sorted(list(unique_names))
+
+def _get_json_robust(request):
+    """
+    Helper to robustly parse JSON from a request, handling:
+    1. Standard JSON requests (Content-Type: application/json)
+    2. Ambiguous requests (e.g. from Home Assistant) where Content-Type might be
+       form-urlencoded but the body is JSON.
+    """
+    if request.is_json:
+        return request.get_json(silent=True)
+
+    # Try force parsing
+    data = request.get_json(force=True, silent=True)
+    if data:
+        return data
+
+    # Fallback: Manual parsing of raw data
+    try:
+        raw_data = request.get_data(cache=True, as_text=True)
+        if raw_data and raw_data.strip().startswith('{'):
+            return json.loads(raw_data)
+
+        # Check form keys if raw_data failed or was empty
+        # This handles cases where Content-Type is form-urlencoded but body is JSON
+        if request.form:
+             for key in request.form.keys():
+                 if key.strip().startswith('{'):
+                     return json.loads(key)
+
+    except Exception:
+        pass
+
+    return None
 
 def resolve_consumption_items(items, depth=0):
     """
@@ -636,9 +670,11 @@ def consume_item_view():
 
         # Else, it's an 'item' consumption
         else: # consumption_type == 'item' or potentially JSON payload for multi-item
-            # Check if data is JSON (for multi-item AJAX)
-            if request.is_json:
-                data = request.get_json()
+            # Use robust JSON parsing helper
+            json_data = _get_json_robust(request)
+
+            if json_data:
+                data = json_data
                 items_to_consume = data.get('items') # Expecting a list of {'item_name': name, 'quantity': qty}
                 consumption_date_str = data.get('consumption_date', date.today().isoformat()) # Optional date
 
@@ -726,6 +762,12 @@ def consume_item_view():
                         flash(result.get("message", f"Consumption of '{item_name}' processed."), 'success')
                     else:
                         flash(result.get("message", f"Could not consume '{item_name}'."), 'error')
+
+                    # Force JSON response for Home Assistant or curl even if they sent Form data
+                    user_agent = request.headers.get('User-Agent', '')
+                    if 'HomeAssistant' in user_agent or 'curl' in user_agent or request.headers.get('Content-Type') == 'application/json':
+                         return jsonify(result)
+
                     return redirect(url_for('current_inventory_view'))
 
                 except Exception as e:
@@ -2168,7 +2210,7 @@ def add_shopping_list_item_by_name():
     Adds an item to the shopping list by name (or alias).
     JSON Payload: { "product_name": "...", "quantity": 1 }
     """
-    data = request.get_json()
+    data = _get_json_robust(request)
     if not data:
         return jsonify({"success": False, "message": "Invalid JSON data."}), 200
 
@@ -2215,7 +2257,7 @@ def add_product_alias():
     Adds an alias for an existing product.
     JSON Payload: { "product_name": "...", "alias": "..." }
     """
-    data = request.get_json()
+    data = _get_json_robust(request)
     if not data:
         return jsonify({"success": False, "message": "Invalid JSON data."}), 400
 
@@ -2246,7 +2288,7 @@ def api_log_purchase():
         "purchase_date": "YYYY-MM-DD" (optional, defaults to today)
     }
     """
-    data = request.get_json()
+    data = _get_json_robust(request)
     if not data:
         return jsonify({"success": False, "message": "Invalid JSON payload."}), 400
 
