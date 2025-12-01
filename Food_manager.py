@@ -2011,7 +2011,7 @@ class InventoryManager:
                       expiry_dt.isoformat(), str(quantity_str)))
                 conn.commit()
                 stock_item_id = cursor.lastrowid # Get the ID of the inserted item
-            print(f"Added stock to DB: {product['name']} ({quantity_str}), Expires: {expiry_dt.isoformat()}")
+            logging.info(f"Added stock to DB: {product['name']} ({quantity_str}), Expires: {expiry_dt.isoformat()}")
             return {"success": True, "message": f"Stock for '{product['name']}' added successfully.", "stock_item_id": stock_item_id}
         except sqlite3.Error as e:
             print(f"Database error adding inventory stock: {e}")
@@ -3216,7 +3216,8 @@ class InventoryManager:
         elif consumed_amount_total_overall == 0 and quantity_to_consume_float > 0:
              final_message = f"No quantity of '{product_name_canonical}' could be consumed (possibly none in stock or issue with parsing quantity)."
         
-        print(final_message)
+        # Logging this info instead of printing to stdout, to avoid cluttering logs or confusing integrations
+        logging.info(final_message)
         return {"success": consumed_amount_total_overall > 0, "message": final_message, "details": log_messages}
 
     def consume_multiple_items(self, items_to_consume: list, consumption_date_str: str = None):
@@ -3888,16 +3889,8 @@ class InventoryManager:
             "success": True
         }
 
-        print(f"\n--- Demand Projection for '{product_name}' (ID: {product_id}) ---")
-        print(f"Unit of Measure: {product_unit}")
-        print(f"Lookback: {lookback_days} days, Projection: {projection_days} days")
-        # Note: total_consumed_in_lookback is now an estimate if using the helper that only returns avg.
-        print(f"Total consumed (lookback, estimated): {total_consumed_in_lookback:.2f} {product_unit}")
-        print(f"Current stock: {current_quantity_sum:.2f} {product_unit}")
-        print(f"Avg daily consumption: {avg_daily_consumption:.2f} {product_unit}/day")
-        print(f"Est. days to depletion: {days_to_depletion_str}")
-        print(f"Projected need (next {projection_days} days): {projected_need:.2f} {product_unit}")
-        print("-----------------------------------------\n")
+        # Log projection details instead of printing
+        logging.info(f"Demand Projection for '{product_name}' (ID: {product_id}): Stock={current_quantity_sum:.2f}, AvgDaily={avg_daily_consumption:.2f}, ProjectedNeed={projected_need:.2f}")
         return result
 
     def get_future_inventory_projection(self, product_id, projection_days):
