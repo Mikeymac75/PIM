@@ -19,4 +19,6 @@ export PYTHONUNBUFFERED=1
 # 3. Start the App using Gunicorn for stability
 # Binding to 0.0.0.0:8080 as required by config.yaml
 # Added logfile flags to send logs to stdout/stderr
-gunicorn --bind 0.0.0.0:8080 --access-logfile - --error-logfile - app:app
+# Workers=2 allows concurrency (e.g. voice command while upload processes)
+# Timeout=120 allows longer operations like bulk uploads or projections
+gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 120 --access-logfile - --error-logfile - app:app
