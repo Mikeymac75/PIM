@@ -75,9 +75,6 @@ class InventoryManager:
             with closing(self._get_db_connection()) as conn:
                 cursor = conn.cursor()
 
-                # Enable Write-Ahead Logging for better concurrency
-                cursor.execute('PRAGMA journal_mode=WAL;')
-
                 # Products Table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS products (
