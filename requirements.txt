@@ -4,3 +4,4 @@ pytest
 Flask-Login
 Flask-Limiter
 gunicorn
+requests

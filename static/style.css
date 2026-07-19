@@ -1,756 +1,339 @@
-/* Primary Font: Lato */
-/* General Body Styles */
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+:root {
+    --bg-main: #0f172a;
+    --bg-card: #1e293b;
+    --bg-header: rgba(15, 23, 42, 0.85);
+    --bg-input: #334155;
+    
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-light: rgba(59, 130, 246, 0.15);
+    
+    --border-color: #334155;
+    --border-light: rgba(255, 255, 255, 0.05);
+    
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    
+    --glass-blur: blur(16px);
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+    
+    --transition: all 0.25s ease;
+}
+
 body {
-    font-family: 'Lato', Arial, sans-serif; /* Changed from Roboto */
+    font-family: 'Outfit', sans-serif;
     margin: 0;
     padding: 0;
-    background-color: #f4f4f4;
-    color: #333;
+    background: var(--bg-main);
+    color: var(--text-primary);
     line-height: 1.6;
+    min-height: 100vh;
 }
 
-/* Container for overall layout */
+/* Container */
 .container {
-    width: 80%;
+    width: 90%;
+    max-width: 1200px;
     margin: auto;
-    overflow: hidden;
-    padding: 0 30px;
+    padding: 0 20px;
 }
 
-/* Header and Navigation Styles */
+/* Header & Nav */
 header {
-    background: #343a40; /* Lighter dark gray */
-    color: #fff;
-    padding-top: 30px;
-    min-height: 70px;
-    border-bottom: #007bff 3px solid; /* New blue accent */
-    position: relative; /* For stacking context */
-    z-index: 10; /* Ensure header is above main content for dropdown visibility */
-    overflow: visible; /* Explicitly allow content (dropdowns) to overflow header bounds */
+    background: var(--bg-header);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: var(--shadow-sm);
+    padding: 12px 0;
 }
 
-/* Allow dropdowns to overflow the header's container */
-header .container {
-    overflow: visible;
+header::after { content: ""; clear: both; display: table; }
+header .container::after { content: ""; clear: both; display: table; }
+
+header #branding { float: left; }
+
+header #branding h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.5px;
 }
 
-header a {
-    color: #fff;
-    text-decoration: none;
-    text-transform: uppercase;
-    font-size: 16px;
-}
+header nav { float: right; }
 
 header ul {
     padding: 0;
     margin: 0;
     list-style: none;
-    overflow: visible; /* Changed from hidden to prevent dropdown clipping */
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
-header #branding {
-    float: left;
+header a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 15px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    transition: var(--transition);
 }
 
-header #branding h1 {
-    margin: 0;
-    font-size: 24px; /* Ensure h1 in header is sized appropriately */
+header a:hover, header .current a {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
 }
 
-header nav {
-    float: right;
-    margin-top: 0px; /* Adjust to align with branding */
-}
-
-header .highlight, header .current a {
-    color: #007bff; /* New blue accent */
-    font-weight: bold;
-}
-
-header a:hover {
-    color: #007bff; /* New blue accent */
-}
-
-header li {
-    float: left;
-    display: inline;
-    padding: 0 20px 0 20px;
-}
-
-header nav ul li a i {
-    margin-right: 7px; /* Standardized margin */
-}
-
-/* Dropdown Menu Styles */
-.dropdown {
-    position: relative;
-    display: inline-block;
-    z-index: 5; /* Added to control stacking context within header */
-}
+/* Dropdown */
+.dropdown { position: relative; display: inline-block; z-index: 105; }
 
 .dropdown-content {
     display: none;
     position: absolute;
-    background-color: #343a40; /* Match header background */
-    min-width: 200px; /* Adjust as needed */
-    box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-    z-index: 9999; /* Significantly increased z-index for testing */
-    border-top: 3px solid #007bff; /* Blue accent to match header bottom border */
-}
-
-.dropdown-content a {
-    color: #fff; /* White text for links */
-    padding: 12px 16px;
-    text-decoration: none;
-    display: block;
-    text-transform: none; /* Override uppercase from header a if needed */
-    font-size: 15px; /* Slightly smaller than main nav items */
-}
-
-.dropdown-content a i {
-    margin-right: 10px; /* Space for icons in dropdown */
-}
-
-.dropdown-content a:hover {
-    background-color: #007bff; /* Blue background on hover */
-    color: #fff; /* Ensure text remains white */
+    top: 100%;
+    left: 0;
+    background: var(--bg-card);
+    min-width: 200px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    margin-top: 0;
+    opacity: 0;
+    transform: translateY(5px);
+    transition: opacity 0.2s, transform 0.2s;
 }
 
 .dropdown:hover .dropdown-content {
     display: block;
+    opacity: 1;
+    transform: translateY(0);
 }
 
-.dropdown .dropbtn i.fa-caret-down {
-    margin-left: 5px; /* Space before the caret icon */
+.dropdown-content a {
+    padding: 12px 16px;
+    display: block;
+    border-bottom: 1px solid var(--border-light);
+    border-radius: 0;
 }
-/* End Dropdown Menu Styles */
+.dropdown-content a:last-child { border-bottom: none; }
+.dropdown-content a:hover {
+    background: var(--bg-input);
+    color: var(--text-primary);
+}
 
-/* Main Content Area */
+/* Main Content */
 .main-content {
-    padding: 30px; /* Increased padding */
-    background: #fff;
-    margin-top: 20px;
-    box-shadow: 0 0 15px rgba(0,0,0,0.07); /* Softer shadow */
-    position: relative; /* Ensure it's part of stacking context */
-    z-index: 1; /* Below the header */
+    padding: 40px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    margin-top: 40px;
+    margin-bottom: 40px;
+    box-shadow: var(--shadow-md);
 }
 
-/* Headings */
-h1, h2, h3 {
-    color: #333;
+h1, h2, h3, h4, h5 {
+    color: var(--text-primary);
+    font-weight: 600;
+    letter-spacing: -0.5px;
 }
-
-h1, h1.page-title { /* For main titles on each page */
-    font-size: 2.8em;
-    font-weight: 700;
-    margin-bottom: 30px; /* Increased bottom margin */
-    color: #333;
-    border-bottom: 1px solid #eee; /* Retain border for page-title consistency */
-    padding-bottom: 10px; /* Retain padding for page-title consistency */
-}
-
-h2 {
+h1.page-title {
     font-size: 2.2em;
-    font-weight: 600;
-    margin-bottom: 25px;
+    margin-bottom: 30px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 15px;
 }
 
-h3 {
-    font-size: 1.8em;
-    font-weight: 600;
-    margin-bottom: 20px;
-}
-
-/* Paragraph Spacing */
-p {
-    margin-bottom: 1.5em;
-}
-
-/* Form Styling */
-.form-group {
-    margin-bottom: 25px; /* Increased bottom margin */
-}
-
+/* Forms */
+.form-group { margin-bottom: 24px; }
 .form-group label {
     display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.95em;
 }
-
-.form-control, /* For text, date, number, textarea, select */
-.form-control-file { /* For file inputs */
+.form-control, .form-control-file, select {
     width: 100%;
-    padding: 10px 12px; /* Adjusted padding */
-    border: 1px solid #ddd;
-    border-radius: 6px; /* Increased border-radius */
-    box-sizing: border-box; /* Important for width 100% */
-    margin-top: 2px; /* Small space after label if needed */
+    padding: 12px 16px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-family: 'Outfit', sans-serif;
+    font-size: 1em;
+    transition: var(--transition);
+    box-sizing: border-box;
 }
 
-.form-control-file { /* Specific styling for file input if needed */
-    background-color: #fff; /* Default background */
+/* FIX for invisible dropdown options */
+select option {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
 }
 
-.form-control:focus {
-    border-color: #007bff; /* New blue accent */
+.form-control:focus, select:focus {
     outline: none;
-    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25); /* New blue accent RGBA */
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-light);
 }
 
-.form-group small.help-text { /* Class for help text below inputs */
-    display: block;
-    font-size: 0.9em;
-    color: #777;
-    margin-top: 3px;
+/* Buttons */
+.button, .nav-link-button {
+    display: inline-block;
+    padding: 10px 20px;
+    background: var(--accent);
+    color: #fff !important;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.95em;
+    cursor: pointer;
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition);
+}
+.button:hover, .nav-link-button:hover {
+    background: var(--accent-hover);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+.button[disabled] {
+    background: var(--border-color);
+    color: var(--text-muted) !important;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
 }
 
-/* Table Styles */
+/* Tables */
+.table-responsive-wrapper { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border-color); }
 table {
     width: 100%;
     border-collapse: collapse;
-    margin-top: 20px;
-    /* box-shadow: 0 1px 2px rgba(0,0,0,0.05); */ /* Removed box-shadow for a flatter look */
-    border-top: 1px solid #dee2e6; /* Added top border to frame the table */
+    background: var(--bg-main);
 }
-
 th, td {
-    padding: 18px; /* Increased padding */
-    border: none; /* Remove all borders first */
-    border-bottom: 1px solid #dee2e6; /* Add bottom border only for horizontal rules */
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-color);
     text-align: left;
-    vertical-align: middle; /* Better vertical alignment for cell content */
 }
-
 th {
-    background-color: #e9ecef; /* Light gray background for headers */
-    color: #212529; /* Dark text color for headers */
-    font-weight: bold; /* Keep font weight bold */
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--bg-input); }
 
-/* Specific Table Header Colors */
-th.current-inventory-header { background-color: #5cb85c; color: #fff; }
-th.historical-inventory-header { background-color: #d9534f; color: #fff; }
-th.projections-header { background-color: #337ab7; color: #fff; }
-th.recipe-ingredients-header { background-color: #4CAF50; color: #fff; } /* Distinct green for recipe ingredients */
-th.recipe-list-header { background-color: #007bff; color: #fff; } /* Example for a general recipe list if needed */
-/* Specific themed headers like th.current-inventory-header will override the general th background and color, but inherit border-bottom */
+/* Specific Header Overrides */
+th.current-inventory-header { border-bottom: 2px solid var(--success); }
+th.historical-inventory-header { border-bottom: 2px solid var(--danger); }
+th.projections-header { border-bottom: 2px solid var(--accent); }
+th.recipe-ingredients-header { border-bottom: 2px solid var(--success); }
+th.recipe-list-header { border-bottom: 2px solid var(--accent); }
+th.product-list-header { border-bottom: 2px solid var(--text-secondary); }
 
-
-tr:nth-child(even) {
-    background-color: #f8f9fa; /* Very light gray for subtle zebra striping */
-}
-
-tr:hover td { /* Target td to ensure background covers cells */
-    background-color: #e9ecef; /* Slightly more noticeable hover, matches general th background */
-}
+/* Table specific rows */
+tr.below-par-level td { background-color: rgba(245, 158, 11, 0.1) !important; color: #fcd34d !important; }
+tr.override-active td { background-color: rgba(59, 130, 246, 0.05); }
+.ingredients-table tr.insufficient td { background-color: rgba(239, 68, 68, 0.1) !important; color: #fca5a5 !important; }
 
 /* Links */
-a {
-    color: #007bff; /* New blue accent */
-    text-decoration: none;
-}
-
-a:hover {
-    color: #0056b3; /* Darker shade of new blue */
-    text-decoration: underline;
-}
-
-/* Buttons and Nav Links (outside header) */
-.button, .nav-link-button {
-    display: inline-block;
-    margin-top: 20px;
-    padding: 10px 20px; /* Adjusted padding */
-    background-color: #007bff; /* New blue accent */
-    color: white !important; /* Ensure text is white */
-    border-radius: 6px; /* Increased border-radius */
-    text-decoration: none;
-    border: none; /* Maintained flat look */
-    cursor: pointer;
-    font-size: 1em; /* Ensured font size consistency */
-    margin-right: 10px; /* Added for spacing between adjacent buttons */
-    margin-bottom: 10px; /* Added for spacing when buttons wrap */
-    transition: background-color 0.2s ease-out, box-shadow 0.2s ease-out; /* Updated transitions */
-}
-
-.button:hover, .nav-link-button:hover {
-    background-color: #0056b3; /* Darker shade of new blue */
-    text-decoration: none; /* Ensure no underline appears on hover */
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Added subtle box-shadow */
-}
-
-.button:focus, .nav-link-button:focus {
-    outline: none; /* Remove default browser outline */
-    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.35); /* Focus shadow */
-}
-
-.button i, .nav-link-button i {
-    margin-right: 7px; /* Standardized margin */
-}
-
+a { color: var(--accent); text-decoration: none; transition: var(--transition); }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
 
 /* Messages */
-.empty-message {
-    margin-top: 20px;
-    font-style: italic;
-    color: #777;
-}
-
 .flash-message {
-    padding: 10px;
-    margin: 10px 0;
-    border-radius: 4px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.07); /* Add subtle shadow */
+    padding: 16px 20px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+    font-weight: 500;
+    border-left: 4px solid;
+    background: var(--bg-input);
 }
-.flash-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-.flash-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-.flash-info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-.flash-detail_error { /* For multi-line errors like Excel upload row errors */
-    background-color: #fcf8e3; /* Light yellow */
-    color: #8a6d3b;
-    border: 1px solid #faebcc;
-    font-size: 0.9em;
-    margin-left: 20px; /* Indent detail errors */
-}
+.flash-success { border-color: var(--success); color: #6ee7b7; }
+.flash-error, .flash-danger { border-color: var(--danger); color: #fca5a5; }
+.flash-info { border-color: var(--accent); color: #93c5fd; }
+.flash-warning { border-color: var(--warning); color: #fcd34d; }
 
-/* Recipe Card Styling (for recipes_list.html) */
+/* Status Text */
+.status-ok { color: var(--success); font-weight: 600; }
+.status-needed { color: #fca5a5; font-weight: 600; }
+.status-danger { color: var(--danger); font-weight: 600; }
+.status-warning { color: var(--warning); font-weight: 600; }
+.status-info { color: var(--accent); font-weight: 600; }
+
+/* Recipe Cards */
 .recipes-container {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); /* Responsive cards */
-    gap: 30px; /* Increased gap */
-    margin-top: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 24px;
 }
 .recipe-card {
-    background-color: #fff;
-    border: 1px solid #ddd;
-    border-radius: 8px; /* Increased border-radius */
-    padding: 30px; /* Increased padding */
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08); /* Refined shadow */
-    transition: transform 0.2s ease-out, box-shadow 0.2s ease-out; /* Smooth transition */
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 24px;
+    transition: var(--transition);
 }
-
 .recipe-card:hover {
-    transform: translateY(-5px); /* Lift effect */
-    box-shadow: 0 4px 10px rgba(0,0,0,0.15); /* Enhanced shadow */
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--text-muted);
 }
+.recipe-card h2 { margin-top: 0; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
 
-.recipe-card h2 {
-    margin-top: 0;
-    font-size: 1.6em; /* Adjusted font size */
-    padding-bottom: 15px; /* Increased separation for header */
-    margin-bottom: 20px; /* Increased space below header */
-    border-bottom: 1px solid #eee; /* Line below header */
+/* Modals */
+.modal-content {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    color: var(--text-primary);
+    box-shadow: var(--shadow-lg);
+    margin: 5% auto;
+    width: 85%;
+    max-width: 800px;
+    padding: 32px;
 }
-.recipe-card h2 a {
-    color: #007bff; /* New blue accent */
-}
-.recipe-card h2 a:hover {
-    text-decoration: underline;
-    color: #0056b3; /* Darker shade of new blue */
-}
-.recipe-description {
-    font-size: 1em; /* Adjusted font size */
-    line-height: 1.7; /* Added line-height for readability */
-    color: #555;
-    margin-bottom: 0;
-    min-height: 40px; /* Ensure some space even if description is short */
-}
+.modal-content h3 { border-bottom: 1px solid var(--border-color); padding-bottom: 12px; }
+.close-button { color: var(--text-secondary); transition: var(--transition); }
+.close-button:hover { color: var(--text-primary); }
 
-/* Ingredient Status Styling (for recipe_detail.html) */
-.ingredients-table tr.insufficient td {
-    background-color: #ffebee !important; /* Light red for rows with insufficient ingredients - !important to override nth-child */
-    color: #c62828; /* Darker red text for contrast */
-}
-.status-ok {
-    color: #2e7d32;
-    font-weight: bold;
-}
-.status-needed {
-    color: #c62828;
-    font-weight: bold;
-}
-.status-danger {
-    color: #dc3545;
-    font-weight: bold;
-}
-.status-warning {
-    color: #ffc107;
-    font-weight: bold;
-}
-.status-info {
-    color: #17a2b8;
-    font-weight: bold;
-}
-.button[disabled] {
-    background-color: #ccc;
-    cursor: not-allowed;
-}
-.excel-instructions {
-    background-color: #e9f5e9;
-    border: 1px solid #c8e6c9;
-    padding: 15px;
-    border-radius: 5px;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08); /* Add shadow */
-}
-.excel-instructions h3 {
-    margin-top: 0;
-    color: #2e7d32;
-}
-.excel-instructions ul {
-    list-style-type: disc;
-    margin-left: 20px;
-}
-.example-table {
-    width: auto; /* Don't force full width for example */
-    margin-top: 10px;
-    font-size: 0.9em;
-}
-.example-table th, .example-table td {
-    padding: 8px;
-    border: 1px solid #a5d6a7; /* Keep existing specific styling for example tables */
-}
-.example-table th {
-    background-color: #a5d6a7; /* Keep existing specific styling for example tables */
-    color: #1b5e20; /* Keep existing specific styling for example tables */
-}
+/* Misc Utilities */
+.text-right { text-align: right !important; }
+.text-center { text-align: center !important; }
 
-
-/* Footer Styles */
+/* Footer */
 footer {
     text-align: center;
-    padding: 20px;
-    margin-top: 30px;
-    color: #777;
-    border-top: 1px solid #eee;
+    padding: 24px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-color);
+    margin-top: 40px;
+    font-size: 0.9em;
 }
 
-/* Basic Responsiveness */
-@media (max-width: 768px) {
-    .container {
-        width: 95%; /* Use more screen width on smaller devices */
-        padding: 0 10px;
-    }
-
-    header #branding,
-    header nav,
-    header nav li {
-        float: none;
-        text-align: center;
-        width: 100%;
-    }
-
-    header nav ul {
-        margin-top: 10px;
-    }
-    header nav li {
-        padding: 10px 0; /* Stack nav items */
-    }
-
-    .ingredient-row { /* For add_recipe.html */
-        flex-direction: column;
-        gap: 5px;
-        align-items: stretch;
-    }
-    .ingredient-row .form-group {
-        flex-basis: auto !important; /* Reset flex-basis */
-        margin-bottom: 10px; /* Add some space back */
-    }
-
-    .recipes-container {
-        grid-template-columns: 1fr; /* Stack recipe cards to a single column */
-    }
-}
-
-/* Responsive Table Wrapper */
-.table-responsive-wrapper {
-    overflow-x: auto; /* Enable horizontal scroll if table is wider than container */
-    margin-top: 20px; /* Consistent with table's default margin-top */
-    margin-bottom: 20px; /* Space after the table */
-}
-
-/* Utility class for text alignment in tables */
-.text-right {
-    text-align: right !important;
-}
-.text-center {
-    text-align: center !important;
-}
-
-/* Styling for Excel Upload Instructions Page */
-/* .excel-instructions rule is defined earlier with other card-like styles */
-.excel-instructions h3 {
-    margin-top: 0;
-    color: #2e7d32; /* Darker green for heading */
-}
-.excel-instructions ul {
-    list-style-type: disc;
-    margin-left: 20px; /* Standard indentation for list */
-}
-.example-table { /* For the small example table in instructions */
-    width: auto; /* Don't force full width */
-    margin-top: 10px;
-    font-size: 0.9em; /* Slightly smaller text */
-}
-.example-table th, .example-table td {
-    padding: 8px;
-    border: 1px solid #a5d6a7; /* Lighter green border */
-}
-.example-table th {
-    background-color: #a5d6a7; /* Lighter green for header */
-    color: #1b5e20; /* Dark green text */
-}
-
-/* Styling for rows below par level in current inventory */
-tr.below-par-level td {
-    background-color: #fff3cd !important; /* Light yellow, !important to override nth-child even row color */
-    color: #856404; /* Dark yellow/brown text for contrast */
-    font-weight: bold; /* Make text bold to draw attention */
-}
-tr.below-par-level:hover td {
-    background-color: #ffeeba !important; /* Slightly darker yellow on hover */
-}
-
-/* Styling for Add Recipe Ingredients Section */
-.ingredients-section {
-    border: 1px solid #eee;
-    padding: 15px;
-    border-radius: 5px;
-    background-color: #f9f9f9;
-    margin-top: 10px; /* Space above the section */
-}
-.ingredient-row {
-    display: flex;
-    gap: 15px; /* Space between name and quantity */
-    margin-bottom: 10px;
-    align-items: flex-end; /* Align labels and inputs nicely */
-}
-.ingredient-row:last-child {
-    margin-bottom: 0; /* No bottom margin for the last row */
-}
-.ingredient-row .form-group {
-    flex: 1; /* Allow them to grow */
-    margin-bottom: 0; /* Remove bottom margin from individual groups in a row */
-}
-.ingredient-name { flex-basis: 60%; } /* Item name takes more space */
-.ingredient-quantity { flex-basis: 35%; }
-
-/* Product List Table Header Color */
-th.product-list-header { background-color: #6c757d; color: #fff; }
-
-/* Styling for Demand Projections Override Feature */
-.projections-header { /* Minor adjustment for consistency if needed, or leave as is */
-    /* text-align: left; */ /* Example, if headers need specific alignment */
-}
-
-.override-input {
-    width: 80px; /* Adjust width as needed */
-    padding: 5px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    box-sizing: border-box; /* Important for width calculation */
-}
-
-.override-input:focus {
-    border-color: #007bff;
-    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
-}
-
-tr.override-active {
-    background-color: #e6f7ff; /* A light blue background for overridden rows */
-    font-weight: normal; /* Ensure text isn't unexpectedly bolded unless specified */
-}
-
-tr.override-active td {
-    /* font-weight: bold; */ /* Optional: if you want all text in active override rows to be bold */
-}
-
-.override-indicator {
-    font-size: 0.8em;
-    color: #007bff; /* Blue to match focus rings or primary buttons */
-    margin-left: 5px;
-    font-style: italic;
-    font-weight: bold; /* Make the (Override) text stand out */
-}
-
-/* Ensure the save button has some spacing if it's too close to the table */
-/* The inline style 'margin-top: 15px;' was added in the HTML, which is fine. */
-/* form[action*="save_overrides_view"] button[type="submit"] { */
-/* margin-top: 15px; */
-/* } */
-
-/* Product Detail Modal Styles */
-#productDetailModal {
-    display: none; /* Default state */
-    position: fixed;
-    z-index: 1000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0,0,0,0.4);
-}
-
-.modal-content {
-    background-color: #fefefe;
-    margin: 10% auto;
-    padding: 30px; /* Increased padding */
-    border: 1px solid #bbb; /* Slightly darker border */
-    width: 75%; /* Adjusted width */
-    max-width: 800px; /* Max width */
-    border-radius: 8px; /* Adjusted border-radius */
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3); /* More pronounced shadow */
-}
-
-/* Modal Header (Flex container for title and close button) */
-.modal-content h3 { /* Targeting the h3 directly as a simple header area */
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #e0e0e0; /* Lighter border */
-    padding-bottom: 20px; /* Increased padding */
-    margin-bottom: 25px; /* Increased margin */
-    margin-top: 0; /* Remove default h3 margin top */
-    font-size: 1.8em; /* Larger title */
-    color: #333;
-}
-
-/* Actual span for product name, if needed for specific styling, otherwise h3 styling applies */
-#modalProductName {
-    /* No specific styles needed if h3 covers it, unless for color or font weight */
-}
-
-.close-button {
-    color: #888; /* Darker gray */
-    /* float: right; -- Not needed with flex header */
-    font-size: 32px; /* Larger size */
-    font-weight: bold;
-    padding: 0 5px; /* Add some padding for easier clicking */
-    line-height: 1; /* Ensure consistent vertical alignment */
-}
-
-.close-button:hover,
-.close-button:focus {
-    color: #333; /* Darker on hover */
-    text-decoration: none;
-    cursor: pointer;
-}
-
-.modal-body {
-    display: flex;
-    flex-wrap: wrap; /* Allow panels to wrap on smaller screens if needed */
-    gap: 20px; /* Space between left and right panels */
-}
-
-.modal-left-panel {
-    flex: 1;
-    min-width: 280px; /* Slightly increased min-width */
-    /* padding-right: 20px; -- Replaced by gap in modal-body */
-}
-
-.modal-right-panel {
-    flex: 2; /* Give more space to charts */
-    min-width: 450px; /* Ensure charts have enough space */
-    display: flex;
-    flex-direction: column;
-    gap: 15px; /* Space between chart title and canvas, and between charts */
-}
-
-.modal-left-panel h4, .modal-right-panel h4 {
-    margin-top: 0;
-    margin-bottom: 10px;
-    color: #555;
-    font-size: 1.1em;
-    border-bottom: 1px solid #eee;
-    padding-bottom: 5px;
-}
-
-#modalProductInfo {
-    list-style-type: none;
-    padding: 0;
-    font-size: 1em; /* Adjusted font size for readability */
-}
-
-#modalProductInfo li {
-    margin-bottom: 12px; /* Increased margin */
-    padding-bottom: 10px; /* Increased padding */
-    border-bottom: 1px dashed #e0e0e0; /* Lighter dashed border */
-    line-height: 1.5;
-    font-size: 1em; /* Ensured font size is 1em */
-}
-#modalProductInfo li:last-child {
-    border-bottom: none; /* No border for the last item */
-}
-
-#modalProductInfo li strong {
-    color: #222; /* Darker label color */
-    margin-right: 8px; /* Increased margin */
-    font-weight: 600; /* Slightly bolder */
-}
-
-/* Chart Canvas Styling */
-#dailyConsumptionChart, #monthlyConsumptionChart {
-    width: 100% !important; /* Ensure canvas takes full width of its container */
-    height: 280px !important; /* Fixed height, adjust as needed. Chart.js will scale. */
-    /* margin-bottom: 20px; -- Handled by gap in .modal-right-panel */
-    border: 1px solid #eee; /* Optional: border around canvas */
-    border-radius: 4px; /* Optional: rounded corners for canvas */
-}
-
-/* Product Name Links */
-.product-name-link {
-    color: #007bff;
-    text-decoration: none;
-    cursor: pointer;
-    font-weight: 500; /* Slightly bolder than normal text */
-}
-
-.product-name-link:hover {
-    text-decoration: underline;
-    color: #0056b3; /* Darker blue on hover */
-}
-
-
-/* Responsive adjustments for Modal */
-@media (max-width: 768px) {
-    .modal-content {
-        width: 95%;
-        margin: 5% auto; /* Less top/bottom margin for small screens */
-        padding: 15px; /* Slightly less padding */
-    }
-
-    .modal-body {
-        flex-direction: column; /* Stack panels */
-    }
-
-    .modal-left-panel, .modal-right-panel {
-        flex-basis: auto; /* Reset flex basis to allow natural sizing in column */
-        min-width: 100%; /* Take full width when stacked */
-        padding-right: 0; /* No padding when stacked */
-    }
-
-    .modal-right-panel {
-        margin-top: 20px; /* Add space between stacked panels */
-    }
-
-    #dailyConsumptionChart, #monthlyConsumptionChart {
-        height: 220px !important; /* Reduce chart height on smaller screens */
-    }
-    .modal-content h3 {
-        font-size: 1.3em; /* Smaller title on mobile */
-    }
-}
-
-/* Clearfix for header container to wrap floated children */
-header .container::after {
-  content: "";
-  clear: both;
-  display: table;
-}
-
-/* Clearfix for header UL to wrap floated LI elements */
-header ul::after {
-  content: "";
-  clear: both;
-  display: table;
-}
+/* Scrollbar customization */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-main); }
+::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }

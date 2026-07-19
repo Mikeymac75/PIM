@@ -1564,6 +1564,20 @@ class InventoryManager:
         except sqlite3.Error as e:
             return {"success": False, "message": f"Database error adding alias: {e}"}
 
+    
+    def get_all_aliases(self):
+        """Retrieves all product aliases as a dictionary {alias_name: product_id}."""
+        aliases = {}
+        try:
+            with closing(self._get_db_connection()) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT alias_name, product_id FROM product_aliases")
+                for row in cursor.fetchall():
+                    aliases[row['alias_name'].lower()] = row['product_id']
+        except Exception as e:
+            print(f"Error fetching aliases: {e}")
+        return aliases
+
     def get_similar_products(self, name, limit=3, cutoff=0.4):
         """Finds similar product names or aliases using fuzzy matching."""
         suggestions = set()

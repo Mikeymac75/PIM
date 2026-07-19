@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Receipt Scanner{% endblock %}
+
+{% block page_header %}
+    <h1 class="page-title">Scan Receipt</h1>
+{% endblock %}
+
+{% block content %}
+    <div class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash-message flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        {% if not parsed_items %}
+            <!-- STATE 1: Paste Text -->
+            <div style="max-width: 600px; margin: auto;">
+                <h3 style="text-align: center; margin-bottom: 20px;">Use your phone's camera to copy receipt text, and paste it below:</h3>
+                <form method="POST" action="{{ url_for('receipt_scanner') }}">
+                    <div class="form-group">
+                        <textarea class="form-control" name="raw_text" rows="12" placeholder="Paste your receipt text here... Example:
+1x Milk 2L .99
+2 Bananas .50
+GROUND BEEF .00" required></textarea>
+                    </div>
+                    <div class="text-center" style="margin-top: 30px;">
+                        <button type="submit" class="button"><i class="fas fa-magic"></i> Parse Receipt</button>
+                    </div>
+                </form>
+            </div>
+        {% else %}
+            <!-- STATE 2: Confirmation -->
+            <h2 style="margin-top: 0;">Confirm Items</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 20px;">Please review the items extracted from your receipt. Match them to your existing database products, correct any quantities, and click Submit!</p>
+
+            <form method="POST" action="{{ url_for('receipt_confirm') }}">
+                <div class="table-responsive-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Original Text Found</th>
+                                <th style="width: 150px;">Quantity</th>
+                                <th>Map to PIM Product</th>
+                                <th style="width: 100px; text-align: center;">Ignore?</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in parsed_items %}
+                            <tr>
+                                <td style="color: var(--text-muted);">{{ item.original_text }}</td>
+                                <td>
+                                    <input type="number" step="0.01" min="0" class="form-control" name="qty_{{ loop.index0 }}" value="{{ item.quantity }}" style="padding: 8px;">
+                                </td>
+                                <td>
+                                    <input type="hidden" name="alias_text_{{ loop.index0 }}" value="{{ item.clean_text }}">
+                                    <select class="form-control" name="product_id_{{ loop.index0 }}">
+                                        <option value="">-- Do Not Import --</option>
+                                        {% for product in all_products %}
+                                            <option value="{{ product.id }}" {% if product.id == item.best_match_id %}selected{% endif %}>{{ product.name }} ({{ product.category_name }})</option>
+                                        {% endfor %}
+                                    </select>
+                                </td>
+                                <td style="text-align: center;">
+                                    <input type="checkbox" name="ignore_{{ loop.index0 }}" value="yes" style="transform: scale(1.5);">
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- We also need to ask for purchase location, optional -->
+                <div class="form-group" style="margin-top: 30px; max-width: 400px;">
+                    <label>Purchase Location (Optional)</label>
+                    <input type="text" class="form-control" name="purchase_location" placeholder="e.g. Costco, Walmart">
+                </div>
+
+                <div style="margin-top: 30px;">
+                    <button type="submit" class="button"><i class="fas fa-check-circle"></i> Add to Inventory</button>
+                    <a href="{{ url_for('receipt_scanner') }}" class="button" style="background: var(--bg-input); color: var(--text-primary) !important; margin-left: 10px;">Cancel</a>
+                </div>
+            </form>
+        {% endif %}
+    </div>
+{% endblock %}

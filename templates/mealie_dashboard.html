@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Mealie Integration{% endblock %}
+{% block page_header %}<h1><i class="fas fa-sync-alt"></i> Mealie Integration</h1>{% endblock %}
+{% block content %}
+<div class="mealie-dashboard">
+    {% if not mealie_connected %}
+    <div class="alert alert-warning">
+        <h3><i class="fas fa-exclamation-triangle"></i> Mealie Not Connected</h3>
+        <p>Set MEALIE_URL and MEALIE_API_TOKEN environment variables.</p>
+    </div>
+    {% else %}
+    <div class="alert alert-success">
+        <h3><i class="fas fa-check-circle"></i> Connected to Mealie</h3>
+        <p>Version: {{ mealie_version }}</p>
+    </div>
+
+    <div class="sync-stats" style="display:flex;gap:20px;margin:20px 0;">
+        <div style="flex:1;background:#f8f9fa;padding:20px;border-radius:8px;text-align:center;">
+            <h4>PIM Recipes</h4><span style="font-size:2em;">{{ pim_recipes|length }}</span>
+        </div>
+        <div style="flex:1;background:#f8f9fa;padding:20px;border-radius:8px;text-align:center;">
+            <h4>Mealie Recipes</h4><span style="font-size:2em;">{{ mealie_recipes|length }}</span>
+        </div>
+        <div style="flex:1;background:#f8f9fa;padding:20px;border-radius:8px;text-align:center;">
+            <h4>In Both</h4><span style="font-size:2em;">{{ in_both|length }}</span>
+        </div>
+    </div>
+
+    <hr>
+    <h3><i class="fas fa-arrow-right"></i> Only in PIM ({{ only_in_pim|length }})</h3>
+    {% if only_in_pim %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Recipe</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for recipe in only_in_pim %}
+            <tr>
+                <td>{{ recipe.name }}</td>
+                <td><button class="button button-small"
+                        onclick="exportToMealie({{ recipe.id }}, '{{ recipe.name|e }}')"><i class="fas fa-upload"></i>
+                        Export</button></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}<p><em>No recipes to export.</em></p>{% endif %}
+
+    <hr>
+    <h3><i class="fas fa-arrow-left"></i> Only in Mealie ({{ only_in_mealie|length }})</h3>
+    {% if only_in_mealie %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Recipe</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for recipe in only_in_mealie %}
+            <tr>
+                <td>{{ recipe.name }}</td>
+                <td><button class="button button-small"
+                        onclick="importFromMealie('{{ recipe.slug }}', '{{ recipe.name|e }}')"><i
+                            class="fas fa-download"></i> Import</button></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}<p><em>No recipes to import.</em></p>{% endif %}
+
+    <div style="margin-top:30px;"><a href="{{ url_for('what_can_i_cook') }}" class="button"><i
+                class="fas fa-utensils"></i> What Can I Cook?</a></div>
+    {% endif %}
+</div>
+<script>
+function exportToMealie(id, name) {
+    if (!confirm('Export "' + name + '" to Mealie?')) return;
+    fetch('/api/mealie/export/' + id, {method:'POST'}).then(r=>r.json()).then(d=>{alert(d.message);if(d.success)location.reload();});
+}
+function importFromMealie(slug, name) {
+    if (!confirm('Import "' + name + '" from Mealie?')) return;
+    fetch('/api/mealie/import/' + slug, {method:'POST'}).then(r=>r.json()).then(d=>{alert(d.message);if(d.success)location.reload();});
+}
+</script>
+{% endblock %}

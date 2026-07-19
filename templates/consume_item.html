@@ -27,7 +27,7 @@
         </div>
 
         <div id="item_fields" style="display: block;"> <!-- Default to showing item fields -->
-            <p>Select items to consume (max 10):</p>
+            <p id="item_fields_header">Select items to consume (max 10):</p>
             <div id="item_list_container" class="item-list-container">
                 {% if item_names %}
                     {% for name in item_names %}
@@ -62,6 +62,7 @@
                 <label for="num_batches_recipe">Number of Batches:</label>
                 <input type="number" id="num_batches_recipe" name="num_batches" class="form-control" value="1" min="1" style="width: 100px;">
             </div>
+            <input type="hidden" name="add_ons_hidden" id="add_ons_hidden" value="[]">
             <input type="hidden" name="origin_page" value="consume_item_page">
         </div>
         
@@ -163,18 +164,18 @@
             function toggleFields() {
                 if (typeItemRadio.checked) {
                     itemFieldsDiv.style.display = 'block';
+                    document.getElementById('item_fields_header').innerText = "Select items to consume (max 10):";
                     recipeFieldsDiv.style.display = 'none';
                     if(recipeNameSelect) {
                         recipeNameSelect.required = false;
-                        // consumeForm.action = originalFormAction; // Reset action when switching to item
                     }
-                    // For item consumption, use JS to submit, so button type is 'button'
                     submitButton.innerHTML = '<i class="fas fa-check-circle"></i> Consume Selected Items';
                     submitButton.type = 'button';
-                    consumeForm.action = originalFormAction; // Explicitly set for item consumption
+                    consumeForm.action = originalFormAction;
                     updateCheckedCountAndLimit();
                 } else { // Recipe selected
-                    itemFieldsDiv.style.display = 'none';
+                    itemFieldsDiv.style.display = 'block';
+                    document.getElementById('item_fields_header').innerText = "Select Optional Add-ons:";
                     recipeFieldsDiv.style.display = 'block';
                     if(recipeNameSelect) {
                         recipeNameSelect.required = true;
@@ -296,6 +297,21 @@
                     });
 
                 } else {
+                    // For recipe type, gather add-ons if any
+                    let addOns = [];
+                    itemCheckboxes.forEach(cb => {
+                        if (cb.checked) {
+                            const itemName = cb.value; // It's actually the item name string now based on the form loop, wait, no cb.value is batch.id usually? Wait, let's look at the JS for itemsToConsume.push({ item_name: itemName, ... }) - it says const itemName = cb.value; Yes, the HTML uses value="{{ name }}" for the checkbox.
+                            const quantityInput = document.querySelector(`input[name="quantity_${itemName}"]`);
+                            if (quantityInput && quantityInput.value && parseFloat(quantityInput.value) > 0) {
+                                addOns.push({
+                                    item_name: itemName,
+                                    quantity_to_consume: parseFloat(quantityInput.value)
+                                });
+                            }
+                        }
+                    });
+                    document.getElementById('add_ons_hidden').value = JSON.stringify(addOns);
                     // For recipe type, let the form submit traditionally
                     form.submit();
                 }
