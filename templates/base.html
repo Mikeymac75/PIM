@@ -3,19 +3,22 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <title>{% block title %}Food Inventory Manager{% endblock %}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <title>{% block title %}PIM — Pantry Inventory Manager{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <header>
         <div class="container">
             <div id="branding">
-                <h1><a href="{{ url_for('home') }}">Food Inventory Manager</a></h1>
+                <h1><a href="{{ url_for('home') }}">PIM</a></h1>
+                <span class="tagline">Pantry Inventory Manager</span>
             </div>
-            <nav>
+            <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="mainNav">
+                <i class="fas fa-bars"></i>
+            </button>
+            <nav id="mainNav">
                 <ul>
                     <li class="{% if request.endpoint == 'home' %}current{% endif %}"><a href="{{ url_for('home') }}"><i class="fas fa-home"></i> Home</a></li>
 
@@ -131,12 +134,21 @@
     </div>
 
     <footer>
-        <p>Food Inventory Manager &copy; 2024</p>
+        <p>PIM — Pantry Inventory Manager &middot; self-hosted &amp; offline-first</p>
     </footer>
+    <script>
+        (function () {
+            var t = document.getElementById('navToggle');
+            var n = document.getElementById('mainNav');
+            if (t && n) {
+                t.addEventListener('click', function () {
+                    var open = n.classList.toggle('open');
+                    t.setAttribute('aria-expanded', open ? 'true' : 'false');
+                });
+            }
+        })();
+    </script>
     {% block scripts %}
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script src="{{ url_for('static', filename='js/product_modal.js') }}"></script>
     {% endblock scripts %}
 </body>

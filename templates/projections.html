@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Demand Projections - Food Inventory Manager{% endblock %}
+{% block title %}Demand Projections - PIM{% endblock %}
 
 {% block page_header %}
     <h1 class="page-title">Demand Projections</h1>
@@ -84,6 +84,8 @@
                     <th class="projections-header text-right">Projected Cost/Day</th> {# New Column Header #}
                     <th class="projections-header text-center">Days to Depletion</th>
                     <th class="projections-header text-right">Projected Need (Next {{ projections[0].projection_days if projections and projections[0] else 'N/A' }} days)</th>
+                    <th class="projections-header text-right">Garden Incoming</th>
+                    <th class="projections-header text-right">Need After Garden</th>
                 </tr>
             </thead>
             <tbody>
@@ -114,6 +116,16 @@
                     </td>
                     <td class="text-center">{{ proj.days_to_depletion }}</td>
                     <td class="text-right">{{ "%.2f"|format(proj.projected_need) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
+                    <td class="text-right">
+                        {% if proj.expected_garden_supply and proj.expected_garden_supply > 0 %}
+                            <span class="status-ok" title="{% for s in proj.garden_sources %}{{ s.name }}: {{ s.amount }} ({{ s.window_start }} to {{ s.window_end }}){% if not loop.last %} | {% endif %}{% endfor %}">
+                                <i class="fas fa-leaf"></i> +{{ "%.2f"|format(proj.expected_garden_supply) }}
+                            </span>
+                        {% else %}
+                            <span class="status-info" style="color: var(--text-muted); font-weight: 400;">&mdash;</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">{{ "%.2f"|format(proj.projected_need_after_garden if proj.projected_need_after_garden is defined else proj.projected_need) }} {{ proj.unit_of_measure if proj.unit_of_measure else ''}}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -121,7 +133,7 @@
                 <tr>
                     <td colspan="4" class="text-right total-label"><strong>Total Cost (Last 30 Days):</strong></td>
                     <td class="text-right total-value"><strong>${{ "%.2f"|format(total_cost_all_items_last_30_days | default(0.0)) }}</strong></td>
-                    <td colspan="3"></td> {# Empty cells for remaining columns, colspan adjusted #}
+                    <td colspan="5"></td> {# Empty cells for remaining columns, colspan adjusted #}
                 </tr>
             </tfoot>
         </table>

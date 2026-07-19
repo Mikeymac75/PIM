@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Login - Food Inventory Manager{% endblock %}
+{% block title %}Sign in — PIM{% endblock %}
 
-{% block page_header %}
-    <h2>Login</h2>
-{% endblock %}
+{% block page_header %}{% endblock %}
 
 {% block content %}
-<div class="form-container login-form">
+<div class="login-form">
+    <div class="login-brand">
+        <span class="login-wordmark">PIM<span class="login-dot">.</span></span>
+        <span class="login-tagline">Pantry Inventory Manager</span>
+    </div>
+
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, message in messages %}
@@ -19,65 +22,51 @@
     {% endwith %}
 
     <form method="POST" action="{{ url_for('login_view') }}">
-        {{ form.csrf_token if form and form.csrf_token }} {# Add this if you plan to use Flask-WTF for forms #}
+        {{ form.csrf_token if form and form.csrf_token }}
         <div class="form-group">
-            <label for="username">Username:</label>
-            <input type="text" id="username" name="username" class="form-control" required>
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" class="form-control" autocomplete="username" required autofocus>
         </div>
         <div class="form-group">
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" class="form-control" required>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" class="form-control" autocomplete="current-password" required>
         </div>
-        <div class="form-group">
-            <button type="submit" class="button">Login</button>
+        <div class="form-group" style="margin-bottom: 0;">
+            <button type="submit" class="button login-button">Sign in</button>
         </div>
     </form>
 </div>
 
 <style>
 .login-form {
-    max-width: 400px;
-    margin: 20px auto;
-    padding: 20px;
-    background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: 5px;
+    max-width: 380px;
+    margin: 6vh auto;
 }
-.login-form h2 {
+.login-brand {
     text-align: center;
-    margin-bottom: 20px;
+    margin-bottom: 28px;
 }
-.login-form .form-group {
-    margin-bottom: 15px;
-}
-.login-form label {
+.login-wordmark {
+    font-family: var(--font-display);
+    font-size: 44px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -1px;
     display: block;
-    margin-bottom: 5px;
+    line-height: 1.1;
 }
-.login-form input[type="text"],
-.login-form input[type="password"] {
-    width: 100%;
-    padding: 8px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    box-sizing: border-box; /* Ensures padding doesn't affect overall width */
+.login-dot { color: var(--accent); }
+.login-tagline {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-top: 4px;
 }
-.login-form .button {
-    width: 100%;
-    padding: 10px;
-}
-.flash-error {
-    color: red;
-    background-color: #ffe0e0;
-    border: 1px solid red;
-    padding: 10px;
-    margin-bottom: 15px;
-    border-radius: 4px;
-}
+.login-button { width: 100%; padding: 12px; font-size: 1em; }
 </style>
 {% endblock %}
 
-{% block scripts %}
-    {# We don't want the full base.html scripts (like product_modal.js) on the login page #}
-    {# If you have specific JS for login, add it here. Otherwise, can be empty or inherit common minimal scripts #}
-{% endblock %}
+{% block scripts %}{% endblock %}

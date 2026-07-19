@@ -4,6 +4,11 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from Food_manager import InventoryManager
 from RecipeManager import RecipeManager
+try:
+    from MealieClient import MealieClient
+    MEALIE_AVAILABLE = True
+except ImportError:
+    MEALIE_AVAILABLE = False
 from datetime import date, datetime, timedelta # Added timedelta
 import openpyxl # For reading Excel files
 from io import BytesIO # For handling file streams in memory
@@ -19,22 +24,51 @@ app = Flask(__name__)
 # IMPORTANT: For production, set the FLASK_SECRET_KEY environment variable to a strong, random value.
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_default_fallback_secret_key')
 
-# Disable login for Home Assistant usage
-app.config['LOGIN_DISABLED'] = True
+# --- API token auth (for Home Assistant / automation) ---
+# Instead of disabling login globally (which left the whole app open on the LAN),
+# machine clients authenticate with a token. Set PIM_API_TOKEN in the add-on
+# options and send it as an "X-PIM-Token" header (or "Authorization: Bearer <token>").
+import hmac
+from functools import wraps
+
+def _valid_api_token_provided():
+    expected = os.environ.get('PIM_API_TOKEN', '')
+    if not expected:
+        return False
+    supplied = request.headers.get('X-PIM-Token', '')
+    if not supplied:
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            supplied = auth_header[7:]
+    return bool(supplied) and hmac.compare_digest(supplied, expected)
+
+def token_or_login_required(f):
+    """Allow either a valid API token (Home Assistant) or a logged-in session (browser)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if _valid_api_token_provided():
+            return f(*args, **kwargs)
+        if current_user.is_authenticated:
+            return f(*args, **kwargs)
+        # JSON clients get a 401; browsers get the normal login redirect.
+        if request.is_json or request.path.startswith('/api/'):
+            return jsonify({"success": False, "message": "Authentication required. Provide X-PIM-Token header or log in."}), 401
+        return app.login_manager.unauthorized()
+    return decorated
 
 # Flask-Login setup
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login_view' # Name of the login route function
 
-# Flask-Limiter setup
-#limiter = Limiter(
-#    get_remote_address,
-#    app=app,
-#    default_limits=["200 per day", "50 per hour"], # General site limits
-#    storage_uri="memory://", # Use memory for storage, consider redis for production
-#    # strategy="fixed-window" # or "moving-window"
-#)
+# Flask-Limiter setup — no global default limits (would throttle the dashboard
+# and Home Assistant polling). Applied per-route where needed (login brute-force).
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
 
 # --- User Class and Loader for Flask-Login ---
 class User(UserMixin):
@@ -110,9 +144,13 @@ with app.app_context():
     InventoryManager(db_filepath=app.config['DATABASE_FILE_PATH'])
     RecipeManager(db_filepath=app.config['DATABASE_FILE_PATH'])
 
+# Start the daily automatic backup thread (no-op unless PIM_BACKUP_DIR is set).
+from backup_scheduler import start_backup_scheduler
+start_backup_scheduler(app.config['DATABASE_FILE_PATH'])
+
 # --- Login and Logout Routes ---
 @app.route('/login', methods=['GET', 'POST'])
-#@limiter.limit("5 per minute", methods=["POST"], error_message="Too many login attempts. Please try again later.")
+@limiter.limit("10 per minute", methods=["POST"], error_message="Too many login attempts. Please try again later.")
 def login_view():
     if current_user.is_authenticated:
         return redirect(url_for('home')) # Redirect if already logged in
@@ -629,7 +667,7 @@ def inventory_batches_view():
     )
 
 @app.route('/inventory/consume', methods=['GET', 'POST'])
-@login_required
+@token_or_login_required
 def consume_item_view():
     item_names = _get_unique_item_names() # Use new helper, default is include_historical=False
     all_recipes = get_recipe_mngr().get_all_recipes() # Fetch recipes once for the view
@@ -2219,7 +2257,7 @@ def add_to_shopping_list_direct_view():
         return jsonify({"success": False, "message": "An unexpected server error occurred."}), 500
 
 @app.route('/shopping_list/add', methods=['POST'])
-@login_required
+@token_or_login_required
 def add_shopping_list_item_by_name():
     """
     Adds an item to the shopping list by name (or alias).
@@ -2290,7 +2328,7 @@ def add_product_alias():
         return jsonify(result), 400
 
 @app.route('/api/log_purchase', methods=['POST'])
-@login_required
+@token_or_login_required
 def api_log_purchase():
     """
     API Endpoint to log a purchase via JSON.
@@ -4167,21 +4205,25 @@ def what_can_i_cook():
 # --- JSON Data APIs for Home Assistant Integration ---
 
 @app.route('/api/inventory', methods=['GET'])
+@token_or_login_required
 def api_get_inventory():
     inventory = get_manager().get_current_inventory(page=1, per_page=10000)
     return jsonify([dict(item) for item in inventory])
 
 @app.route('/api/products', methods=['GET'])
+@token_or_login_required
 def api_get_products():
     products = get_manager().get_all_products_export()
     return jsonify([dict(p) for p in products])
 
 @app.route('/api/recipes', methods=['GET'])
+@token_or_login_required
 def api_get_recipes():
     recipes = get_recipe_mngr().get_all_recipes(export_all=True)
     return jsonify([dict(r) for r in recipes])
 
 @app.route('/api/inventory/adjust', methods=['POST'])
+@token_or_login_required
 def api_adjust_inventory():
     data = request.json
     if not data or 'batch_id' not in data or 'new_quantity' not in data:
@@ -4197,7 +4239,50 @@ def api_adjust_inventory():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+@app.route('/api/expiring', methods=['GET'])
+@token_or_login_required
+def api_get_expiring():
+    """Batches expired or expiring within ?days=N (default 7). Built for Home Assistant polling."""
+    try:
+        days = int(request.args.get('days', 7))
+    except ValueError:
+        days = 7
+    days = max(0, min(days, 365))
+    batches = get_manager().get_expiring_batches(days_ahead=days)
+    expired = [b for b in batches if b.get('days_until_expiry') is not None and b['days_until_expiry'] < 0]
+    expiring = [b for b in batches if b.get('days_until_expiry') is not None and b['days_until_expiry'] >= 0]
+    def _fmt(b):
+        return {
+            "batch_id": b["batch_id"],
+            "product_id": b["product_id"],
+            "name": b["name"],
+            "quantity": b["quantity"],
+            "unit": b.get("unit_of_measure"),
+            "expiry_date": b["expiry_date"],
+            "days_until_expiry": b["days_until_expiry"],
+        }
+    # A ready-to-speak summary so HA intent scripts / notifications need no templating gymnastics
+    if not batches:
+        summary = f"Nothing expires in the next {days} days."
+    else:
+        parts = []
+        if expired:
+            parts.append(f"{len(expired)} item{'s' if len(expired) != 1 else ''} already expired")
+        if expiring:
+            soonest = expiring[0]
+            parts.append(f"{len(expiring)} expiring within {days} days, soonest {soonest['name']} in {soonest['days_until_expiry']} day{'s' if soonest['days_until_expiry'] != 1 else ''}")
+        summary = "; ".join(parts) + "."
+    return jsonify({
+        "days_ahead": days,
+        "expired_count": len(expired),
+        "expiring_count": len(expiring),
+        "summary": summary,
+        "expired": [_fmt(b) for b in expired],
+        "expiring": [_fmt(b) for b in expiring],
+    })
+
 @app.route('/api/stats', methods=['GET'])
+@token_or_login_required
 def api_get_stats():
     inventory_count = get_manager().get_current_inventory_count()
     products_count = len(get_manager().get_all_products_export())
@@ -4211,7 +4296,8 @@ def api_get_stats():
         "total_recipes": recipes_count
     })
 
-@app.route('/api/seed_garden', methods=['GET'])
+@app.route('/api/seed_garden', methods=['POST'])
+@login_required
 def api_seed_garden():
     manager = get_manager()
     plants = [
@@ -4264,7 +4350,8 @@ def api_seed_garden():
         )
     return jsonify({"success": True, "message": "Garden seeded!"})
 
-@app.route('/api/seed_recipes', methods=['GET'])
+@app.route('/api/seed_recipes', methods=['POST'])
+@login_required
 def api_seed_recipes():
     recipe_mngr = get_recipe_mngr()
     # Tacos
@@ -4329,9 +4416,9 @@ def receipt_scanner():
             best_match_id = aliases.get(clean_text.lower(), "")
             if not best_match_id:
                 matches = difflib.get_close_matches(clean_text.lower(), product_names, n=1, cutoff=0.4)
-            if matches:
-                match_name = matches[0]
-                best_match_id = next((p['id'] for p in all_products if p['name'].lower() == match_name), "")
+                if matches:
+                    match_name = matches[0]
+                    best_match_id = next((p['id'] for p in all_products if p['name'].lower() == match_name), "")
                 
             parsed_items.append({
                 "original_text": line,
@@ -4364,14 +4451,17 @@ def receipt_confirm():
             if product_id_str and qty_str:
                 try:
                     product_id = int(product_id_str)
+                    qty = float(qty_str)
+                except ValueError:
+                    continue
+
+                # Learn the alias so this receipt line auto-matches next time
                 alias_text = request.form.get(f'alias_text_{idx}')
                 if product_id and alias_text:
                     get_manager().add_alias(product_id, alias_text)
-                    qty = float(qty_str)
-                    if qty > 0:
-                        items_to_add.append((product_id, qty))
-                except ValueError:
-                    pass
+
+                if qty > 0:
+                    items_to_add.append((product_id, qty))
 
     success_count = 0
     for product_id, qty in items_to_add:
