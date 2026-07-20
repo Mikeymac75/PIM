@@ -1,4 +1,4 @@
-﻿from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file, g, current_app
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file, g, current_app
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -147,6 +147,15 @@ with app.app_context():
 # Start the daily automatic backup thread (no-op unless PIM_BACKUP_DIR is set).
 from backup_scheduler import start_backup_scheduler
 start_backup_scheduler(app.config['DATABASE_FILE_PATH'])
+
+@app.before_request
+def auto_login():
+    # Bypass login by automatically logging in the first configured user
+    if not current_user.is_authenticated:
+        users_str = os.environ.get('PIM_USERS', 'admin:password')
+        if users_str:
+            first_user = users_str.split(',')[0].split(':')[0].strip()
+            login_user(User(first_user))
 
 # --- Login and Logout Routes ---
 @app.route('/login', methods=['GET', 'POST'])
