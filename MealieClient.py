@@ -1,4 +1,4 @@
-"""
+﻿"""
 MealieClient - API client for Mealie recipe manager integration.
 Enables bidirectional recipe sync between PIM and Mealie.
 """

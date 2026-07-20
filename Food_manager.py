@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 import csv
 from datetime import date, timedelta, datetime
 from contextlib import closing

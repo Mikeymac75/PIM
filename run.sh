@@ -1,4 +1,4 @@
-#!/command/with-contenv bashio
+﻿#!/command/with-contenv bashio
 
 echo "Starting Mac's PIM App..."
 

@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 from datetime import date # Keep for potential future use
 
 class RecipeManager:

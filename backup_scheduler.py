@@ -1,4 +1,4 @@
-"""
+﻿"""
 Automatic database backups for PIM.
 
 Runs a daemon thread that snapshots the SQLite database once per day using
