@@ -33,6 +33,22 @@ if bashio::config.exists 'mealie_api_token' && bashio::config.has_value 'mealie_
     echo "Mealie API token configured"
 fi
 
+# 3b. API token for Home Assistant / automation clients (optional)
+if bashio::config.exists 'api_token' && bashio::config.has_value 'api_token'; then
+    export PIM_API_TOKEN=$(bashio::config 'api_token')
+    echo "API token configured for automation clients"
+fi
+
+# 3c. Automatic daily database backups into /share so external backup
+# systems (e.g. PBS) sweep them up with their normal schedule.
+export PIM_BACKUP_DIR="/share/pim_backups"
+if bashio::config.exists 'backup_hour' && bashio::config.has_value 'backup_hour'; then
+    export PIM_BACKUP_HOUR=$(bashio::config 'backup_hour')
+fi
+if bashio::config.exists 'backup_keep' && bashio::config.has_value 'backup_keep'; then
+    export PIM_BACKUP_KEEP=$(bashio::config 'backup_keep')
+fi
+
 echo "PIM configured, starting gunicorn..."
 
 # 4. Start the App using Gunicorn

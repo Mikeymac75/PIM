@@ -3865,6 +3865,12 @@ class InventoryManager:
         
         projected_need = avg_daily_consumption * projection_days
 
+        # Garden-aware adjustment: expected incoming supply from active
+        # production items within the projection window offsets the need.
+        garden = self.get_expected_garden_supply(product_id, projection_days=projection_days, today=today)
+        expected_garden_supply = garden.get("total", 0.0)
+        projected_need_after_garden = max(0.0, projected_need - expected_garden_supply)
+
         # Calculate cost over the last 30 days
         cost_last_30_days = 0.0
         thirty_days_ago_dt = today - timedelta(days=30)
@@ -3896,6 +3902,9 @@ class InventoryManager:
             "current_stock": current_quantity_sum,
             "avg_daily_consumption": avg_daily_consumption, "days_to_depletion": days_to_depletion_str,
             "projected_need": projected_need, "lookback_days": lookback_days, "projection_days": projection_days,
+            "expected_garden_supply": expected_garden_supply,
+            "projected_need_after_garden": projected_need_after_garden,
+            "garden_sources": garden.get("sources", []),
             "consumption_override_rate": product.get('consumption_override_rate'), # Ensure it's in the result
             "cost_last_30_days": cost_last_30_days,
             "weighted_average_cost": weighted_average_cost, # Added for reference
@@ -4647,10 +4656,115 @@ class InventoryManager:
                 print("No product IDs available to generate future inventory projection example.")
 
 
+    # ------------------------------------------------------------------
+    # Garden-aware supply forecasting
+    # ------------------------------------------------------------------
+    def get_expected_garden_supply(self, product_id, projection_days=7, today=None):
+        """
+        Estimates how much of a product the garden is expected to yield within
+        the next `projection_days`, based on production_items schedules:
+        harvest window starts at plant_date + time_to_harvest_days and lasts
+        expected_harvest_period_days, with expected_yield_total spread evenly
+        across the window. Only 'Growing' and 'Harvesting' items count.
+        Returns a dict: {"total": float, "sources": [ {name, window_start, window_end, amount} ]}
+        """
+        if today is None:
+            today = date.today()
+        horizon_end = today + timedelta(days=projection_days)
+        total = 0.0
+        sources = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, name, plant_date, time_to_harvest_days,
+                           expected_harvest_period_days, expected_yield_total, status
+                    FROM production_items
+                    WHERE associated_product_id = ?
+                      AND status IN ('Growing', 'Harvesting')
+                      AND plant_date IS NOT NULL
+                      AND expected_yield_total IS NOT NULL
+                ''', (product_id,))
+                for row in cursor.fetchall():
+                    try:
+                        plant_dt = date.fromisoformat(row['plant_date'])
+                    except (TypeError, ValueError):
+                        continue
+                    tth = row['time_to_harvest_days'] or 0
+                    period = max(1, row['expected_harvest_period_days'] or 1)
+                    yield_total = float(row['expected_yield_total'] or 0)
+                    if yield_total <= 0:
+                        continue
+                    window_start = plant_dt + timedelta(days=tth)
+                    window_end = window_start + timedelta(days=period)
+                    # Overlap of [window_start, window_end) with [today, horizon_end)
+                    overlap_start = max(window_start, today)
+                    overlap_end = min(window_end, horizon_end)
+                    overlap_days = (overlap_end - overlap_start).days
+                    if overlap_days <= 0:
+                        continue
+                    daily_yield = yield_total / period
+                    amount = daily_yield * overlap_days
+                    total += amount
+                    sources.append({
+                        "production_item_id": row['id'],
+                        "name": row['name'],
+                        "window_start": window_start.isoformat(),
+                        "window_end": window_end.isoformat(),
+                        "amount": round(amount, 2),
+                    })
+        except sqlite3.Error as e:
+            print(f"Database error calculating garden supply for product ID {product_id}: {e}")
+        return {"total": round(total, 2), "sources": sources}
+
+    # ------------------------------------------------------------------
+    # Expiry tracking
+    # ------------------------------------------------------------------
+    def get_expiring_batches(self, days_ahead=7, today=None):
+        """
+        Returns inventory batches that are expired or will expire within
+        `days_ahead` days, ordered soonest first. Each row includes
+        days_until_expiry (negative if already expired).
+        """
+        if today is None:
+            today = date.today()
+        cutoff = today + timedelta(days=days_ahead)
+        results = []
+        try:
+            with self._get_db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT ii.id AS batch_id, ii.product_id, ii.name,
+                           ii.quantity, ii.purchase_date, ii.expiry_date,
+                           p.unit_of_measure
+                    FROM inventory_items ii
+                    LEFT JOIN products p ON p.id = ii.product_id
+                    WHERE ii.expiry_date IS NOT NULL AND ii.expiry_date != ''
+                      AND ii.expiry_date <= ?
+                      AND CAST(ii.quantity AS REAL) > 0
+                    ORDER BY ii.expiry_date ASC
+                ''', (cutoff.isoformat(),))
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    try:
+                        exp = date.fromisoformat(item['expiry_date'])
+                        item['days_until_expiry'] = (exp - today).days
+                    except (TypeError, ValueError):
+                        item['days_until_expiry'] = None
+                    results.append(item)
+        except sqlite3.Error as e:
+            print(f"Database error fetching expiring batches: {e}")
+        return results
+
+
 # --- Standalone Garden Produce Functions (Not part of InventoryManager class) ---
 # These functions remain as they were, operating on a global list,
 # as they are not part of the core SQLite-backed InventoryManager.
 my_garden_produce_list = [] 
+
+
+
+
 
 def add_garden_produce(name, harvest_date_str, typical_shelf_life_days):
     """Adds produce harvested from the garden to a global list."""

@@ -1,4 +1,4 @@
-# Food Inventory and Recipe Management System
+# PIM — Pantry Inventory Manager
 
 ## Overview
 
@@ -166,16 +166,27 @@ This project is currently unlicensed. (Or specify a license if one is chosen, e.
 
 To integrate this PIM application with Home Assistant (e.g., for voice commands via Assist), add the following to your Home Assistant `configuration.yaml`.
 
+**Important:** Set the `api_token` option in the add-on configuration and use the same value in the `X-PIM-Token` header below. Without it, API calls will receive a 401.
+
 **Important:** Ensure you access the response using `.json` (e.g., `pim_response.json.message`) rather than `.content`, as `content` is the raw string body.
 
 ```yaml
 # Connect to the PIM App
 rest_command:
+  pim_check_expiring:
+    url: "http://<PIM_IP_ADDRESS>:8080/api/expiring?days=7"
+    method: GET
+    headers:
+      X-PIM-Token: "<YOUR_PIM_API_TOKEN>"
+    timeout: 30
+
   pim_add_shopping_list:
     url: "http://<PIM_IP_ADDRESS>:8080/shopping_list/add"
     method: POST
     payload: '{"product_name": "{{ item_name }}", "quantity": "{{ quantity }}"}'
     content_type: 'application/json'
+    headers:
+      X-PIM-Token: "<YOUR_PIM_API_TOKEN>"
     timeout: 30
 
   pim_consume_item:
@@ -183,6 +194,8 @@ rest_command:
     method: POST
     payload: '{"items": [{"item_name": "{{ item_name }}", "quantity": "{{ quantity }}"}]}'
     content_type: 'application/json'
+    headers:
+      X-PIM-Token: "<YOUR_PIM_API_TOKEN>"
     timeout: 30
 
   pim_log_purchase:
@@ -190,10 +203,57 @@ rest_command:
     method: POST
     payload: '{"product_name": "{{ item_name }}", "quantity": "{{ quantity }}", "cost": "{{ cost | default("") }}", "vendor": "{{ vendor | default("") }}"}'
     content_type: 'application/json'
+    headers:
+      X-PIM-Token: "<YOUR_PIM_API_TOKEN>"
     timeout: 30
+
+# Expiry alerts: poll PIM every few hours and notify when food is about to turn
+sensor:
+  - platform: rest
+    name: PIM Expiring Items
+    resource: "http://<PIM_IP_ADDRESS>:8080/api/expiring?days=3"
+    method: GET
+    headers:
+      X-PIM-Token: "<YOUR_PIM_API_TOKEN>"
+    value_template: "{{ value_json.expired_count + value_json.expiring_count }}"
+    json_attributes:
+      - summary
+      - expired_count
+      - expiring_count
+      - expiring
+      - expired
+    scan_interval: 21600  # every 6 hours
+
+automation:
+  - alias: "PIM: food expiring soon"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.pim_expiring_items
+        above: 0
+    condition:
+      - condition: time
+        after: "09:00:00"
+        before: "21:00:00"
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          title: "Pantry check"
+          message: "{{ state_attr('sensor.pim_expiring_items', 'summary') }}"
 
 # Voice Command Actions
 intent_script:
+  PimWhatsExpiring:
+    action:
+      - service: rest_command.pim_check_expiring
+        response_variable: pim_response
+    speech:
+      text: >
+        {% if pim_response is defined and pim_response.json is defined %}
+          {{ pim_response.json.summary }}
+        {% else %}
+          I could not reach the pantry system.
+        {% endif %}
+
   PimAddShoppingList:
     action:
       - service: rest_command.pim_add_shopping_list
